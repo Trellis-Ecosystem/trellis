@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "contracts/trellis_core",
+    "cli/trellis_cli",
+]
+
+# Dev/test profile: strip debuginfo from dependencies to keep artifact
+# size manageable. soroban-env-host with full debuginfo can exceed 4 GB;
+# debug = 0 on dependencies cuts this to ~600 MB without affecting test output.
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+# Optimisation profile for Soroban WASM output.
+# Must live at workspace root — ignored in member crate manifests.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
