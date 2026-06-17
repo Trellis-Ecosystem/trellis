@@ -210,7 +210,6 @@ If you're new to Soroban, the [official Soroban docs](https://developers.stellar
 
 ## License
 
-License: **TBD** — to be finalized before first external contributions are merged.
 
 ---
 
