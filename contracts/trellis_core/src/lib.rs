@@ -345,4 +345,21 @@ impl TrellisContract {
 
         Ok(())
     }
+
+    /// Return the full [`Agreement`] struct for the given ID.
+    ///
+    /// This is a read-only view — no auth is required and no state is modified.
+    /// It exists primarily so the CLI `status` command can display the current
+    /// agreement state (including per-milestone statuses) via
+    /// `stellar contract invoke … -- get_agreement --agreement-id <hex>`.
+    ///
+    /// # Errors
+    /// Returns [`TrellisError::AgreementNotFound`] if no agreement exists for
+    /// the given `agreement_id`.
+    pub fn get_agreement(
+        env: Env,
+        agreement_id: BytesN<32>,
+    ) -> Result<Agreement, TrellisError> {
+        storage::read_agreement(&env, &agreement_id)
+    }
 }

@@ -226,3 +226,56 @@ fn test_cancel_unfunded_milestone() {
         "second cancel must return NoFundsToRefund"
     );
 }
+
+/// get_agreement returns the correct Agreement after init, and AgreementNotFound
+/// for an ID that was never initialized.
+#[test]
+fn test_get_agreement() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 5);
+
+    // Init with one milestone so there is something to read back.
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 750),
+        &dispute_resolver,
+    );
+
+    // ── Happy path: agreement exists ──────────────────────────────────────
+    // client.get_agreement() returns Agreement directly in SDK 21.x —
+    // #[contractimpl] unwraps the Ok for the caller; no .expect() needed.
+    let agreement = client.get_agreement(&id);
+
+    assert_eq!(agreement.payer, payer, "payer address must match");
+    assert_eq!(agreement.payee, payee, "payee address must match");
+    assert_eq!(
+        agreement.milestones.len(),
+        1,
+        "should have exactly one milestone"
+    );
+
+    let milestone = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        milestone.status,
+        crate::types::EscrowStatus::Pending,
+        "freshly created milestone must be Pending"
+    );
+    assert_eq!(milestone.amount, 750, "milestone amount must match");
+
+    // ── Not-found path: unknown ID returns AgreementNotFound ──────────────
+    // Agreement doesn't derive PartialEq so we can't assert_eq on the
+    // full Result — instead check the outer Err and unwrap the inner error.
+    let fake_id = agreement_id(&env, 99); // never initialized
+    let result = client.try_get_agreement(&fake_id);
+    assert!(result.is_err(), "unknown agreement ID must return an error");
+    assert_eq!(
+        result.err().unwrap(),
+        Ok(TrellisError::AgreementNotFound),
+        "error must be AgreementNotFound"
+    );
+
+}
+
