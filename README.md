@@ -216,6 +216,6 @@ License: **TBD** — to be finalized before first external contributions are mer
 
 <div align="center">
 
-Built by ALLEN GrantFox open-source ecosystem
+Built by ALLEN
 
 </div>
