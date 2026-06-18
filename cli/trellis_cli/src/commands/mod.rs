@@ -405,7 +405,7 @@ fn build_milestones_json(csv: &str) -> String {
             let trimmed = part.trim();
             match trimmed.parse::<u64>() {
                 Ok(amount) => Some(format!(
-                    r#"{{"id":{idx},"amount":{amount},"status":{{"Pending":null}},"proof_uri":""}}"#,
+                    r#"{{"id":{idx},"amount":"{amount}","status":{{"Pending":null}},"proof_uri":""}}"#,
                 )),
                 Err(_) => {
                     eprintln!(
