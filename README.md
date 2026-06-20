@@ -2,8 +2,6 @@
 
 <img src="assets/banner.png" alt="Trellis — Milestone Escrow on Soroban" width="100%" />
 
-<div align="center">
-
 # Trellis
 
 **Trustless, milestone-based escrow for freelance and remote work — built on Stellar's Soroban smart contract platform.**
@@ -20,6 +18,7 @@
 ---
 
 ## The Problem
+...
 
 Remote work and freelance contracting run on trust that often doesn't exist between strangers across borders. Clients hesitate to pay upfront. Workers hesitate to deliver without payment guarantees. The usual fix — a centralized escrow middleman — adds fees, delays, and a single point of failure.
 
