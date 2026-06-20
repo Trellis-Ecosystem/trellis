@@ -229,7 +229,7 @@ Trellis is built in the open and welcomes contributors of all experience levels.
 If you're new to Soroban, the [official Soroban docs](https://developers.stellar.org/docs/build/smart-contracts/overview) and the `soroban-examples` repo are great references for conventions used throughout this codebase.
 
 ---
-
+<div align="center">
 ## License
 
 
