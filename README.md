@@ -232,7 +232,7 @@ If you're new to Soroban, the [official Soroban docs](https://developers.stellar
 <div align="center">
 ## License
 
-
+</div>
 ---
 
 <div align="center">
