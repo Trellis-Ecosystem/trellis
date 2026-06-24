@@ -270,6 +270,6 @@ MIT
 
 <div align="center">
 
-Built by Emmanuel Allen · [Phiser Engineering & Solutions Ltd](https://github.com/Trellis-Ecosystem)
+Built by Allen · (https://github.com/Trellis-Ecosystem)
 
 </div>
