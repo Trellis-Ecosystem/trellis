@@ -1,22 +1,13 @@
 import Navbar from './components/Navbar'
+import { NetworkBackground } from './components/NetworkBackground'
 
 function App() {
   return (
     <div className="relative min-h-screen text-gray-200">
-      {/* Background image */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          backgroundImage: 'url(/src/assets/bg.jpg)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          backgroundRepeat: 'no-repeat',
-        }}
-      />
-      {/* Dark overlay — adjust opacity here if needed */}
-      <div className="absolute inset-0 z-0 bg-[#0A0E17] opacity-70" />
+      {/* Animated particle network background */}
+      <NetworkBackground />
 
-      {/* All content sits above overlay */}
+      {/* All content sits above the canvas */}
       <div className="relative z-10">
         <Navbar />
         <main className="flex flex-col items-center justify-center px-6 pt-24 pb-32 text-center">
