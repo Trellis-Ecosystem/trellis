@@ -2,6 +2,7 @@ import { useState } from 'react'
 import Navbar from './components/Navbar'
 import { NetworkBackground } from './components/NetworkBackground'
 import { TypingText } from './components/TypingText'
+import { HowItWorks } from './components/HowItWorks'
 
 function App() {
   const [headingComplete, setHeadingComplete] = useState(false)
@@ -56,6 +57,7 @@ function App() {
           </div>
 
         </main>
+        <HowItWorks />
       </div>
     </div>
   )
