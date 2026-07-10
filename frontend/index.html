@@ -1,7 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (() => {
+        let theme = 'dark'
+        try {
+          const storedTheme = localStorage.getItem('trellis_theme')
+          theme = storedTheme === 'light' || storedTheme === 'dark' ? storedTheme : 'dark'
+        } catch {
+          theme = 'dark'
+        }
+        document.documentElement.classList.toggle('dark', theme === 'dark')
+        document.documentElement.classList.toggle('light', theme === 'light')
+        document.documentElement.style.colorScheme = theme
+      })()
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Trellis - Trustless Milestone Escrow</title>

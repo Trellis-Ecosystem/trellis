@@ -2,8 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-primary: #0A0E17;
+  --text-primary: #E2E8F0;
+}
+
+.light {
+  --bg-primary: #F8FAFC;
+  --text-primary: #0F172A;
+}
+
+html {
+  background-color: var(--bg-primary);
+}
+
 body {
-  background-color: #0A0E17;
-  color: #E2E8F0;
+  margin: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: 'Inter', sans-serif;
+  transition: background-color 200ms ease, color 200ms ease;
 }
