@@ -1,5 +1,7 @@
 import Navbar from './components/Navbar'
 import { NetworkBackground } from './components/NetworkBackground'
+import { CopyableAddress } from './components/CopyableAddress'
+import { CONTRACT_ID } from './lib/config'
 
 function App() {
   return (
@@ -17,6 +19,17 @@ function App() {
           <p className="mt-4 text-gray-400 text-lg sm:text-xl max-w-xl">
             Built on Stellar's Soroban smart contract platform
           </p>
+          {CONTRACT_ID ? (
+            <div className="mt-6 inline-flex flex-col items-center gap-2 rounded-2xl border border-cyan-400/20 bg-navy-800/70 px-5 py-4 shadow-lg shadow-cyan-500/10 backdrop-blur">
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+                Live Contract
+              </span>
+              <CopyableAddress
+                address={CONTRACT_ID}
+                className="text-sm text-gray-100"
+              />
+            </div>
+          ) : null}
           <div className="mt-10 flex flex-col sm:flex-row gap-4">
             <button className="bg-cyan-400 text-navy-900 font-semibold px-8 py-3 rounded-lg text-base hover:bg-cyan-300 transition-colors">
               Create Agreement
