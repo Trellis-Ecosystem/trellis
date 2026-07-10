@@ -1,4 +1,5 @@
 import Navbar from './components/Navbar'
+import { AgreementIdGenerator } from './components/AgreementIdGenerator'
 import { NetworkBackground } from './components/NetworkBackground'
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
               Check Status
             </button>
           </div>
+          <AgreementIdGenerator />
         </main>
       </div>
     </div>
