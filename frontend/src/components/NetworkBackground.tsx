@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useTheme } from '../context/useTheme'
 
 interface Particle {
   x: number
@@ -20,6 +21,7 @@ interface Mouse {
 
 export function NetworkBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const { theme } = useTheme()
   const mouseRef = useRef<Mouse>({
     x: null,
     y: null,
@@ -44,7 +46,9 @@ export function NetworkBackground() {
     const RETURN_SPEED = 0.04
     const PARTICLE_COLOR = '0, 194, 255'
     const LINE_COLOR = '0, 194, 255'
-    const BG_COLOR = '#0A0E17'
+    const BG_COLOR = theme === 'dark' ? '#0A0E17' : '#F8FAFC'
+    const PARTICLE_OPACITY = theme === 'dark' ? 0.8 : 0.45
+    const LINE_OPACITY_MULTIPLIER = theme === 'dark' ? 0.5 : 0.28
 
     function resize() {
       canvas!.width = window.innerWidth
@@ -117,7 +121,7 @@ export function NetworkBackground() {
         // Draw particle dot
         ctx!.beginPath()
         ctx!.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
-        ctx!.fillStyle = `rgba(${PARTICLE_COLOR}, 0.8)`
+        ctx!.fillStyle = `rgba(${PARTICLE_COLOR}, ${PARTICLE_OPACITY})`
         ctx!.fill()
       }
 
@@ -129,7 +133,7 @@ export function NetworkBackground() {
           const distance = Math.sqrt(dx * dx + dy * dy)
 
           if (distance < MAX_DISTANCE) {
-            const opacity = (1 - distance / MAX_DISTANCE) * 0.5
+            const opacity = (1 - distance / MAX_DISTANCE) * LINE_OPACITY_MULTIPLIER
             ctx!.beginPath()
             ctx!.moveTo(particles[i].x, particles[i].y)
             ctx!.lineTo(particles[j].x, particles[j].y)
@@ -222,12 +226,12 @@ export function NetworkBackground() {
       window.removeEventListener('mouseleave', handleMouseLeave)
       window.removeEventListener('resize', handleResize)
     }
-  }, [])
+  }, [theme])
 
   return (
     <canvas
       ref={canvasRef}
-      className="absolute inset-0 z-0"
+      className="absolute inset-0 z-0 transition-opacity duration-200 dark:opacity-100 opacity-90"
       style={{ display: 'block', cursor: 'none' }}
     />
   )
