@@ -1,5 +1,7 @@
 import Navbar from './components/Navbar'
 import { NetworkBackground } from './components/NetworkBackground'
+import { ExplorerLink } from './components/ExplorerLink'
+import { CONTRACT_ID } from './lib/config'
 
 function App() {
   return (
@@ -25,6 +27,13 @@ function App() {
               Check Status
             </button>
           </div>
+
+          {CONTRACT_ID ? (
+            <p className="mt-6 text-sm text-gray-400">
+              Live contract:{' '}
+              <ExplorerLink type="contract" value={CONTRACT_ID} />
+            </p>
+          ) : null}
         </main>
       </div>
     </div>
