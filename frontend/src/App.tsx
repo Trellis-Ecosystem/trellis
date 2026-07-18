@@ -14,7 +14,7 @@ function App() {
       <NetworkBackground />
       <div className="relative z-10">
         <Navbar />
-        <main className="flex flex-col items-center justify-center px-6 pt-24 pb-32 text-center">
+        <main className="flex flex-col items-center justify-center min-h-screen px-6 text-center">
 
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white max-w-2xl leading-tight min-h-[4rem]">
             <TypingText
