@@ -17,6 +17,12 @@ use errors::TrellisError;
 use types::{Agreement, EscrowStatus, Milestone};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_MILESTONES: u32 = 50;
+
+// ---------------------------------------------------------------------------
 // Contract struct
 // ---------------------------------------------------------------------------
 
@@ -63,6 +69,10 @@ impl TrellisContract {
 
         if milestones.is_empty() {
             return Err(TrellisError::EmptyMilestoneSet);
+        }
+
+        if milestones.len() > MAX_MILESTONES as usize {
+            return Err(TrellisError::MilestoneCountExceeded);
         }
 
         if payer == payee {

@@ -62,4 +62,9 @@ pub enum TrellisError {
     /// the same address sends and receives funds is economically nonsensical
     /// and can interfere with agreement IDs and indexers.
     PayerEqualsPayee = 9,
+
+    /// `init` was called with a milestone count exceeding `MAX_MILESTONES`.
+    /// Unbounded milestone counts create oversized on-chain vectors that inflate
+    /// gas costs and storage bloat.
+    MilestoneCountExceeded = 10,
 }
