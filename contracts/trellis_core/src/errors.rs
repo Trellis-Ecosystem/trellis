@@ -57,4 +57,9 @@ pub enum TrellisError {
     /// coincide with either party would let that party unilaterally decide
     /// its own disputes.
     ResolverCannotBeParty = 8,
+
+    /// `init` was called with `payer` equal to `payee`. An agreement where
+    /// the same address sends and receives funds is economically nonsensical
+    /// and can interfere with agreement IDs and indexers.
+    PayerEqualsPayee = 9,
 }

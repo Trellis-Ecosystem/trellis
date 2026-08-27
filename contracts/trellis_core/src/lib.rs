@@ -65,6 +65,10 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
+        if payer == payee {
+            return Err(TrellisError::PayerEqualsPayee);
+        }
+
         if dispute_resolver == payer || dispute_resolver == payee {
             return Err(TrellisError::ResolverCannotBeParty);
         }
