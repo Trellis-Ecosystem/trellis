@@ -541,6 +541,23 @@ make build
 
 Runs the contract WASM build, CLI binary build, and frontend bundle in sequence. See `make help` for all available targets.
 
+### 🔒 Dependency & supply-chain audit
+
+The workspace's crate graph is scanned for known vulnerabilities, disallowed
+licences, and unexpected source registries. This runs automatically in CI
+(the `supply-chain` job in `.github/workflows/contract-ci.yml`) and can be run
+locally:
+
+```bash
+cargo install --locked cargo-deny cargo-audit
+cargo deny check      # enforces deny.toml: advisories, licences, duplicate versions, sources
+cargo audit           # RustSec advisory database check
+```
+
+Policy lives in [`deny.toml`](./deny.toml) at the repository root. A new
+RustSec advisory against any dependency (direct or transitive) fails the
+build.
+
 ### Building the contract WASM
 
 ```bash

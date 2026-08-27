@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod input;
 mod rpc;
 mod utils;
 
@@ -78,6 +79,15 @@ struct Cli {
     /// executing it or submitting anything on-chain.
     #[arg(long, global = true)]
     dry_run: bool,
+
+    /// Allow a cleartext `http://` RPC endpoint for a non-localhost host.
+    ///
+    /// By default the CLI refuses any RPC URL that is not `https://` unless
+    /// the host is loopback (`localhost` / `127.0.0.1` / `::1`), so a planted
+    /// `.env` file cannot silently redirect traffic to an unauthenticated
+    /// endpoint. Pass this flag for development against a self-hosted devnet.
+    #[arg(long, global = true)]
+    unsafe_rpc: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +155,19 @@ fn main() {
     }
 
     let config = config::Config::from_env();
+
+    // ── #156: Validate the resolved RPC URL before any network use ────────
+    // Rejects malformed URLs and cleartext HTTP to non-localhost hosts so a
+    // compromised `.env` cannot point the CLI at a forged RPC endpoint.
+    // `--unsafe-rpc` downgrades the hard error to a printed warning.
+    match config::validate_rpc_url(&config.rpc_url, cli.unsafe_rpc) {
+        Ok(Some(warning)) => eprintln!("{warning}"),
+        Ok(None) => {}
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

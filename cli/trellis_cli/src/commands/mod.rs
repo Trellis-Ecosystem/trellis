@@ -321,6 +321,30 @@ fn fail_validation(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Reject any oversized string argument before it is forwarded to the RPC
+/// layer (#155).
+///
+/// Called at the top of every command handler so a caller cannot push an
+/// arbitrarily long `agreement_id`, `proof_uri`, or address into a contract
+/// invocation, where it would inflate Soroban resource usage or be rejected
+/// by the RPC endpoint. Limits are defined in [`crate::input`].
+fn enforce_input_limits(
+    agreement_id: Option<&str>,
+    proof_uri: Option<&str>,
+    addresses: &[(&str, &str)],
+) -> Result<(), String> {
+    if let Some(id) = agreement_id {
+        crate::input::validate_agreement_id_len(id)?;
+    }
+    if let Some(uri) = proof_uri {
+        crate::input::validate_proof_uri_len(uri)?;
+    }
+    for &(field, value) in addresses {
+        crate::input::validate_address_len(field, value)?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Active command implementations
 // ---------------------------------------------------------------------------
@@ -344,6 +368,17 @@ fn run_init(
     milestones_csv: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(
+        Some(&agreement_id),
+        None,
+        &[
+            ("payer", payer.as_str()),
+            ("payee", payee.as_str()),
+            ("token", token.as_str()),
+            ("resolver", resolver.as_str()),
+        ],
+    )?;
+
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
@@ -388,6 +423,8 @@ fn run_lock_funds(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -417,6 +454,8 @@ fn run_submit_work(
     proof_uri: Option<String>,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), proof_uri.as_deref(), &[])?;
+
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
         yes,
@@ -453,6 +492,8 @@ fn run_approve_release(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -481,6 +522,8 @@ fn run_raise_dispute(
     caller: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[("caller", caller.as_str())])?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -507,6 +550,8 @@ fn run_resolve_dispute(
     refund_to_payer: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let outcome = if refund_to_payer {
         "refund locked funds to the payer"
     } else {
@@ -544,6 +589,8 @@ fn run_cancel_milestone(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -565,6 +612,8 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
     execute(config, "get_agreement", &args, opts)
@@ -586,6 +635,8 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    enforce_input_limits(Some(&agreement_id), None, &[])?;
+
     let args = vec![
         "--agreement-id".to_string(),
         format!("\"{}\"", agreement_id),
@@ -1002,5 +1053,40 @@ mod tests {
         let stderr = "info: starting\nEvent: transfer occurred\ndone";
         let events = extract_events(stderr);
         assert!(matches!(events, serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- enforce_input_limits (#155) ---
+
+    #[test]
+    fn enforce_limits_accepts_normal_inputs() {
+        let payer = "G".repeat(56);
+        let payee = "G".repeat(56);
+        let ok = enforce_input_limits(
+            Some(&"a".repeat(64)),
+            Some("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"),
+            &[("payer", payer.as_str()), ("payee", payee.as_str())],
+        );
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn enforce_limits_rejects_oversized_agreement_id() {
+        let err = enforce_input_limits(Some(&"a".repeat(65)), None, &[]).unwrap_err();
+        assert!(err.contains("agreement_id"));
+        assert!(err.contains("exceeds maximum length of 64 characters"));
+    }
+
+    #[test]
+    fn enforce_limits_rejects_oversized_proof_uri() {
+        let err = enforce_input_limits(None, Some(&"x".repeat(4096)), &[]).unwrap_err();
+        assert!(err.contains("exceeds maximum length of 2048 characters"));
+    }
+
+    #[test]
+    fn enforce_limits_rejects_oversized_address() {
+        let huge = "G".repeat(1_000);
+        let err = enforce_input_limits(None, None, &[("payer", huge.as_str())]).unwrap_err();
+        assert!(err.contains("payer"));
+        assert!(err.contains("exceeds maximum length of 56 characters"));
     }
 }

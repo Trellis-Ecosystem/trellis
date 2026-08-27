@@ -129,6 +129,99 @@ impl Config {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RPC URL validation (#156)
+// ---------------------------------------------------------------------------
+
+/// Hosts that are always safe to reach over cleartext `http://`.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host == "::1"
+        || host == "127.0.0.1"
+        || host.starts_with("127.")
+        || host.ends_with(".localhost")
+}
+
+/// Validate a resolved RPC URL before the CLI makes any network call (#156).
+///
+/// An attacker who can plant a `.env` file could otherwise set
+/// `STELLAR_RPC_URL` to an arbitrary endpoint that returns forged transaction
+/// results, or to a cleartext `http://` URL that can be tampered with in
+/// transit.
+///
+/// Rules:
+/// * `https://…` — always accepted.
+/// * `http://…`  — accepted only when the host is loopback
+///   (`localhost` / `127.0.0.1` / `::1` / `*.localhost`), **or** when
+///   `allow_insecure` is set (the `--unsafe-rpc` flag), in which case a
+///   warning string is returned.
+/// * no scheme, or any scheme other than http/https, or a missing host —
+///   rejected.
+///
+/// Returns:
+/// * `Ok(None)` — URL is valid and needs no warning.
+/// * `Ok(Some(warning))` — URL is allowed but the caller should print the
+///   warning (cleartext HTTP permitted only via `--unsafe-rpc`).
+/// * `Err(message)` — URL must be refused; the caller should abort.
+pub fn validate_rpc_url(url: &str, allow_insecure: bool) -> Result<Option<String>, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(
+            "Error: RPC URL is empty — set --rpc-url or STELLAR_RPC_URL to an https:// endpoint"
+                .to_string(),
+        );
+    }
+
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| {
+        format!("Error: invalid RPC URL {url:?} — expected an http:// or https:// URL")
+    })?;
+
+    // Host is everything before the first '/', '?' or '#', minus any
+    // `user:pass@` credentials prefix and any `:port` suffix.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = match host_port.strip_prefix('[') {
+        // Bracketed IPv6 literal: keep everything up to and including ']'.
+        Some(after) => {
+            let end = after.find(']').map(|i| i + 2).unwrap_or(host_port.len());
+            &host_port[..end.min(host_port.len())]
+        }
+        None => host_port
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port),
+    };
+
+    if host.is_empty() {
+        return Err(format!("Error: invalid RPC URL {url:?} — missing host"));
+    }
+
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" => Ok(None),
+        "http" => {
+            if is_loopback_host(host) {
+                Ok(None)
+            } else if allow_insecure {
+                Ok(Some(format!(
+                    "warning: using cleartext HTTP RPC endpoint {url} (--unsafe-rpc). \
+                     Responses from this endpoint are not authenticated and can be \
+                     tampered with — never use this against mainnet."
+                )))
+            } else {
+                Err(format!(
+                    "Error: refusing to use insecure RPC URL {url:?}. Non-localhost \
+                     endpoints must use https://. Pass --unsafe-rpc to allow http:// \
+                     for local development."
+                ))
+            }
+        }
+        other => Err(format!(
+            "Error: unsupported RPC URL scheme {other:?} in {url:?} — expected http or https"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +264,75 @@ mod tests {
         assert_eq!(err.len(), 2);
         assert!(err.contains(&"TRELLIS_CONTRACT_ID".to_string()));
         assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
+    }
+
+    // --- validate_rpc_url (#156) ---
+
+    #[test]
+    fn rpc_url_https_testnet_passes_without_warning() {
+        assert_eq!(
+            validate_rpc_url("https://soroban-testnet.stellar.org", false),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn rpc_url_https_with_port_and_path_passes() {
+        assert_eq!(
+            validate_rpc_url("https://rpc.example.com:8443/soroban/rpc", false),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn rpc_url_rejects_non_url_string() {
+        let err = validate_rpc_url("not-a-url", false).unwrap_err();
+        assert!(err.contains("expected an http:// or https:// URL"));
+    }
+
+    #[test]
+    fn rpc_url_rejects_unsupported_scheme() {
+        let err = validate_rpc_url("ftp://example.com", false).unwrap_err();
+        assert!(err.contains("unsupported RPC URL scheme"));
+    }
+
+    #[test]
+    fn rpc_url_rejects_empty() {
+        assert!(validate_rpc_url("   ", false).is_err());
+    }
+
+    #[test]
+    fn rpc_url_rejects_missing_host() {
+        assert!(validate_rpc_url("https:///path-only", false).is_err());
+    }
+
+    #[test]
+    fn rpc_url_http_localhost_passes_without_flag() {
+        assert_eq!(validate_rpc_url("http://localhost:8000", false), Ok(None));
+        assert_eq!(
+            validate_rpc_url("http://127.0.0.1:8000/rpc", false),
+            Ok(None)
+        );
+        assert_eq!(validate_rpc_url("http://[::1]:8000", false), Ok(None));
+    }
+
+    #[test]
+    fn rpc_url_http_non_localhost_rejected_without_flag() {
+        let err = validate_rpc_url("http://evil.example.com", false).unwrap_err();
+        assert!(err.contains("refusing to use insecure RPC URL"));
+        assert!(err.contains("--unsafe-rpc"));
+    }
+
+    #[test]
+    fn rpc_url_http_non_localhost_warns_with_unsafe_flag() {
+        let warning = validate_rpc_url("http://devnet.internal:8000", true)
+            .unwrap()
+            .expect("expected a warning for cleartext http");
+        assert!(warning.contains("cleartext HTTP"));
+    }
+
+    #[test]
+    fn rpc_url_http_localhost_does_not_warn_even_with_unsafe_flag() {
+        assert_eq!(validate_rpc_url("http://localhost:8000", true), Ok(None));
     }
 }

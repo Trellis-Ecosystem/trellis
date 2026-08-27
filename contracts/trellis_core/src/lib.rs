@@ -11,6 +11,9 @@ mod test;
 #[cfg(test)]
 mod test_properties;
 
+#[cfg(test)]
+mod test_panic_boundaries;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, String, Vec};
 
 use errors::TrellisError;
@@ -26,6 +29,26 @@ pub struct TrellisContract;
 // ---------------------------------------------------------------------------
 // Contract entrypoints
 // ---------------------------------------------------------------------------
+//
+// Panic safety (#154): a panic in a Soroban contract traps the host — the
+// transaction reverts but the caller is still charged the fee, and an
+// unexpected trap can leave callers reasoning about inconsistent state. Every
+// entrypoint below is therefore panic-free by construction:
+//
+//   * milestone lookups use `Vec::get(id).ok_or(TrellisError::InvalidMilestone)?`
+//     — never `Vec::get(id).unwrap()` or index syntax;
+//   * agreement reads go through `storage::read_agreement`, which maps a
+//     missing entry to `TrellisError::AgreementNotFound` via `Option::ok_or`;
+//   * every fallible entrypoint returns `Result<_, TrellisError>` so failures
+//     propagate as typed on-chain errors, not panics.
+//
+// There are no `unwrap()` / `expect()` calls anywhere in the contract crate's
+// non-test sources. The `token::Client` transfer calls can still trap inside
+// the SDK (e.g. insufficient balance/allowance) — that is the token
+// contract's own boundary and is intentionally left to it. A custom
+// `#[panic_handler]` is not added: `soroban-sdk` already provides one for the
+// wasm build and a second definition is a duplicate-lang-item error.
+// `test_panic_boundaries.rs` fuzzes these paths to keep the property enforced.
 
 #[contractimpl]
 impl TrellisContract {

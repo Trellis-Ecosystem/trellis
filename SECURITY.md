@@ -57,6 +57,21 @@ Please include as much of the following as you can:
 | Medium   | Incorrect behavior without direct fund impact, denial of service    | 30 days           |
 | Low      | Minor issues, best-practice deviations, non-exploitable edge cases  | Best effort       |
 
+## Dependency & supply-chain monitoring
+
+Every push and pull request runs a `supply-chain` CI job that scans the full
+Rust crate graph with `cargo deny` (policy in [`deny.toml`](./deny.toml)) and
+`cargo audit`. The build fails on any known RustSec advisory, a yanked crate,
+a licence outside the permissive allowlist, or a dependency sourced from an
+unexpected registry. Duplicate crate versions are surfaced as warnings for
+review. To reproduce locally:
+
+```bash
+cargo install --locked cargo-deny cargo-audit
+cargo deny check
+cargo audit
+```
+
 ## Hall of Fame
 
 We're grateful to the following researchers for responsibly disclosing
