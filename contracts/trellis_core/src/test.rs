@@ -642,3 +642,114 @@ fn test_cancel_unfunded_wrong_role_fails() {
     auth_as(&env, &payee);
     client.cancel_unfunded_milestone(&id, &0u32);
 }
+
+/// Test get_total_amount returns the correct sum of all milestone amounts.
+#[test]
+fn test_get_total_amount_matches_sum() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 40);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            id: 1,
+            amount: 2_500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            id: 2,
+            amount: 1_500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    env.mock_all_auths();
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    let total = client.get_total_amount(&id).unwrap();
+    assert_eq!(total, 5_000, "get_total_amount should return sum of all milestones");
+}
+
+/// Test extend_agreement_ttl on an existing agreement.
+#[test]
+fn test_extend_ttl_success() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 41);
+
+    env.mock_all_auths();
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 1_000),
+        &dispute_resolver,
+    );
+
+    env.mock_all_auths();
+    let result = client.extend_agreement_ttl(&id);
+    assert!(result.is_ok(), "extend_agreement_ttl should succeed on existing agreement");
+}
+
+/// Test extend_agreement_ttl on non-existent agreement fails gracefully.
+#[test]
+fn test_extend_ttl_nonexistent_agreement() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+    let id = agreement_id(&env, 99);
+
+    env.mock_all_auths();
+    let result = client.try_extend_agreement_ttl(&id);
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "extend_agreement_ttl on non-existent agreement should return AgreementNotFound"
+    );
+}
+
+/// Test dispute raised by payer.
+#[test]
+fn test_dispute_raised_by_payer() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 42);
+    let amount: i128 = 2_000;
+
+    env.mock_all_auths();
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    auth_as(&env, &payer);
+    client.lock_funds(&id, &0u32);
+
+    // Payer raises the dispute
+    auth_as(&env, &payer);
+    client.raise_dispute(&payer, &id, &0u32);
+
+    // Verify milestone status transitioned to Disputed
+    let status = client.get_milestone_status(&id, &0u32).unwrap();
+    assert_eq!(
+        status,
+        EscrowStatus::Disputed,
+        "milestone should transition to Disputed when payer raises dispute"
+    );
+}

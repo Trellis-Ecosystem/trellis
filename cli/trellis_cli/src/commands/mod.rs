@@ -225,6 +225,7 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             token,
             resolver,
             milestones,
+            yes,
             opts,
         ),
 
@@ -237,7 +238,8 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             agreement_id,
             milestone_id,
             proof_uri,
-        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, opts),
+            yes,
+        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, yes, opts),
 
         Commands::ApproveRelease {
             agreement_id,
@@ -254,7 +256,8 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             agreement_id,
             milestone_id,
             refund_to_payer,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, opts),
+            yes,
+        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, yes, opts),
 
         Commands::CancelMilestone {
             agreement_id,
@@ -321,6 +324,36 @@ fn fail_validation(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Ask for confirmation before proceeding with an action.
+///
+/// Prints a warning message and asks for y/n confirmation. If `yes` is true,
+/// skips the confirmation prompt. Returns Ok(()) if confirmed, Err if denied or
+/// on EOF.
+fn confirm_action(msg: &str, yes: bool) -> Result<(), String> {
+    if yes {
+        return Ok(());
+    }
+
+    eprintln!("⚠️  {msg}");
+    eprint!("Continue? (y/N) ");
+    use std::io::{self, BufRead};
+
+    let stdin = io::stdin();
+    let mut line = String::new();
+    match stdin.lock().read_line(&mut line) {
+        Ok(0) => Err("EOF reached, aborting".to_string()),
+        Ok(_) => {
+            let response = line.trim().to_lowercase();
+            if response == "y" || response == "yes" {
+                Ok(())
+            } else {
+                Err("Aborted by user".to_string())
+            }
+        }
+        Err(e) => Err(format!("Failed to read input: {e}")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Active command implementations
 // ---------------------------------------------------------------------------
@@ -342,6 +375,7 @@ fn run_init(
     token: String,
     resolver: String,
     milestones_csv: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
@@ -415,6 +449,7 @@ fn run_submit_work(
     agreement_id: String,
     milestone_id: u32,
     proof_uri: Option<String>,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     confirm_action(
@@ -505,6 +540,7 @@ fn run_resolve_dispute(
     agreement_id: String,
     milestone_id: u32,
     refund_to_payer: bool,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     let outcome = if refund_to_payer {
