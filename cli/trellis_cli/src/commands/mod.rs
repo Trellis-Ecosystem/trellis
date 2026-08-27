@@ -225,6 +225,7 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             token,
             resolver,
             milestones,
+            yes,
             opts,
         ),
 
@@ -237,7 +238,8 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             agreement_id,
             milestone_id,
             proof_uri,
-        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, opts),
+            yes,
+        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, yes, opts),
 
         Commands::ApproveRelease {
             agreement_id,
@@ -254,7 +256,8 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             agreement_id,
             milestone_id,
             refund_to_payer,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, opts),
+            yes,
+        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, yes, opts),
 
         Commands::CancelMilestone {
             agreement_id,
@@ -315,10 +318,9 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a validation error and exit with code 1.
-fn fail_validation(msg: &str) -> ! {
-    eprintln!("error: {msg}");
-    std::process::exit(1);
+/// Return a validation error.
+fn fail_validation(msg: &str) -> Result<(), String> {
+    Err(format!("error: {msg}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -342,12 +344,16 @@ fn run_init(
     token: String,
     resolver: String,
     milestones_csv: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    });
+    validate_agreement_id(&agreement_id)?;
+    crate::utils::validate_stellar_address(&payer).map_err(|e| format!("Invalid payer address: {e}"))?;
+    crate::utils::validate_stellar_address(&payee).map_err(|e| format!("Invalid payee address: {e}"))?;
+    crate::utils::validate_stellar_address(&token).map_err(|e| format!("Invalid token address: {e}"))?;
+    crate::utils::validate_stellar_address(&resolver).map_err(|e| format!("Invalid resolver address: {e}"))?;
+
+    let milestones_json = build_milestones_json(&milestones_csv)?;
 
     confirm_action(
         &format!(
@@ -388,6 +394,8 @@ fn run_lock_funds(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -415,8 +423,11 @@ fn run_submit_work(
     agreement_id: String,
     milestone_id: u32,
     proof_uri: Option<String>,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
         yes,
@@ -430,9 +441,7 @@ fn run_submit_work(
     ];
 
     if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        if let Err(e) = validate_proof_uri(&uri) {
-            fail_validation(&e);
-        }
+        validate_proof_uri(&uri)?;
         args.push("--proof-uri".to_string());
         args.push(uri);
     }
@@ -453,6 +462,8 @@ fn run_approve_release(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -481,6 +492,9 @@ fn run_raise_dispute(
     caller: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+    crate::utils::validate_stellar_address(&caller).map_err(|e| format!("Invalid caller address: {e}"))?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -505,8 +519,11 @@ fn run_resolve_dispute(
     agreement_id: String,
     milestone_id: u32,
     refund_to_payer: bool,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let outcome = if refund_to_payer {
         "refund locked funds to the payer"
     } else {
@@ -544,6 +561,8 @@ fn run_cancel_milestone(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -565,6 +584,8 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
     execute(config, "get_agreement", &args, opts)
@@ -586,6 +607,8 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec![
         "--agreement-id".to_string(),
         format!("\"{}\"", agreement_id),
@@ -804,13 +827,38 @@ fn format_json_value(value: &serde_json::Value) -> String {
 /// `null` when nothing hex-shaped of the right length is found.
 fn extract_tx_hash(stdout: &str, stderr: &str) -> Option<String> {
     for text in [stdout, stderr] {
-        for token in text.split(|c: char| c.is_whitespace()) {
-            let cleaned = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            if cleaned.len() == 64 && cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(cleaned.to_lowercase());
+        // First try to find a hash with explicit hash-related prefix
+        if let Some(hash) = extract_with_prefix(text) {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Extract a 64-hex-char value that follows hash-related keywords or patterns.
+/// This prevents false positives from arbitrary 64-char hex strings in contract responses.
+fn extract_with_prefix(text: &str) -> Option<String> {
+    // Pattern: look for "tx_hash" or "hash" or similar, followed by : or =,
+    // then capture the next 64-char hex token
+    let hash_patterns = ["tx_hash", "tx_id", "transaction", "hash", "x_hash"];
+
+    for pattern in &hash_patterns {
+        // Case 1: pattern: followed by quoted value
+        for prefix in &[": \"", ":\"", ": ", "="] {
+            if let Some(pos) = text.find(&format!("{pattern}{prefix}")) {
+                let start = pos + pattern.len() + prefix.len();
+                if start < text.len() {
+                    let rest = &text[start..];
+                    for token in rest.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}') {
+                        if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                            return Some(token.to_lowercase());
+                        }
+                    }
+                }
             }
         }
     }
+
     None
 }
 
@@ -981,15 +1029,49 @@ mod tests {
     // --- extract_tx_hash / extract_events ---
 
     #[test]
-    fn extract_tx_hash_finds_standalone_hex() {
+    fn extract_tx_hash_finds_with_prefix() {
         let hash = "a".repeat(64);
-        let text = format!("submitted tx {hash} ok");
+        let text = format!("tx_hash: {hash}");
         assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_finds_with_quoted_prefix() {
+        let hash = "a".repeat(64);
+        let text = format!(r#"tx_hash: "{hash}""#);
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_ignores_standalone_hex() {
+        let hash = "a".repeat(64);
+        let text = format!("some milestone amount {hash} in response");
+        assert_eq!(extract_tx_hash(&text, ""), None, "should not match arbitrary 64-char hex");
     }
 
     #[test]
     fn extract_tx_hash_none_when_absent() {
         assert_eq!(extract_tx_hash("no hash here", ""), None);
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_contract_response() {
+        let hex_amount = "b".repeat(64);
+        let json = format!(r#"{{"milestone_amount": "{hex_amount}", "status": "pending"}}"#);
+        assert_eq!(extract_tx_hash(&json, ""), None, "should not match hex in JSON fields");
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_random_hex() {
+        let random_hex = "c".repeat(64);
+        assert_eq!(extract_tx_hash(&random_hex, ""), None, "should not match standalone hex");
+    }
+
+    #[test]
+    fn extract_tx_hash_with_hash_equals() {
+        let hash = "d".repeat(64);
+        let text = format!("hash={hash} submitted");
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
     }
 
     #[test]
@@ -1002,5 +1084,37 @@ mod tests {
         let stderr = "info: starting\nEvent: transfer occurred\ndone";
         let events = extract_events(stderr);
         assert!(matches!(events, serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- validate_stellar_address ---
+
+    #[test]
+    fn stellar_address_valid_g_account() {
+        let addr = "G".to_string() + &"a".repeat(55);
+        assert!(crate::utils::validate_stellar_address(&addr).is_ok());
+    }
+
+    #[test]
+    fn stellar_address_valid_c_contract() {
+        let addr = "C".to_string() + &"a".repeat(55);
+        assert!(crate::utils::validate_stellar_address(&addr).is_ok());
+    }
+
+    #[test]
+    fn stellar_address_rejects_wrong_prefix() {
+        let addr = "X".to_string() + &"a".repeat(55);
+        assert!(crate::utils::validate_stellar_address(&addr).is_err());
+    }
+
+    #[test]
+    fn stellar_address_rejects_wrong_length() {
+        let addr = "G".to_string() + &"a".repeat(54);
+        assert!(crate::utils::validate_stellar_address(&addr).is_err());
+    }
+
+    #[test]
+    fn stellar_address_rejects_invalid_chars() {
+        let addr = "G".to_string() + &"a".repeat(50) + "!@#$%";
+        assert!(crate::utils::validate_stellar_address(&addr).is_err());
     }
 }
