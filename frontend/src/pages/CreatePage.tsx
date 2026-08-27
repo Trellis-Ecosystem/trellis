@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import { useWallet } from '../lib/useWallet';
+import { useContractInvoke } from '../hooks/useContractInvoke';
+import { agreementIdToScVal, milestoneToScVal } from '../lib/soroban';
 
 interface MilestoneInput {
   amount: string;
 }
 
+const AGREEMENT_ID_PATTERN = /^[0-9a-fA-F]{64}$/;
+
 export default function CreatePage() {
   const wallet = useWallet();
   const navigate = useNavigate();
+  const { invoke } = useContractInvoke();
 
   const [formData, setFormData] = useState({
     agreementId: '',
@@ -60,6 +66,11 @@ export default function CreatePage() {
       return;
     }
 
+    if (!AGREEMENT_ID_PATTERN.test(formData.agreementId.trim())) {
+      setError('Agreement ID must be exactly 64 hex characters (0-9, a-f)');
+      return;
+    }
+
     if (!formData.payee.trim()) {
       setError('Please enter payee address');
       return;
@@ -80,36 +91,38 @@ export default function CreatePage() {
       return;
     }
 
+    if (milestones.some((m) => !/^[0-9]+$/.test(m.amount.trim()) || BigInt(m.amount.trim()) <= 0n)) {
+      setError('Milestone amounts must be positive whole numbers');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setSuccess(false);
 
     try {
-      // TODO: Implement contract call to init
-      // const milestoneAmounts = milestones.map(m => ({
-      //   id: milestones.indexOf(m),
-      //   amount: parseInt(m.amount),
-      //   status: 'Pending',
-      //   proof_uri: '',
-      // }));
+      const agreementId = formData.agreementId.trim().toLowerCase();
+      const milestoneVec = xdr.ScVal.scvVec(
+        milestones.map((m, index) =>
+          milestoneToScVal({ id: index, amount: m.amount.trim(), status: 'Pending', proof_uri: null }),
+        ),
+      );
 
-      // const result = await invokeContractFunction('init', {
-      //   agreement_id: formData.agreementId,
-      //   payer: wallet.address,
-      //   payee: formData.payee,
-      //   token: formData.token,
-      //   dispute_resolver: formData.resolver,
-      //   milestones: milestoneAmounts,
-      // }, wallet);
+      const args = [
+        agreementIdToScVal(agreementId),
+        nativeToScVal(wallet.address, { type: 'address' }),
+        nativeToScVal(formData.payee.trim(), { type: 'address' }),
+        nativeToScVal(formData.token.trim(), { type: 'address' }),
+        milestoneVec,
+        nativeToScVal(formData.resolver.trim(), { type: 'address' }),
+      ];
 
-      console.log('Create agreement action not yet implemented');
-      setError('Create agreement action not yet implemented');
+      await invoke('init', args, wallet.address!);
 
-      // On success:
-      // setSuccess(true);
-      // setTimeout(() => {
-      //   navigate(`/agreement/${formData.agreementId}`);
-      // }, 2000);
+      setSuccess(true);
+      setTimeout(() => {
+        navigate(`/agreement/${agreementId}`);
+      }, 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create agreement');
     } finally {
@@ -130,8 +143,9 @@ export default function CreatePage() {
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Agreement ID */}
             <div>
-              <label className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Agreement ID (hex)</label>
+              <label htmlFor="agreementId" className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Agreement ID (hex)</label>
               <input
+                id="agreementId"
                 type="text"
                 name="agreementId"
                 value={formData.agreementId}
@@ -143,8 +157,9 @@ export default function CreatePage() {
 
             {/* Payer Address (readonly) */}
             <div>
-              <label className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Payer (You)</label>
+              <label htmlFor="payer" className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Payer (You)</label>
               <input
+                id="payer"
                 type="text"
                 value={wallet.address || ''}
                 disabled
@@ -154,8 +169,9 @@ export default function CreatePage() {
 
             {/* Payee Address */}
             <div>
-              <label className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Payee Address</label>
+              <label htmlFor="payee" className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Payee Address</label>
               <input
+                id="payee"
                 type="text"
                 name="payee"
                 value={formData.payee}
@@ -167,8 +183,9 @@ export default function CreatePage() {
 
             {/* Token Address */}
             <div>
-              <label className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Token Contract Address</label>
+              <label htmlFor="token" className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Token Contract Address</label>
               <input
+                id="token"
                 type="text"
                 name="token"
                 value={formData.token}
@@ -180,8 +197,9 @@ export default function CreatePage() {
 
             {/* Dispute Resolver */}
             <div>
-              <label className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Dispute Resolver Address</label>
+              <label htmlFor="resolver" className="block text-white dark:text-white light:text-gray-900 font-semibold mb-2">Dispute Resolver Address</label>
               <input
+                id="resolver"
                 type="text"
                 name="resolver"
                 value={formData.resolver}
@@ -202,7 +220,7 @@ export default function CreatePage() {
                       value={milestone.amount}
                       onChange={(e) => handleMilestoneChange(index, e.target.value)}
                       placeholder="Amount (smallest token unit)"
-                      className="flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
+                      className="min-w-0 flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
                     />
                     {milestones.length > 1 && (
                       <button

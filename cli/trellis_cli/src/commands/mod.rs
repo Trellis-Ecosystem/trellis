@@ -203,6 +203,41 @@ pub enum Commands {
     },
 }
 
+/// Prompts the caller to confirm a state-changing action before it runs.
+///
+/// Skipped entirely for `--dry-run`, since nothing is actually executed.
+/// Under `--quiet` there is no terminal to read a response from, so an
+/// unconfirmed action fails closed rather than silently proceeding.
+fn confirm_action(summary: &str, yes: bool, opts: &OutputOpts) -> Result<(), String> {
+    if yes || opts.dry_run {
+        return Ok(());
+    }
+
+    if opts.quiet {
+        return Err(
+            "Confirmation required: pass --yes to run this non-interactively.".to_string(),
+        );
+    }
+
+    use std::io::Write;
+
+    println!("{summary}");
+    print!("Continue? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to write prompt: {e}"))?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read confirmation: {e}"))?;
+
+    match input.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err("Aborted: operation not confirmed.".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch — route each command to its handler
 // ---------------------------------------------------------------------------
@@ -225,41 +260,48 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             token,
             resolver,
             milestones,
+            yes,
             opts,
         ),
 
         Commands::LockFunds {
             agreement_id,
             milestone_id,
-        } => run_lock_funds(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_lock_funds(config, agreement_id, milestone_id, yes, opts),
 
         Commands::SubmitWork {
             agreement_id,
             milestone_id,
             proof_uri,
-        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, opts),
+            yes,
+        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, yes, opts),
 
         Commands::ApproveRelease {
             agreement_id,
             milestone_id,
-        } => run_approve_release(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_approve_release(config, agreement_id, milestone_id, yes, opts),
 
         Commands::RaiseDispute {
             agreement_id,
             milestone_id,
             caller,
-        } => run_raise_dispute(config, agreement_id, milestone_id, caller, opts),
+            yes,
+        } => run_raise_dispute(config, agreement_id, milestone_id, caller, yes, opts),
 
         Commands::ResolveDispute {
             agreement_id,
             milestone_id,
             refund_to_payer,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, opts),
+            yes,
+        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, yes, opts),
 
         Commands::CancelMilestone {
             agreement_id,
             milestone_id,
-        } => run_cancel_milestone(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_cancel_milestone(config, agreement_id, milestone_id, yes, opts),
 
         Commands::Status { agreement_id } => run_status(config, agreement_id, opts),
 
@@ -342,8 +384,13 @@ fn run_init(
     token: String,
     resolver: String,
     milestones_csv: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
@@ -355,6 +402,7 @@ fn run_init(
              token={token}, resolver={resolver}, milestones={milestones_csv})."
         ),
         yes,
+        opts,
     )?;
 
     let args = vec![
@@ -386,8 +434,19 @@ fn run_lock_funds(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
+    confirm_action(
+        &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -415,11 +474,17 @@ fn run_submit_work(
     agreement_id: String,
     milestone_id: u32,
     proof_uri: Option<String>,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
         yes,
+        opts,
     )?;
 
     let mut args = vec![
@@ -434,7 +499,9 @@ fn run_submit_work(
             fail_validation(&e);
         }
         args.push("--proof-uri".to_string());
-        args.push(uri);
+        // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
+        // JSON, so a bare string value fails to parse — it must be JSON-quoted.
+        args.push(serde_json::to_string(&uri).unwrap_or(uri));
     }
 
     execute(config, "submit_work", &args, opts)
@@ -451,8 +518,21 @@ fn run_approve_release(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
+    confirm_action(
+        &format!(
+            "This will approve milestone {milestone_id} of agreement {agreement_id} and release funds to the payee."
+        ),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -479,8 +559,19 @@ fn run_raise_dispute(
     agreement_id: String,
     milestone_id: u32,
     caller: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
+    confirm_action(
+        &format!("This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -505,8 +596,13 @@ fn run_resolve_dispute(
     agreement_id: String,
     milestone_id: u32,
     refund_to_payer: bool,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
     let outcome = if refund_to_payer {
         "refund locked funds to the payer"
     } else {
@@ -517,6 +613,7 @@ fn run_resolve_dispute(
             "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} and {outcome}."
         ),
         yes,
+        opts,
     )?;
 
     let args = vec![
@@ -542,8 +639,19 @@ fn run_cancel_milestone(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
+    confirm_action(
+        &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -565,6 +673,10 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
     execute(config, "get_agreement", &args, opts)
@@ -586,6 +698,10 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    if let Err(e) = validate_agreement_id(&agreement_id) {
+        fail_validation(&e);
+    }
+
     let args = vec![
         "--agreement-id".to_string(),
         format!("\"{}\"", agreement_id),

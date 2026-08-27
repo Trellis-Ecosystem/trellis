@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Agreement, SorobanEvent } from '../lib/soroban';
-import { sorobanServer } from '../lib/soroban';
+import { getAgreement, sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
 import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
 import MilestoneRow from '../components/MilestoneRow';
+import MilestoneCard from '../components/MilestoneCard';
 import StatsBar from '../components/StatsBar';
+import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
 
 export default function StatusPage() {
@@ -40,7 +42,7 @@ export default function StatusPage() {
       navigate(`/agreement/${id}`);
 
       // Query agreement using contract read call
-      const agreement = await queryAgreement(id);
+      const agreement = await getAgreement(id);
       setAgreement(agreement);
 
       // Query events
@@ -87,7 +89,7 @@ export default function StatusPage() {
               placeholder="Enter Agreement ID (hex format)"
               value={agreementId}
               onChange={(e) => setAgreementId(e.target.value)}
-              className="flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
+              className="min-w-0 flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
             />
             <button
               type="submit"
@@ -147,7 +149,9 @@ export default function StatusPage() {
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
               <h2 className="text-xl font-semibold text-cyan-400 mb-6">Milestones</h2>
 
-              <div className="overflow-x-auto">
+              {/* Desktop: full table. Mobile: single-column cards (#120) — a
+                  scrollable table is hard to read and hard to tap on a phone. */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200">
@@ -170,6 +174,18 @@ export default function StatusPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="md:hidden space-y-3">
+                {agreement.milestones.map((milestone) => (
+                  <MilestoneCard
+                    key={milestone.id}
+                    milestone={milestone}
+                    agreement={agreement}
+                    wallet={wallet}
+                    onUpdate={() => handleQuery(agreementId)}
+                  />
+                ))}
               </div>
             </div>
 
@@ -197,12 +213,6 @@ export default function StatusPage() {
         )}
       </div>
     </div>
-  );
-}
-
-async function queryAgreement(agreementId: string): Promise<Agreement> {
-  throw new Error(
-    `Agreement query not yet fully implemented for ID: ${agreementId}. Use CLI: trellis status --agreement-id ${agreementId}`
   );
 }
 

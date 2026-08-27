@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import {
   Contract,
-  SorobanRpc,
   Transaction,
   TransactionBuilder,
+  rpc,
   xdr,
 } from '@stellar/stellar-sdk'
 import { signTransaction } from '../lib/wallet'
@@ -44,7 +44,7 @@ export function useContractInvoke(): UseContractInvokeResult {
       setError(null)
       setTxHash(null)
 
-      const server = new SorobanRpc.Server(RPC_URL)
+      const server = new rpc.Server(RPC_URL, { allowHttp: RPC_URL.startsWith('http://') })
       const contract = new Contract(CONTRACT_ID)
 
       // Fetch account to get correct sequence number
@@ -59,15 +59,8 @@ export function useContractInvoke(): UseContractInvokeResult {
         .setTimeout(180)
         .build()
 
-      // Simulate to prepare transaction
-      const simulated = await server.simulateTransaction(builtTx)
-
-      if (SorobanRpc.Api.isSimulationError(simulated)) {
-        throw new Error(`Simulation failed: ${simulated.error}`)
-      }
-
-      // Prepare transaction with simulation results
-      const preparedTx = SorobanRpc.assembleTransaction(builtTx, simulated).build()
+      // Simulate + assemble in one step; throws on simulation error.
+      const preparedTx = await server.prepareTransaction(builtTx)
 
       // Sign with Freighter
       setStatus('signing')
@@ -91,21 +84,13 @@ export function useContractInvoke(): UseContractInvokeResult {
       }
 
       // Poll for transaction result
-      let getResult = await server.getTransaction(sendResult.hash)
-      let attempts = 0
-      const maxAttempts = 30
+      const getResult = await server.pollTransaction(sendResult.hash, { attempts: 30 })
 
-      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND && attempts < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-        getResult = await server.getTransaction(sendResult.hash)
-        attempts++
-      }
-
-      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+      if (getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
         throw new Error('Transaction not found after polling')
       }
 
-      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      if (getResult.status === rpc.Api.GetTransactionStatus.FAILED) {
         throw new Error('Transaction failed')
       }
 

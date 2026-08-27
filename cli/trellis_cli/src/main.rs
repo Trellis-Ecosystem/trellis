@@ -5,6 +5,7 @@ mod utils;
 
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
+use config::Network;
 use std::process;
 
 // ---------------------------------------------------------------------------
@@ -144,7 +145,13 @@ fn main() {
         process::exit(1);
     }
 
-    let config = config::Config::from_env();
+    let config = match config::Config::resolve(cli.network, cli.rpc_url, cli.network_passphrase) {
+        Ok(config) => config,
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    };
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

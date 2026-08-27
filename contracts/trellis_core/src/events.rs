@@ -19,12 +19,12 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //
 // Prefixed topic names and their lengths:
 //   1. "trellis_cr"  (10 chars) → Symbol::new   — agreement_created
-//   2. "trlls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated to stay ≤9)
-//   3. "trlls_sbmt"  ( 9 chars) → symbol_short! — work_submitted     (abbreviated)
-//   4. "trlls_rlsd"  ( 9 chars) → symbol_short! — funds_released     (abbreviated)
-//   5. "trlls_dspt"  ( 9 chars) → symbol_short! — dispute_raised     (abbreviated)
-//   6. "trlls_rslv"  ( 9 chars) → symbol_short! — milestone_resolved (abbreviated)
-//   7. "trlls_cncl"  ( 9 chars) → symbol_short! — milestone_cancelled(abbreviated)
+//   2. "trls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated to stay ≤9)
+//   3. "trls_sbmt"  ( 9 chars) → symbol_short! — work_submitted     (abbreviated)
+//   4. "trls_rlsd"  ( 9 chars) → symbol_short! — funds_released     (abbreviated)
+//   5. "trls_dspt"  ( 9 chars) → symbol_short! — dispute_raised     (abbreviated)
+//   6. "trls_rslv"  ( 9 chars) → symbol_short! — milestone_resolved (abbreviated)
+//   7. "trls_cncl"  ( 9 chars) → symbol_short! — milestone_cancelled(abbreviated)
 //
 // All abbreviations follow the pattern: drop the vowels from the root word
 // while keeping enough consonants to be unambiguous.  They are intentional
@@ -39,7 +39,7 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   6. "resolved"  → (milestone_id: u32, refunded_to_payer: bool)
 //   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address)
 //
-// "trlls_rslv" and "trlls_cncl" are deliberately distinct: an indexer must be
+// "trls_rslv" and "trls_cncl" are deliberately distinct: an indexer must be
 // able to tell an arbitrated dispute outcome apart from a payer walking back a
 // milestone that was never funded, since only the former involves token
 // movement and resolver involvement.
@@ -47,29 +47,29 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 
 /// Emitted when a new escrow agreement is created.
 ///
-/// Topics: `("trlls_crte", agreement_id)`
+/// Topics: `("trls_crte", agreement_id)`
 /// Data:   `(payer, payee)`
 pub fn agreement_created(env: &Env, agreement_id: BytesN<32>, payer: Address, payee: Address) {
     env.events().publish(
-        (symbol_short!("trlls_crte"), agreement_id.clone()),
+        (symbol_short!("trls_crte"), agreement_id.clone()),
         (payer, payee),
     );
 }
 
 /// Emitted when funds for a specific milestone are locked into the escrow.
 ///
-/// Topics: `("trlls_lckd", agreement_id)`
+/// Topics: `("trls_lckd", agreement_id)`
 /// Data:   `(milestone_id, amount)`
 pub fn funds_locked(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, amount: i128) {
     env.events().publish(
-        (symbol_short!("trlls_lckd"), agreement_id.clone()),
+        (symbol_short!("trls_lckd"), agreement_id.clone()),
         (milestone_id, amount),
     );
 }
 
 /// Emitted when a payee submits proof of work for a milestone.
 ///
-/// Topics: `("trlls_sbmt", agreement_id)`
+/// Topics: `("trls_sbmt", agreement_id)`
 /// Data:   `(milestone_id, proof_uri)`
 ///
 /// `proof_uri` is `None` when the milestone was submitted without a proof
@@ -81,18 +81,18 @@ pub fn work_submitted(
     proof_uri: Option<String>,
 ) {
     env.events().publish(
-        (symbol_short!("trlls_sbmt"), agreement_id.clone()),
+        (symbol_short!("trls_sbmt"), agreement_id.clone()),
         (milestone_id, proof_uri),
     );
 }
 
 /// Emitted when a payer approves a milestone and funds are released to the payee.
 ///
-/// Topics: `("trlls_rlsd", agreement_id)`
+/// Topics: `("trls_rlsd", agreement_id)`
 /// Data:   `(milestone_id, amount)`
 pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, amount: i128) {
     env.events().publish(
-        (symbol_short!("trlls_rlsd"), agreement_id.clone()),
+        (symbol_short!("trls_rlsd"), agreement_id.clone()),
         (milestone_id, amount),
     );
 }
@@ -107,7 +107,7 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 /// importing contract WASM types.
 pub fn dispute_raised(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, caller: Address) {
     env.events().publish(
-        (symbol_short!("trlls_dspt"), agreement_id.clone()),
+        (symbol_short!("trls_dspt"), agreement_id.clone()),
         (milestone_id, caller),
     );
 }
@@ -117,7 +117,7 @@ pub fn dispute_raised(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, ca
 /// This event means an arbitration ruling was made and tokens moved. It is
 /// **not** emitted for cancellations — see [`milestone_cancelled`].
 ///
-/// Topics: `("trlls_rslv", agreement_id)`
+/// Topics: `("trls_rslv", agreement_id)`
 /// Data:   `(milestone_id, refunded_to_payer)`
 ///
 /// `refunded_to_payer = true`  → locked funds returned to payer.
@@ -129,7 +129,7 @@ pub fn milestone_resolved(
     refunded_to_payer: bool,
 ) {
     env.events().publish(
-        (symbol_short!("trlls_rslv"), agreement_id.clone()),
+        (symbol_short!("trls_rslv"), agreement_id.clone()),
         (milestone_id, refunded_to_payer),
     );
 }
@@ -140,7 +140,7 @@ pub fn milestone_resolved(
 /// ever having been escrowed. Indexers should treat this as a withdrawal of a
 /// proposal, not as a dispute outcome.
 ///
-/// Topics: `("trlls_cncl", agreement_id)`
+/// Topics: `("trls_cncl", agreement_id)`
 /// Data:   `(milestone_id, payer, cancelled_by)`
 ///
 /// `payer` is the agreement's payer; `cancelled_by` is the address that
@@ -155,7 +155,7 @@ pub fn milestone_cancelled(
     cancelled_by: Address,
 ) {
     env.events().publish(
-        (symbol_short!("trlls_cncl"), agreement_id.clone()),
+        (symbol_short!("trls_cncl"), agreement_id.clone()),
         (milestone_id, payer, cancelled_by),
     );
 }
