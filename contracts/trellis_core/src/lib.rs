@@ -152,7 +152,9 @@ impl TrellisContract {
     /// The payee authorises this call.
     ///
     /// Pass `Some(uri)` to attach delivery proof, or `None` to advance the
-    /// milestone to `WorkSubmitted` without one.
+    /// milestone to `WorkSubmitted` without one. Empty-string proofs are
+    /// normalized to `None` to ensure semantic consistency — indexers pattern
+    /// match on `Some(uri)` and must never see an empty string.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -176,8 +178,7 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // proof_uri is stored verbatim — `None` is the sole representation of
-        // "no proof", so there is no sentinel value to normalise.
+        let proof_uri = proof_uri.filter(|s| !s.is_empty());
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
         agreement.milestones.set(milestone_id, milestone);
