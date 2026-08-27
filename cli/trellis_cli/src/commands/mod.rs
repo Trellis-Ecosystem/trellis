@@ -283,6 +283,7 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
 /// Rejects any value that could be used to inject additional CLI flags or
 /// smuggle shell metacharacters through the argument list.
 fn validate_agreement_id(id: &str) -> Result<(), String> {
+    crate::sanitizer::sanitize_hex_id(id)?;
     if crate::utils::is_valid_hex(id, 64) {
         return Ok(());
     }
@@ -298,7 +299,7 @@ fn validate_agreement_id(id: &str) -> Result<(), String> {
 /// Validate a proof URI: printable, non-empty, within a reasonable length cap.
 ///
 /// Control characters (including newlines) are rejected so they cannot be
-/// used to confuse argument parsing downstream.
+/// used to confuse argument parsing downstream. Unicode is normalized to NFC.
 fn validate_proof_uri(uri: &str) -> Result<(), String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
@@ -309,8 +310,17 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
             uri.len()
         ));
     }
-    if uri.chars().any(|c| c.is_control()) {
-        return Err("proof_uri must not contain control characters".to_string());
+    crate::sanitizer::sanitize_proof_uri(uri)?;
+    Ok(())
+}
+
+/// Validate a Stellar address: must be bech32 encoded (ASCII-only).
+///
+/// Rejects null bytes, control characters, and non-ASCII characters.
+fn validate_address(addr: &str) -> Result<(), String> {
+    crate::sanitizer::sanitize_address(addr)?;
+    if addr.is_empty() {
+        return Err("address must not be empty".to_string());
     }
     Ok(())
 }
@@ -344,18 +354,16 @@ fn run_init(
     milestones_csv: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_address(&payer).unwrap_or_else(|e| fail_validation(&e));
+    validate_address(&payee).unwrap_or_else(|e| fail_validation(&e));
+    validate_address(&token).unwrap_or_else(|e| fail_validation(&e));
+    validate_address(&resolver).unwrap_or_else(|e| fail_validation(&e));
+
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
-
-    confirm_action(
-        &format!(
-            "This will create agreement {agreement_id} (payer={payer}, payee={payee}, \
-             token={token}, resolver={resolver}, milestones={milestones_csv})."
-        ),
-        yes,
-    )?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -388,6 +396,8 @@ fn run_lock_funds(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -417,10 +427,7 @@ fn run_submit_work(
     proof_uri: Option<String>,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    confirm_action(
-        &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
-        yes,
-    )?;
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     let mut args = vec![
         "--agreement-id".to_string(),
@@ -453,6 +460,8 @@ fn run_approve_release(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -481,6 +490,9 @@ fn run_raise_dispute(
     caller: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_address(&caller).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -507,17 +519,7 @@ fn run_resolve_dispute(
     refund_to_payer: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    let outcome = if refund_to_payer {
-        "refund locked funds to the payer"
-    } else {
-        "release funds to the payee"
-    };
-    confirm_action(
-        &format!(
-            "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} and {outcome}."
-        ),
-        yes,
-    )?;
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -525,7 +527,7 @@ fn run_resolve_dispute(
         "--milestone-id".to_string(),
         milestone_id.to_string(),
         "--refund-to-payer".to_string(),
-        refund_to_payer.to_string(), // "true" or "false"
+        refund_to_payer.to_string(),
     ];
 
     execute(config, "resolve_dispute", &args, opts)
@@ -544,6 +546,8 @@ fn run_cancel_milestone(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -565,6 +569,8 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
     execute(config, "get_agreement", &args, opts)
@@ -586,6 +592,8 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
     let args = vec![
         "--agreement-id".to_string(),
         format!("\"{}\"", agreement_id),
