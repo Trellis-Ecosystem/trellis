@@ -8,7 +8,6 @@ export interface Agreement {
 }
 
 export interface Milestone {
-  id: number;
   amount: string;
   status: EscrowStatus;
   proof_uri: string;
