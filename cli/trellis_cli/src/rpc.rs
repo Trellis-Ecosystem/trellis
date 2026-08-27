@@ -1,4 +1,32 @@
 use crate::config::Config;
+use governor::{Quota, RateLimiter};
+use std::num::NonZeroU32;
+use std::sync::OnceLock;
+
+static RPC_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
+
+fn get_rate_limiter() -> &'static RateLimiter {
+    RPC_RATE_LIMITER.get_or_init(|| {
+        let limit_per_sec: u32 = std::env::var("STELLAR_RPC_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+
+        if let Some(limit) = NonZeroU32::new(limit_per_sec) {
+            RateLimiter::direct(Quota::per_second(limit))
+        } else {
+            RateLimiter::direct(Quota::per_second(NonZeroU32::new(10).unwrap()))
+        }
+    })
+}
+
+fn apply_rate_limit() {
+    let limiter = get_rate_limiter();
+    if limiter.check().is_err() {
+        eprintln!("⚠️  RPC rate limit active — request queued until quota resets");
+        limiter.until_ready().wait();
+    }
+}
 
 /// Output from a Soroban contract invoke.
 #[derive(Debug)]
@@ -156,6 +184,7 @@ impl RpcClient {
 
         let (cmd_args, command_debug) = Self::build_cmd_args(config, fn_name, args);
 
+        apply_rate_limit();
         let output = Command::new("stellar").args(&cmd_args).output();
 
         match output {

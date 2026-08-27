@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod keystore;
 mod rpc;
 mod utils;
 

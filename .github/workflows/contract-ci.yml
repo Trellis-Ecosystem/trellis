@@ -30,6 +30,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  semgrep:
+    name: Semgrep SAST scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: .semgrep/soroban-rules.yaml
+
   verify:
     name: Build, test, clippy & fmt
     runs-on: ubuntu-latest

@@ -1,0 +1,33 @@
+rules:
+  - id: unchecked-auth
+    pattern: |
+      fn $FUNC(...) {
+        ...
+        <... !Address::require_auth(...) ...>
+      }
+    message: Function may not check authorization - ensure require_auth is called
+    severity: WARNING
+    languages: [rust]
+
+  - id: unchecked-panic
+    pattern: |
+      panic!($MSG)
+    message: Unchecked panic may terminate contract unexpectedly
+    severity: WARNING
+    languages: [rust]
+
+  - id: arithmetic-overflow
+    pattern-either:
+      - pattern: $A + $B
+      - pattern: $A - $B
+      - pattern: $A * $B
+    message: Arithmetic operation may overflow - ensure bounds checking or use checked_* methods
+    severity: INFO
+    languages: [rust]
+
+  - id: unsafe-contract-call
+    pattern: |
+      Client::new($ENV, &Address::from_contract_id(&env, &contract_id))
+    message: Contract call - verify contract_id is trusted
+    severity: WARNING
+    languages: [rust]
