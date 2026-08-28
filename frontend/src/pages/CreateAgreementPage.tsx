@@ -41,15 +41,20 @@ function CreateAgreementPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const validateAddress = (address: string, field: string): string | undefined => {
-    if (!address.trim()) {
-      return `${field} is required`
+    const trimmed = address.trim()
+    if (!trimmed) return `${field} is required`
+
+    if (trimmed.startsWith('C')) {
+      return StrKey.isValidContractKey(trimmed)
+        ? undefined
+        : `${field} must be a valid contract address (starts with C)`
     }
-    
+
     try {
-      StrKey.decodeEd25519PublicKey(address)
+      StrKey.decodeEd25519PublicKey(trimmed)
       return undefined
     } catch {
-      return `Invalid Stellar address for ${field}`
+      return `${field} must be a valid account address (starts with G)`
     }
   }
 

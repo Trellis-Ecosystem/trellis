@@ -112,7 +112,7 @@ function AgreementHistoryPage() {
                   <code className="font-mono text-sm text-gray-400">
                     {truncateAgreementId(entry.agreementId)}
                   </code>
-                  <ExplorerLink type="contract" value={entry.agreementId} />
+                  <ExplorerLink type="agreement" value={entry.agreementId} />
                   <CopyButton text={entry.agreementId} label={`Copy agreement ID ${entry.agreementId}`} />
                 </div>
 
