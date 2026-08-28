@@ -8,6 +8,7 @@ interface CopyButtonProps {
 
 export function CopyButton({ text, label, className = '' }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   const handleCopy = useCallback(async () => {
     try {
@@ -15,9 +16,12 @@ export function CopyButton({ text, label, className = '' }: CopyButtonProps) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      // Clipboard API unavailable — silently fail
+      setCopyFailed(true)
+      setTimeout(() => setCopyFailed(false), 2000)
     }
   }, [text])
+
+  const buttonTitle = copied ? 'Copied!' : copyFailed ? 'Copy failed — check clipboard permissions' : (label ?? 'Copy to clipboard')
 
   return (
     <button
@@ -25,14 +29,20 @@ export function CopyButton({ text, label, className = '' }: CopyButtonProps) {
       className={`p-1.5 rounded transition-colors ${
         copied
           ? 'text-green-400 bg-green-400/10'
-          : 'text-gray-400 hover:text-cyan-400 hover:bg-navy-700'
+          : copyFailed
+            ? 'text-red-400 bg-red-400/10'
+            : 'text-gray-400 hover:text-cyan-400 hover:bg-navy-700'
       } ${className}`}
-      title={copied ? 'Copied!' : label ?? 'Copy to clipboard'}
-      aria-label={label ?? 'Copy to clipboard'}
+      title={buttonTitle}
+      aria-label={buttonTitle}
     >
       {copied ? (
         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      ) : copyFailed ? (
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 6l12 12M6 18L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         </svg>
       ) : (
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">

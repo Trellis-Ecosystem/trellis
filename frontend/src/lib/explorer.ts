@@ -12,8 +12,12 @@ import { NETWORK_PASSPHRASE } from './config'
 /** Networks Stellar Expert serves under `/explorer/<network>`. */
 export type StellarNetwork = 'public' | 'testnet'
 
-/** Entity segments in a Stellar Expert URL path. */
-export type ExplorerEntity = 'tx' | 'op' | 'account' | 'contract' | 'ledger' | 'asset'
+/**
+ * Entity segments in a Stellar Expert URL path.
+ * "agreement" is a Trellis-internal hex ID — Stellar Expert has no page for it,
+ * so explorerUrl returns null and ExplorerLink renders nothing (no 404 link).
+ */
+export type ExplorerEntity = 'tx' | 'op' | 'account' | 'contract' | 'ledger' | 'asset' | 'agreement'
 
 export const STELLAR_EXPERT_ORIGIN = 'https://stellar.expert'
 
@@ -52,6 +56,7 @@ export function explorerUrl(
   value: string | null | undefined,
   network: StellarNetwork = ACTIVE_NETWORK,
 ): string | null {
+  if (entity === 'agreement') return null
   const id = value?.trim()
   if (!id) return null
   return `${explorerBaseUrl(network)}/${entity}/${encodeURIComponent(id)}`

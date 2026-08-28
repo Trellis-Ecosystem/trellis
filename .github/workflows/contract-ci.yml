@@ -74,3 +74,13 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Validate test snapshots are up to date
+        run: |
+          SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
+          if ! git diff --exit-code contracts/trellis_core/test_snapshots/; then
+            echo ""
+            echo "ERROR: Test snapshots are out of date."
+            echo "Run 'make test-snapshots-update' locally and commit the updated snapshots."
+            exit 1
+          fi

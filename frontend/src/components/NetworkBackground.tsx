@@ -258,6 +258,14 @@ export function NetworkBackground() {
       resizeTimeoutId = setTimeout(performResize, RESIZE_THROTTLE_MS - elapsed)
     }
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(animationId)
+      } else {
+        animationId = requestAnimationFrame(drawFrame)
+      }
+    }
+
     resize()
     createParticles()
     animationId = requestAnimationFrame(drawFrame)
@@ -265,6 +273,7 @@ export function NetworkBackground() {
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseleave', handleMouseLeave)
     window.addEventListener('resize', handleResize)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       cancelAnimationFrame(animationId)
@@ -272,6 +281,7 @@ export function NetworkBackground() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseleave', handleMouseLeave)
       window.removeEventListener('resize', handleResize)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 
