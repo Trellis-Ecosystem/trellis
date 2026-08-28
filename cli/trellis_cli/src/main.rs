@@ -5,6 +5,7 @@ mod utils;
 
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
+use config::Network;
 use std::process;
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ use std::process;
 /// Optional variables (Soroban Testnet used as default):
 ///   STELLAR_RPC_URL            — Soroban JSON-RPC endpoint
 ///   STELLAR_NETWORK_PASSPHRASE — Network passphrase for transaction signing
+///   STELLAR_RPC_RETRIES        — Retries for transient RPC failures (default 3; 0 disables)
 #[derive(Parser, Debug)]
 #[command(
     name = "trellis",
@@ -144,7 +146,34 @@ fn main() {
         process::exit(1);
     }
 
-    let config = config::Config::from_env();
+    // ── #80: Resolve config from the --network preset + CLI/env overrides ──
+    let config = match config::Config::resolve(cli.network, cli.rpc_url, cli.network_passphrase) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    };
+
+    // ── #246: Fail fast on missing required configuration ─────────────────
+    // Config::resolve() substitutes `UNSET_*` placeholders when
+    // TRELLIS_CONTRACT_ID / TRELLIS_SOURCE_KEY are absent. Without this check
+    // those placeholders would only surface as a cryptic RPC failure deep in
+    // the invoke pipeline. `completion` is handled above and never reaches here.
+    if let Err(missing) = config.validate() {
+        eprintln!(
+            "Error: missing required configuration: {names}\n\n\
+             Set the variable(s) below in a `.env` file (see .env.example) or your environment:\n\
+             {exports}",
+            names = missing.join(", "),
+            exports = missing
+                .iter()
+                .map(|v| format!("  export {v}=<value>"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        process::exit(1);
+    }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

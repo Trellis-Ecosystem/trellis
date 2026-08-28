@@ -172,4 +172,18 @@ mod tests {
         assert!(err.contains(&"TRELLIS_CONTRACT_ID".to_string()));
         assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
     }
+
+    #[test]
+    fn resolve_then_validate_catches_unset_values() {
+        // #246: a config resolved with the required env vars absent must be
+        // rejected by validate() rather than passing through with placeholders.
+        std::env::remove_var("TRELLIS_CONTRACT_ID");
+        std::env::remove_var("TRELLIS_SOURCE_KEY");
+
+        let cfg = Config::resolve(Network::Testnet, None, None).expect("preset resolves");
+        let missing = cfg.validate().unwrap_err();
+
+        assert!(missing.contains(&"TRELLIS_CONTRACT_ID".to_string()));
+        assert!(missing.contains(&"TRELLIS_SOURCE_KEY".to_string()));
+    }
 }

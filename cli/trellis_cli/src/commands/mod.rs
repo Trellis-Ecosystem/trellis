@@ -5,6 +5,22 @@ use crate::config::Config;
 use crate::rpc::{InvokeOutput, RpcClient};
 
 // ---------------------------------------------------------------------------
+// ANSI escape codes (#245)
+// ---------------------------------------------------------------------------
+// Hoisted to module level so they are compiled once instead of being
+// re-declared on every `render_human` call. `ANSI_`-prefixed to avoid
+// colliding with any other module item.
+
+/// ANSI SGR: green foreground.
+const ANSI_GREEN: &str = "\x1b[32m";
+/// ANSI SGR: red foreground.
+const ANSI_RED: &str = "\x1b[31m";
+/// ANSI SGR: bold.
+const ANSI_BOLD: &str = "\x1b[1m";
+/// ANSI SGR: reset all attributes.
+const ANSI_RESET: &str = "\x1b[0m";
+
+// ---------------------------------------------------------------------------
 // Output rendering options (#74, #76, #77)
 // ---------------------------------------------------------------------------
 
@@ -751,19 +767,14 @@ fn json_envelope(out: &InvokeOutput) -> serde_json::Value {
 /// and print a colorized, formatted summary. Falls back to raw text if the
 /// output isn't valid JSON.
 fn render_human(out: &InvokeOutput) -> Result<(), String> {
-    const GREEN: &str = "\x1b[32m";
-    const RED: &str = "\x1b[31m";
-    const BOLD: &str = "\x1b[1m";
-    const RESET: &str = "\x1b[0m";
-
     let trimmed = out.stdout.trim();
 
     if out.success {
-        println!("{GREEN}{BOLD}\u{2714} Success{RESET}");
+        println!("{ANSI_GREEN}{ANSI_BOLD}\u{2714} Success{ANSI_RESET}");
         match serde_json::from_str::<serde_json::Value>(trimmed) {
             Ok(serde_json::Value::Object(map)) if !map.is_empty() => {
                 for (key, value) in map {
-                    println!("  {BOLD}{key}{RESET}: {}", format_json_value(&value));
+                    println!("  {ANSI_BOLD}{key}{ANSI_RESET}: {}", format_json_value(&value));
                 }
             }
             Ok(other) if !trimmed.is_empty() => println!("  {}", format_json_value(&other)),
@@ -772,20 +783,20 @@ fn render_human(out: &InvokeOutput) -> Result<(), String> {
         }
 
         if let serde_json::Value::Array(events) = extract_events(&out.stderr) {
-            println!("  {BOLD}events{RESET}:");
+            println!("  {ANSI_BOLD}events{ANSI_RESET}:");
             for event in events {
                 println!("    - {}", format_json_value(&event));
             }
         }
         Ok(())
     } else {
-        println!("{RED}{BOLD}\u{2718} Failed{RESET}");
-        println!("  {BOLD}command{RESET}: {}", out.command_debug);
+        println!("{ANSI_RED}{ANSI_BOLD}\u{2718} Failed{ANSI_RESET}");
+        println!("  {ANSI_BOLD}command{ANSI_RESET}: {}", out.command_debug);
         if !trimmed.is_empty() {
-            println!("  {BOLD}stdout{RESET}: {trimmed}");
+            println!("  {ANSI_BOLD}stdout{ANSI_RESET}: {trimmed}");
         }
         if !out.stderr.trim().is_empty() {
-            println!("  {BOLD}stderr{RESET}: {}", out.stderr.trim());
+            println!("  {ANSI_BOLD}stderr{ANSI_RESET}: {}", out.stderr.trim());
         }
         Err(String::new())
     }

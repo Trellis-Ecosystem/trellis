@@ -14,15 +14,40 @@ pub struct InvokeOutput {
     pub command_debug: String,
 }
 
-/// Native Soroban RPC client that talks directly to the Soroban JSON-RPC endpoint.
-/// No external CLI dependency required.
+/// Client for invoking Trellis contract functions on Soroban.
+///
+/// ## Current architecture: `stellar` CLI shell-out
+///
+/// Despite the name, this type does **not** currently speak the Soroban
+/// JSON-RPC protocol directly. Every invocation shells out to the external
+/// `stellar contract invoke` command, which handles argument encoding,
+/// transaction assembly, signing (via the Stellar keystore) and submission.
+/// The `stellar` binary must therefore be installed and on `PATH` — this is
+/// checked once at startup (see `validate_environment` in `main.rs`).
+///
+/// Transient RPC failures (timeouts, rate limits, temporary unavailability)
+/// are retried with exponential backoff and jitter. The retry count is
+/// controlled by `STELLAR_RPC_RETRIES` (default 3; `0` disables retries).
+///
+/// ## TODO: native Soroban RPC implementation
+///
+/// A native implementation would drop the `stellar` CLI dependency by talking
+/// to the Soroban JSON-RPC endpoint directly:
+///   1. Parse `args` into typed contract parameters.
+///   2. Load the source key from the Stellar keystore.
+///   3. Build and sign a transaction envelope.
+///   4. Submit via `simulateTransaction` / `sendTransaction`.
+///   5. Poll `getTransaction` for the result.
+///
+/// This requires Stellar SDK integration and key management and is not yet
+/// implemented; see `TODO(native-rpc)` in [`RpcClient::invoke`].
 pub struct RpcClient;
 
 impl RpcClient {
-    /// Invoke a Trellis contract function via native Soroban RPC.
+    /// Invoke a Trellis contract function.
     ///
-    /// This replaces the shell-out to `stellar contract invoke` with direct
-    /// HTTP calls to the Soroban JSON-RPC endpoint.
+    /// Currently delegates to `stellar contract invoke` (see the type-level
+    /// docs for the architecture and the planned native RPC rewrite).
     ///
     /// Transient RPC failures (timeouts, rate limits, temporary unavailability)
     /// are automatically retried with exponential backoff and jitter. The number
@@ -35,17 +60,11 @@ impl RpcClient {
     ///               separator, e.g. `["--agreement_id", "0x…", "--payer", "G…"]`
     /// * `quiet`   – suppress the retry progress messages normally printed to stderr
     pub fn invoke(config: &Config, fn_name: &str, args: &[String], quiet: bool) -> InvokeOutput {
-        // For now, fall back to stellar CLI for full compatibility.
-        // A complete implementation would:
-        // 1. Parse args into typed contract parameters
-        // 2. Load the source key from Stellar keystore
-        // 3. Build a transaction envelope
-        // 4. Sign it with the source key
-        // 5. Submit via simulateTransaction and submitTransaction
-        // 6. Poll getLedgerEntries for results
-        //
-        // This requires Stellar SDK integration and key management,
-        // so we delegate to the stellar CLI for now which handles all of this.
+        // TODO(native-rpc): replace this shell-out with direct Soroban
+        // JSON-RPC calls (typed arg parsing, key loading, envelope signing,
+        // submit + poll). See the `RpcClient` type docs for the full plan.
+        // Until then we delegate to the `stellar` CLI, which already handles
+        // argument encoding, transaction assembly, signing and submission.
         Self::invoke_with_retry(config, fn_name, args, quiet)
     }
 
