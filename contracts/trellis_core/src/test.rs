@@ -23,7 +23,6 @@ fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
     vec![
         env,
         Milestone {
-            id: 0,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -292,13 +291,11 @@ fn test_multi_milestone_transitions() {
     let milestones = vec![
         &env,
         Milestone {
-            id: 0,
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
         },
         Milestone {
-            id: 1,
             amount: 2_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -342,8 +339,8 @@ fn test_batch_lock_funds() {
 
     let milestones = vec![
         &env,
-        Milestone { id: 0, amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { id: 1, amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
     env.mock_all_auths();
@@ -374,13 +371,13 @@ fn test_batch_lock_funds_partial_failure() {
 
     let milestones = vec![
         &env,
-        Milestone { id: 0, amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { id: 1, amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
     env.mock_all_auths();
     client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
-    
+
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
 
@@ -451,8 +448,8 @@ fn test_get_milestone_returns_correct_milestone() {
 
     let milestones = vec![
         &env,
-        Milestone { id: 0, amount: 100, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { id: 1, amount: 200, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 100, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone { amount: 200, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
     env.mock_all_auths();
@@ -461,7 +458,6 @@ fn test_get_milestone_returns_correct_milestone() {
     let m = client.get_milestone(&id, &1u32);
     assert!(m.is_some(), "milestone 1 must be found");
     let m = m.unwrap();
-    assert_eq!(m.id, 1, "id must match the requested index");
     assert_eq!(m.amount, 200, "amount must match");
     assert_eq!(m.status, EscrowStatus::Pending, "status must be Pending");
 }

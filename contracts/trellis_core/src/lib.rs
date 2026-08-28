@@ -556,8 +556,11 @@ impl TrellisContract {
     pub fn extend_agreement_ttl(
         env: Env,
         agreement_id: BytesN<32>,
+        caller: Address,
     ) -> Result<(), TrellisError> {
-        storage::extend_agreement_ttl(&env, &agreement_id)
+        storage::extend_agreement_ttl(&env, &agreement_id)?;
+        events::ttl_extended(&env, agreement_id, caller);
+        Ok(())
     }
 }
 

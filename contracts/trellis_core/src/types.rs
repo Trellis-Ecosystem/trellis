@@ -27,8 +27,6 @@ pub enum EscrowStatus {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Milestone {
-    /// Ordinal identifier for this milestone within the agreement (0-indexed).
-    pub id: u32,
     /// Token amount (in the smallest denomination) locked for this milestone.
     ///
     /// Must be strictly positive — `init` rejects zero or negative amounts
