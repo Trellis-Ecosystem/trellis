@@ -12,7 +12,7 @@ import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 export type InvokeStatus = 'idle' | 'building' | 'signing' | 'submitting' | 'success' | 'error'
 
 interface UseContractInvokeResult {
-  invoke: (method: string, args: xdr.ScVal[], publicKey: string) => Promise<string>
+  invoke: (method: string, args: xdr.ScVal[], publicKey: string, fee?: string) => Promise<string>
   status: InvokeStatus
   txHash: string | null
   error: string | null
@@ -38,6 +38,7 @@ export function useContractInvoke(): UseContractInvokeResult {
     method: string,
     args: xdr.ScVal[],
     publicKey: string,
+    fee: string = '100000',
   ): Promise<string> => {
     try {
       setStatus('building')
@@ -52,7 +53,7 @@ export function useContractInvoke(): UseContractInvokeResult {
 
       // Build transaction
       const builtTx = new TransactionBuilder(sourceAccount, {
-        fee: '100000',
+        fee,
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(contract.call(method, ...args))

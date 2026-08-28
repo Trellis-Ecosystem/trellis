@@ -12,6 +12,9 @@ interface MilestoneActionsProps {
   onSuccess?: () => void
 }
 
+const MAX_RETRIES = 3
+const BASE_FEE = 100_000
+
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
   const toast = useToast()
@@ -19,13 +22,14 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   const [showProofInput, setShowProofInput] = useState(false)
   const [proofUri, setProofUri] = useState('')
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
   const pendingAction = useRef<string | null>(null)
 
   const isLoading = status === 'building' || status === 'signing' || status === 'submitting'
   const isUserPayer = wallet.publicKey === agreement.payer
   const isUserPayee = wallet.publicKey === agreement.payee
 
-  const handleLockFunds = async () => {
+  const handleLockFunds = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'lock_funds'
@@ -37,9 +41,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('lock_funds', args, wallet.publicKey)
+      await invoke('lock_funds', args, wallet.publicKey, fee)
       toast.success({ title: 'Funds locked successfully' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -47,7 +52,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleSubmitWork = async () => {
+  const handleSubmitWork = async (fee?: string) => {
     if (!wallet.publicKey || !proofUri.trim()) return
 
     pendingAction.current = 'submit_work'
@@ -60,11 +65,12 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(proofUri, { type: 'string' }),
       ]
 
-      await invoke('submit_work', args, wallet.publicKey)
+      await invoke('submit_work', args, wallet.publicKey, fee)
       toast.success({ title: 'Work submitted successfully' })
       setShowProofInput(false)
       setProofUri('')
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -72,7 +78,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleApproveRelease = async () => {
+  const handleApproveRelease = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'approve_and_release'
@@ -84,9 +90,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('approve_and_release', args, wallet.publicKey)
+      await invoke('approve_and_release', args, wallet.publicKey, fee)
       toast.success({ title: 'Milestone approved and funds released' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -94,7 +101,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleRaiseDispute = async () => {
+  const handleRaiseDispute = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'raise_dispute'
@@ -106,9 +113,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('raise_dispute', args, wallet.publicKey)
+      await invoke('raise_dispute', args, wallet.publicKey, fee)
       toast.success({ title: 'Dispute raised' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -117,11 +125,15 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   }
 
   const handleRetry = () => {
+    if (retryCount >= MAX_RETRIES) return
+    const next = retryCount + 1
+    setRetryCount(next)
     reset()
-    if (pendingAction.current === 'lock_funds') handleLockFunds()
-    else if (pendingAction.current === 'submit_work') handleSubmitWork()
-    else if (pendingAction.current === 'approve_and_release') handleApproveRelease()
-    else if (pendingAction.current === 'raise_dispute') handleRaiseDispute()
+    const adjustedFee = String(Math.round(BASE_FEE * Math.pow(1.1, next)))
+    if (pendingAction.current === 'lock_funds') handleLockFunds(adjustedFee)
+    else if (pendingAction.current === 'submit_work') handleSubmitWork(adjustedFee)
+    else if (pendingAction.current === 'approve_and_release') handleApproveRelease(adjustedFee)
+    else if (pendingAction.current === 'raise_dispute') handleRaiseDispute(adjustedFee)
   }
 
   // Determine available actions based on milestone status and user role
@@ -184,6 +196,8 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         error={error}
         onRetry={handleRetry}
         method={pendingAction.current || ''}
+        retryCount={retryCount}
+        maxRetries={MAX_RETRIES}
       />
 
       {/* Proof URI Input */}

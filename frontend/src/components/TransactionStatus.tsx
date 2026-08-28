@@ -10,6 +10,8 @@ interface TransactionStatusProps {
   error: string | null
   onRetry: () => void
   method: string
+  retryCount?: number
+  maxRetries?: number
 }
 
 const PHASE_LABELS: Record<InvokeStatus, string> = {
@@ -23,7 +25,7 @@ const PHASE_LABELS: Record<InvokeStatus, string> = {
 
 const PHASE_ORDER: InvokeStatus[] = ['building', 'signing', 'submitting']
 
-export default function TransactionStatus({ status, txHash, error, onRetry, method }: TransactionStatusProps) {
+export default function TransactionStatus({ status, txHash, error, onRetry, method, retryCount = 0, maxRetries = 3 }: TransactionStatusProps) {
   const [timeoutWarning, setTimeoutWarning] = useState(false)
   const startRef = useRef<number | null>(null)
 
@@ -65,12 +67,18 @@ export default function TransactionStatus({ status, txHash, error, onRetry, meth
           <span className="text-gray-400">— {error || 'Transaction failed'}</span>
         </div>
         {txHash && <ExplorerLink type="tx" value={txHash} label="View failed transaction" />}
-        <button
-          onClick={onRetry}
-          className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded transition-colors"
-        >
-          Retry with adjusted gas
-        </button>
+        {retryCount < maxRetries ? (
+          <button
+            onClick={onRetry}
+            className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded transition-colors"
+          >
+            {`Retry with adjusted gas (+${Math.round((Math.pow(1.1, retryCount + 1) - 1) * 100)}%)`}
+          </button>
+        ) : (
+          <span className="px-3 py-1 bg-navy-600 text-gray-400 text-xs rounded">
+            Max retries reached ({maxRetries}/{maxRetries})
+          </span>
+        )}
       </div>
     )
   }
