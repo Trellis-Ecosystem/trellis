@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { nativeToScVal } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import TransactionStatus from './TransactionStatus'
 import type { Agreement, Milestone } from '../lib/soroban'
 
@@ -14,11 +14,12 @@ interface MilestoneActionsProps {
 
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
-  const toast = useToast()
+  const toast = useToastActions()
   const { invoke, status, txHash, error, reset } = useContractInvoke()
   const [showProofInput, setShowProofInput] = useState(false)
   const [proofUri, setProofUri] = useState('')
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
+  const [isRetrying, setIsRetrying] = useState(false)
   const pendingAction = useRef<string | null>(null)
 
   const isLoading = status === 'building' || status === 'signing' || status === 'submitting'
@@ -116,12 +117,20 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleRetry = () => {
-    reset()
-    if (pendingAction.current === 'lock_funds') handleLockFunds()
-    else if (pendingAction.current === 'submit_work') handleSubmitWork()
-    else if (pendingAction.current === 'approve_and_release') handleApproveRelease()
-    else if (pendingAction.current === 'raise_dispute') handleRaiseDispute()
+  const handleRetry = async () => {
+    if (isRetrying) return
+    setIsRetrying(true)
+    try {
+      reset()
+      if (pendingAction.current === 'lock_funds') await handleLockFunds()
+      else if (pendingAction.current === 'submit_work') await handleSubmitWork()
+      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease()
+      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute()
+    } catch (err) {
+      toast.error({ title: 'Retry failed', message: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsRetrying(false)
+    }
   }
 
   // Determine available actions based on milestone status and user role
@@ -184,6 +193,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         error={error}
         onRetry={handleRetry}
         method={pendingAction.current || ''}
+        retrying={isRetrying}
       />
 
       {/* Proof URI Input */}

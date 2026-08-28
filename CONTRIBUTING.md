@@ -221,6 +221,7 @@ All of the following must be true before requesting review:
 - No files outside the linked issue's scope are changed.
 - No changes are made to `contracts/trellis_core` unless the issue explicitly requires contract changes.
 - No new dependencies are added without prior discussion in the issue thread.
+- **If you changed contract code**: regenerate test snapshots and commit them (see [Test Snapshots](#test-snapshots) below).
 
 Suggested final checks from the workspace root:
 
@@ -245,7 +246,53 @@ cargo build --release
 cd ../..
 ```
 
-## 10. Code Style
+## 10. Test Snapshots
+
+The Soroban test framework records ledger state at each test step into JSON files under `contracts/trellis_core/test_snapshots/`. These files are committed to the repository so reviewers can see exactly what state the contract produces for every test case.
+
+**Why this matters:** If you change contract logic or add/remove entrypoints, the snapshot files will diverge from what the tests actually produce. A PR with stale snapshots will fail the CI snapshot-validation step, even if `cargo test` itself passes.
+
+### Regenerating snapshots
+
+Whenever you change contract code, regenerate the snapshots before opening a PR:
+
+```bash
+make test-snapshots-update
+```
+
+This is equivalent to:
+
+```bash
+SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
+```
+
+After regenerating, review the diff:
+
+```bash
+git diff contracts/trellis_core/test_snapshots/
+```
+
+If the diff looks correct (ledger entries reflecting your intentional change), stage and commit the updated snapshot files as part of the same commit or PR that contains the contract change.
+
+### What the CI check does
+
+After the regular `cargo test` step, CI runs:
+
+```bash
+SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
+git diff --exit-code contracts/trellis_core/test_snapshots/
+```
+
+If any snapshot file differs from what is committed, the build fails with an error message directing you to run `make test-snapshots-update`.
+
+### Rules
+
+- Never manually edit snapshot JSON files. They are generated automatically.
+- Do not add `test_snapshots/` to `.gitignore`. The files must be tracked.
+- If you add a new test, its snapshot file will be created by `make test-snapshots-update` and must be committed.
+- If you delete a test, delete its snapshot file from the repository in the same PR.
+
+## 11. Code Style
 
 Follow the existing patterns in the file you edit. Do not introduce a new style in the same PR.
 
@@ -264,7 +311,7 @@ Before committing Rust changes, format them:
 cargo fmt
 ```
 
-## 11. Frontend Versioning
+## 12. Frontend Versioning
 
 The frontend (`frontend/package.json`) follows [Semantic Versioning](https://semver.org/):
 
@@ -281,7 +328,7 @@ npm version patch   # or minor / major
 
 This updates `package.json` and creates a matching git tag. The version is injected into the build via `vite.config.ts` (`__APP_VERSION__`, sourced from `npm_package_version`) and rendered in the app footer, so every deployed build is traceable to a version.
 
-## 12. Frontend Tests and Manual Testnet Verification
+## 13. Frontend Tests and Manual Testnet Verification
 
 Run the frontend checks before opening a PR that touches `frontend/`:
 
@@ -300,7 +347,7 @@ For changes that affect contract calls or wallet flows, also verify manually aga
 2. Run `npm run dev` and exercise the affected flow end to end (e.g. init, fund, submit, approve/dispute) using a Freighter Testnet account.
 3. Confirm the transaction succeeds in Freighter and the resulting state is reflected in the UI.
 
-## 13. Getting Help
+## 14. Getting Help
 
 Use the right channel for the question:
 
