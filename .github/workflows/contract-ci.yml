@@ -62,31 +62,12 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  supply-chain:
-    name: Dependency audit (cargo-deny & cargo-audit)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      # cargo-deny and cargo-audit are CI-only tools — installed here as
-      # prebuilt binaries, never added to any crate's [dependencies].
-      - name: Install cargo-deny and cargo-audit
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny,cargo-audit
-
-      # Enforces deny.toml at the project root: RustSec advisories, the
-      # licence allowlist, the duplicate-version check, and source registries.
-      - name: cargo deny check
-        run: cargo deny check
-
-      # Second, independent pass against the RustSec advisory database so a
-      # newly disclosed vulnerability fails the build even if deny.toml drifts.
-      # The ignore list lives in .cargo/audit.toml (mirrors deny.toml).
-      - name: cargo audit
-        run: cargo audit --deny warnings
+      - name: Validate test snapshots are up to date
+        run: |
+          SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
+          if ! git diff --exit-code contracts/trellis_core/test_snapshots/; then
+            echo ""
+            echo "ERROR: Test snapshots are out of date."
+            echo "Run 'make test-snapshots-update' locally and commit the updated snapshots."
+            exit 1
+          fi

@@ -141,9 +141,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (phase !== 'connected') return;
 
+    let mounted = true;
+
     const intervalId = setInterval(() => {
       void (async () => {
         const [address, passphrase] = await Promise.all([getPublicKey(), getNetworkPassphrase()]);
+
+        if (!mounted) return;
 
         if (!address) {
           writeIntent(false);
@@ -158,7 +162,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       })();
     }, ACCOUNT_POLL_INTERVAL_MS);
 
-    return () => clearInterval(intervalId);
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+    };
   }, [phase]);
 
   const connect = useCallback(async () => {

@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useTypingAnimation } from '../hooks/useTypingAnimation'
 import { HowItWorks } from '../components/HowItWorks'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 
 /**
  * HomePage — landing page for Trellis.
@@ -15,7 +15,7 @@ import useToast from '../hooks/useToast'
  */
 export default function HomePage() {
   const navigate = useNavigate()
-  const toast = useToast()
+  const toast = useToastActions()
 
   // Animate the hero heading. The hook handles race conditions and batches
   // character appends to keep re-renders low.

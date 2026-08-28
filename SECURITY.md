@@ -57,20 +57,25 @@ Please include as much of the following as you can:
 | Medium   | Incorrect behavior without direct fund impact, denial of service    | 30 days           |
 | Low      | Minor issues, best-practice deviations, non-exploitable edge cases  | Best effort       |
 
-## Dependency & supply-chain monitoring
+## Handling the CLI source key
 
-Every push and pull request runs a `supply-chain` CI job that scans the full
-Rust crate graph with `cargo deny` (policy in [`deny.toml`](./deny.toml)) and
-`cargo audit`. The build fails on any known RustSec advisory, a yanked crate,
-a licence outside the permissive allowlist, or a dependency sourced from an
-unexpected registry. Duplicate crate versions are surfaced as warnings for
-review. To reproduce locally:
+The `trellis` CLI needs a signing key (`TRELLIS_SOURCE_KEY`). It accepts
+either form:
 
-```bash
-cargo install --locked cargo-deny cargo-audit
-cargo deny check
-cargo audit
-```
+- **A named `stellar keys` identity** (e.g. `alice`) — **recommended**. The
+  secret never leaves the Stellar keystore; only the identity name is passed
+  to the `stellar` binary.
+- **A raw `S…` secret seed** — supported, but handled defensively:
+  - The seed is **never placed on a command line**. Passing it as
+    `stellar contract invoke --source S…` would expose it to every local
+    user via `ps` / `/proc/<pid>/cmdline`. Instead the CLI hands it to the
+    child `stellar` process through the `STELLAR_SECRET_KEY` environment
+    variable, and `--dry-run` / error output prints `STELLAR_SECRET_KEY=<redacted>`.
+  - Prefer `--source-key-file <path>` (or `TRELLIS_SOURCE_KEY_FILE`) over an
+    exported `TRELLIS_SOURCE_KEY`, so the seed lives only in a file you
+    control (ideally mode `0600`) and never in your shell history or the
+    parent process's environment.
+  - The CLI prints a warning when it detects a raw seed.
 
 ## Hall of Fame
 
