@@ -127,6 +127,26 @@ pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
 }
 
 impl Config {
+    /// Load configuration from environment variables with network detection.
+    ///
+    /// Loads network preference from `TRELLIS_NETWORK` env var (defaults to Testnet),
+    /// then resolves configuration using that network as the base. All other config
+    /// values are loaded from env vars with Testnet defaults.
+    pub fn from_env() -> Result<Self, String> {
+        let network_str = std::env::var("TRELLIS_NETWORK")
+            .unwrap_or_else(|_| "testnet".to_string())
+            .to_lowercase();
+
+        let network = match network_str.as_str() {
+            "mainnet" => Network::Mainnet,
+            "futurenet" => Network::Futurenet,
+            "custom" => Network::Custom,
+            _ => Network::Testnet,
+        };
+
+        Self::resolve(network, None, None)
+    }
+
     /// Resolve configuration from a `--network` preset plus optional CLI
     /// overrides for RPC URL / passphrase.
     ///

@@ -391,10 +391,9 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a validation error and exit with code 1.
-fn fail_validation(msg: &str) -> ! {
-    eprintln!("error: {msg}");
-    std::process::exit(1);
+/// Return a validation error.
+fn fail_validation(msg: &str) -> Result<(), String> {
+    Err(format!("error: {msg}"))
 }
 
 /// Print a summary of a state-mutating operation and block on a y/N prompt,
@@ -536,9 +535,7 @@ fn run_submit_work(
     ];
 
     if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        if let Err(e) = validate_proof_uri(&uri) {
-            fail_validation(&e);
-        }
+        validate_proof_uri(&uri)?;
         args.push("--proof-uri".to_string());
         args.push(uri);
     }
@@ -929,13 +926,38 @@ fn format_json_value(value: &serde_json::Value) -> String {
 /// `null` when nothing hex-shaped of the right length is found.
 fn extract_tx_hash(stdout: &str, stderr: &str) -> Option<String> {
     for text in [stdout, stderr] {
-        for token in text.split(|c: char| c.is_whitespace()) {
-            let cleaned = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            if cleaned.len() == 64 && cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(cleaned.to_lowercase());
+        // First try to find a hash with explicit hash-related prefix
+        if let Some(hash) = extract_with_prefix(text) {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Extract a 64-hex-char value that follows hash-related keywords or patterns.
+/// This prevents false positives from arbitrary 64-char hex strings in contract responses.
+fn extract_with_prefix(text: &str) -> Option<String> {
+    // Pattern: look for "tx_hash" or "hash" or similar, followed by : or =,
+    // then capture the next 64-char hex token
+    let hash_patterns = ["tx_hash", "tx_id", "transaction", "hash", "x_hash"];
+
+    for pattern in &hash_patterns {
+        // Case 1: pattern: followed by quoted value
+        for prefix in &[": \"", ":\"", ": ", "="] {
+            if let Some(pos) = text.find(&format!("{pattern}{prefix}")) {
+                let start = pos + pattern.len() + prefix.len();
+                if start < text.len() {
+                    let rest = &text[start..];
+                    for token in rest.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}') {
+                        if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                            return Some(token.to_lowercase());
+                        }
+                    }
+                }
             }
         }
     }
+
     None
 }
 
@@ -1218,15 +1240,49 @@ mod tests {
     // --- extract_tx_hash / extract_events ---
 
     #[test]
-    fn extract_tx_hash_finds_standalone_hex() {
+    fn extract_tx_hash_finds_with_prefix() {
         let hash = "a".repeat(64);
-        let text = format!("submitted tx {hash} ok");
+        let text = format!("tx_hash: {hash}");
         assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_finds_with_quoted_prefix() {
+        let hash = "a".repeat(64);
+        let text = format!(r#"tx_hash: "{hash}""#);
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_ignores_standalone_hex() {
+        let hash = "a".repeat(64);
+        let text = format!("some milestone amount {hash} in response");
+        assert_eq!(extract_tx_hash(&text, ""), None, "should not match arbitrary 64-char hex");
     }
 
     #[test]
     fn extract_tx_hash_none_when_absent() {
         assert_eq!(extract_tx_hash("no hash here", ""), None);
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_contract_response() {
+        let hex_amount = "b".repeat(64);
+        let json = format!(r#"{{"milestone_amount": "{hex_amount}", "status": "pending"}}"#);
+        assert_eq!(extract_tx_hash(&json, ""), None, "should not match hex in JSON fields");
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_random_hex() {
+        let random_hex = "c".repeat(64);
+        assert_eq!(extract_tx_hash(&random_hex, ""), None, "should not match standalone hex");
+    }
+
+    #[test]
+    fn extract_tx_hash_with_hash_equals() {
+        let hash = "d".repeat(64);
+        let text = format!("hash={hash} submitted");
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
     }
 
     #[test]
