@@ -5,6 +5,7 @@ import { sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
 import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
+import { isValidHexAgreementId } from '../lib/agreementId';
 import MilestoneRow from '../components/MilestoneRow';
 import StatsBar from '../components/StatsBar';
 import { AgreementCardSkeleton } from '../components/skeletons';
@@ -28,6 +29,11 @@ export default function StatusPage() {
   const handleQuery = async (id: string) => {
     if (!id.trim()) {
       setError('Please enter an agreement ID');
+      return;
+    }
+
+    if (!isValidHexAgreementId(id.trim())) {
+      setError('Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).');
       return;
     }
 
