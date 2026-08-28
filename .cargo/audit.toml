@@ -1,0 +1,11 @@
+# cargo-audit configuration — mirrors the `[advisories].ignore` list in
+# deny.toml so `cargo audit` and `cargo deny check` agree.
+#
+# Both entries are transitive, build-/dev-only *unmaintained* notices (not
+# vulnerabilities) pulled in through soroban-sdk's host crates, with no
+# patched version available upstream. Revisit whenever soroban-sdk is bumped.
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0388", # `derivative` unmaintained — via soroban-env-host → ark-*
+    "RUSTSEC-2024-0436", # `paste` unmaintained — via soroban-sdk macro crates
+]
