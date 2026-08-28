@@ -425,6 +425,36 @@ fn confirm_action(summary: &str, skip: bool) -> Result<(), String> {
     }
 }
 
+/// Ask for confirmation before proceeding with an action.
+///
+/// Prints a warning message and asks for y/n confirmation. If `yes` is true,
+/// skips the confirmation prompt. Returns Ok(()) if confirmed, Err if denied or
+/// on EOF.
+fn confirm_action(msg: &str, yes: bool) -> Result<(), String> {
+    if yes {
+        return Ok(());
+    }
+
+    eprintln!("⚠️  {msg}");
+    eprint!("Continue? (y/N) ");
+    use std::io::{self, BufRead};
+
+    let stdin = io::stdin();
+    let mut line = String::new();
+    match stdin.lock().read_line(&mut line) {
+        Ok(0) => Err("EOF reached, aborting".to_string()),
+        Ok(_) => {
+            let response = line.trim().to_lowercase();
+            if response == "y" || response == "yes" {
+                Ok(())
+            } else {
+                Err("Aborted by user".to_string())
+            }
+        }
+        Err(e) => Err(format!("Failed to read input: {e}")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Active command implementations
 // ---------------------------------------------------------------------------
