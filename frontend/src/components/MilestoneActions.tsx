@@ -13,6 +13,9 @@ interface MilestoneActionsProps {
   onSuccess?: () => void
 }
 
+const MAX_RETRIES = 3
+const BASE_FEE = 100_000
+
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
   const toast = useToastActions()
@@ -27,7 +30,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   const isUserPayer = wallet.publicKey === agreement.payer
   const isUserPayee = wallet.publicKey === agreement.payee
 
-  const handleLockFunds = async () => {
+  const handleLockFunds = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'lock_funds'
@@ -39,9 +42,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('lock_funds', args, wallet.publicKey)
+      await invoke('lock_funds', args, wallet.publicKey, fee)
       toast.success({ title: 'Funds locked successfully' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -49,7 +53,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleSubmitWork = async () => {
+  const handleSubmitWork = async (fee?: string) => {
     if (!wallet.publicKey || !proofUri.trim()) return
 
     pendingAction.current = 'submit_work'
@@ -62,11 +66,12 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(proofUri, { type: 'string' }),
       ]
 
-      await invoke('submit_work', args, wallet.publicKey)
+      await invoke('submit_work', args, wallet.publicKey, fee)
       toast.success({ title: 'Work submitted successfully' })
       setShowProofInput(false)
       setProofUri('')
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -74,7 +79,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleApproveRelease = async () => {
+  const handleApproveRelease = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'approve_and_release'
@@ -86,9 +91,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('approve_and_release', args, wallet.publicKey)
+      await invoke('approve_and_release', args, wallet.publicKey, fee)
       toast.success({ title: 'Milestone approved and funds released' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -96,7 +102,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleRaiseDispute = async () => {
+  const handleRaiseDispute = async (fee?: string) => {
     if (!wallet.publicKey) return
 
     pendingAction.current = 'raise_dispute'
@@ -108,9 +114,10 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(milestone.id, { type: 'u32' }),
       ]
 
-      await invoke('raise_dispute', args, wallet.publicKey)
+      await invoke('raise_dispute', args, wallet.publicKey, fee)
       toast.success({ title: 'Dispute raised' })
       setShowConfirm(null)
+      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {

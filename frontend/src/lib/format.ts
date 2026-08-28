@@ -20,8 +20,9 @@ export function formatRelativeTime(isoTimestamp: string, now: number = Date.now(
   if (Number.isNaN(timestamp)) return 'unknown'
 
   const elapsed = now - timestamp
+  if (elapsed < 0) return 'just now'
   for (const [unit, ms] of UNITS) {
-    if (Math.abs(elapsed) >= ms) {
+    if (elapsed >= ms) {
       return rtf.format(-Math.round(elapsed / ms), unit)
     }
   }

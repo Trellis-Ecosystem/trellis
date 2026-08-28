@@ -12,7 +12,7 @@ import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 export type InvokeStatus = 'idle' | 'building' | 'signing' | 'submitting' | 'success' | 'error'
 
 interface UseContractInvokeResult {
-  invoke: (method: string, args: xdr.ScVal[], publicKey: string) => Promise<string>
+  invoke: (method: string, args: xdr.ScVal[], publicKey: string, fee?: string) => Promise<string>
   status: InvokeStatus
   txHash: string | null
   error: string | null
