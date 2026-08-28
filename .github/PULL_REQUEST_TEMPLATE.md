@@ -28,5 +28,6 @@ Closes #
 - [ ] Tests pass locally
 - [ ] Documentation updated (README, DEPLOYMENT.md, doc comments) if user-facing
 - [ ] No breaking changes without prior notice in the description above
+- [ ] Test snapshots regenerated and committed (`make test-snapshots-update`) if contract code changed
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidelines. Commit messages should follow [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix(infra): ...`) since PRs are squash-merged.

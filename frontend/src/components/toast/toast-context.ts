@@ -27,8 +27,13 @@ export interface Toast extends ToastOptions {
   type: ToastType
 }
 
-export interface ToastContextValue {
-  toasts: Toast[]
+/**
+ * Stable action methods only — never changes identity between renders.
+ * Components that only call toast actions (show / dismiss / update) should
+ * consume this context so they are NOT re-rendered when the toasts array
+ * changes.
+ */
+export interface ToastActionsContextValue {
   /** Show a toast and return its id, so it can be updated once the tx settles. */
   show: (type: ToastType, options: ToastOptions) => string
   pending: (options: ToastOptions) => string
@@ -41,7 +46,29 @@ export interface ToastContextValue {
   dismissAll: () => void
 }
 
+/**
+ * Full context value — includes the toasts array for the rendering layer.
+ * Kept for backward-compatibility with test stubs and the ToastProvider
+ * render path.
+ */
+export interface ToastContextValue extends ToastActionsContextValue {
+  toasts: Toast[]
+}
+
+/**
+ * Primary context consumed by useToast().  Re-renders subscribers whenever
+ * the toasts array or action references change.
+ *
+ * To avoid re-rendering action-only consumers, use ToastActionsContext.
+ */
 export const ToastContext = createContext<ToastContextValue | null>(null)
+
+/**
+ * Stable actions-only context.  Its value never changes after mount, so
+ * consumers (e.g. page components that only call toast.success / toast.error)
+ * are never re-rendered when a toast is added or dismissed.
+ */
+export const ToastActionsContext = createContext<ToastActionsContextValue | null>(null)
 
 /** Default lifetimes per toast type. Pending toasts stay until updated. */
 export const DEFAULT_DURATIONS: Record<ToastType, number | null> = {

@@ -58,13 +58,13 @@ pub enum TrellisError {
     /// its own disputes.
     ResolverCannotBeParty = 8,
 
-    /// `init` was called with `payer` equal to `payee`. An agreement where
-    /// the same address sends and receives funds is economically nonsensical
-    /// and can interfere with agreement IDs and indexers.
-    PayerEqualsPayee = 9,
+    /// Total milestone amount exceeds i128::MAX during summation.
+    /// A crafted agreement with sufficiently large milestones would cause
+    /// silent integer wraparound, corrupting the total_amount field.
+    TotalAmountOverflow = 9,
 
-    /// `init` was called with a milestone count exceeding `MAX_MILESTONES`.
-    /// Unbounded milestone counts create oversized on-chain vectors that inflate
-    /// gas costs and storage bloat.
-    MilestoneCountExceeded = 10,
+    /// Token address is invalid or not a valid token contract.
+    /// The liveness probe (symbol() call) failed to verify the address
+    /// represents an active, functional token contract.
+    InvalidToken = 10,
 }
