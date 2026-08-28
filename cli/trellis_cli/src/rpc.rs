@@ -14,33 +14,24 @@ pub struct InvokeOutput {
     pub command_debug: String,
 }
 
-/// Client for invoking Trellis contract functions on Soroban.
+/// Resolve which `stellar` executable to invoke.
 ///
-/// ## Current architecture: `stellar` CLI shell-out
-///
-/// Despite the name, this type does **not** currently speak the Soroban
-/// JSON-RPC protocol directly. Every invocation shells out to the external
-/// `stellar contract invoke` command, which handles argument encoding,
-/// transaction assembly, signing (via the Stellar keystore) and submission.
-/// The `stellar` binary must therefore be installed and on `PATH` — this is
-/// checked once at startup (see `validate_environment` in `main.rs`).
-///
-/// Transient RPC failures (timeouts, rate limits, temporary unavailability)
-/// are retried with exponential backoff and jitter. The retry count is
-/// controlled by `STELLAR_RPC_RETRIES` (default 3; `0` disables retries).
-///
-/// ## TODO: native Soroban RPC implementation
-///
-/// A native implementation would drop the `stellar` CLI dependency by talking
-/// to the Soroban JSON-RPC endpoint directly:
-///   1. Parse `args` into typed contract parameters.
-///   2. Load the source key from the Stellar keystore.
-///   3. Build and sign a transaction envelope.
-///   4. Submit via `simulateTransaction` / `sendTransaction`.
-///   5. Poll `getTransaction` for the result.
-///
-/// This requires Stellar SDK integration and key management and is not yet
-/// implemented; see `TODO(native-rpc)` in [`RpcClient::invoke`].
+/// The integration suite (`tests/cli_integration.rs`) sets
+/// `TRELLIS_TEST_MODE=true` together with `STELLAR_MOCK_BIN=<script>` so the
+/// tests exercise the full argv-building / output-rendering path against a
+/// mock script instead of a live network or a real CLI install. In every
+/// other case this is just `"stellar"` from `PATH`.
+pub(crate) fn stellar_bin() -> String {
+    if std::env::var_os("TRELLIS_TEST_MODE").is_some() {
+        if let Some(mock) = std::env::var_os("STELLAR_MOCK_BIN") {
+            return mock.to_string_lossy().into_owned();
+        }
+    }
+    "stellar".to_string()
+}
+
+/// Native Soroban RPC client that talks directly to the Soroban JSON-RPC endpoint.
+/// No external CLI dependency required.
 pub struct RpcClient;
 
 impl RpcClient {
@@ -57,7 +48,7 @@ impl RpcClient {
     /// * `config`  – runtime configuration (RPC URL, keys, contract ID)
     /// * `fn_name` – the Soroban function name (e.g. `"init"`, `"lock_funds"`)
     /// * `args`    – a flat list of `--flag value` pairs **after** the `--`
-    ///               separator, e.g. `["--agreement_id", "0x…", "--payer", "G…"]`
+    ///   separator, e.g. `["--agreement_id", "0x…", "--payer", "G…"]`
     /// * `quiet`   – suppress the retry progress messages normally printed to stderr
     pub fn invoke(config: &Config, fn_name: &str, args: &[String], quiet: bool) -> InvokeOutput {
         // TODO(native-rpc): replace this shell-out with direct Soroban
@@ -79,31 +70,51 @@ impl RpcClient {
             "invoke".to_string(),
             "--id".to_string(),
             config.contract_id.clone(),
-            "--source".to_string(),
-            config.source_key.clone(),
+        ];
+
+        // #240: a raw `S…` secret seed must never land in argv — anyone on the
+        // host can read it via `ps`. Pass it to the child through the
+        // `STELLAR_SECRET_KEY` environment variable instead (see
+        // `invoke_once`); only non-secret identity names go on the command
+        // line. Named `stellar keys` identities are still passed via
+        // `--source` exactly as before.
+        if !crate::config::is_secret_seed(&config.source_key) {
+            cmd_args.push("--source".to_string());
+            cmd_args.push(config.source_key.clone());
+        }
+
+        cmd_args.extend_from_slice(&[
             "--rpc-url".to_string(),
             config.rpc_url.clone(),
             "--network-passphrase".to_string(),
             config.network_passphrase.clone(),
             "--".to_string(),
             fn_name.to_string(),
-        ];
+        ]);
         cmd_args.extend_from_slice(args);
 
         // Quote any argument containing whitespace so the printed command can
         // be copy-pasted straight into a shell.
-        let command_debug = format!(
-            "stellar {}",
-            cmd_args
-                .iter()
-                .map(|a| if a.contains(' ') {
+        let quoted = cmd_args
+            .iter()
+            .map(|a| {
+                if a.contains(' ') {
                     format!("'{a}'")
                 } else {
                     a.clone()
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Never print the seed itself — show that it is supplied via the
+        // environment so `--dry-run` / failure output stays copy-pasteable
+        // without leaking the key.
+        let command_debug = if crate::config::is_secret_seed(&config.source_key) {
+            format!("STELLAR_SECRET_KEY=<redacted> stellar {quoted}")
+        } else {
+            format!("stellar {quoted}")
+        };
 
         (cmd_args, command_debug)
     }
@@ -121,7 +132,12 @@ impl RpcClient {
     /// concurrent processes do not thunder-herd the RPC endpoint together.
     ///
     /// Set `STELLAR_RPC_RETRIES=0` to disable retries entirely.
-    fn invoke_with_retry(config: &Config, fn_name: &str, args: &[String], quiet: bool) -> InvokeOutput {
+    fn invoke_with_retry(
+        config: &Config,
+        fn_name: &str,
+        args: &[String],
+        quiet: bool,
+    ) -> InvokeOutput {
         let max_retries: u32 = std::env::var("STELLAR_RPC_RETRIES")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -162,7 +178,10 @@ impl RpcClient {
                 eprintln!(
                     "RPC attempt {attempt}/{max_retries} failed (transient error), retrying in {delay_ms}ms…"
                 );
-                eprintln!("  {}", out.stderr.lines().next().unwrap_or("(no error message)"));
+                eprintln!(
+                    "  {}",
+                    out.stderr.lines().next().unwrap_or("(no error message)")
+                );
             }
 
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
@@ -175,7 +194,16 @@ impl RpcClient {
 
         let (cmd_args, command_debug) = Self::build_cmd_args(config, fn_name, args);
 
-        let output = Command::new("stellar").args(&cmd_args).output();
+        let mut command = Command::new(stellar_bin());
+        command.args(&cmd_args);
+
+        // #240: hand a raw secret seed to the child via its environment rather
+        // than argv so it cannot be read from `ps` / `/proc/<pid>/cmdline`.
+        if crate::config::is_secret_seed(&config.source_key) {
+            command.env("STELLAR_SECRET_KEY", &config.source_key);
+        }
+
+        let output = command.output();
 
         match output {
             Ok(out) => InvokeOutput {
@@ -272,12 +300,16 @@ mod tests {
 
     #[test]
     fn transient_detects_connection_refused() {
-        assert!(is_transient_error("Os error: connection refused (os error 111)"));
+        assert!(is_transient_error(
+            "Os error: connection refused (os error 111)"
+        ));
     }
 
     #[test]
     fn transient_detects_rate_limit_http_codes() {
-        assert!(is_transient_error("server returned status 429 Too Many Requests"));
+        assert!(is_transient_error(
+            "server returned status 429 Too Many Requests"
+        ));
         assert!(is_transient_error("HTTP 503 Service Unavailable"));
         assert!(is_transient_error("upstream error: 502 Bad Gateway"));
         assert!(is_transient_error("gateway timeout: 504"));
@@ -345,5 +377,59 @@ mod tests {
             .unwrap_or(3);
         assert_eq!(retries, 3);
         std::env::remove_var("STELLAR_RPC_RETRIES");
+    }
+
+    // --- #240: secret seed never reaches argv / printed output ---
+
+    fn cfg_with_source(source_key: &str) -> Config {
+        Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: "CAABC123".to_string(),
+            source_key: source_key.to_string(),
+        }
+    }
+
+    fn a_seed() -> String {
+        // 56 chars, `S` + base32 — matches `config::is_secret_seed`.
+        format!("S{}", "A".repeat(55))
+    }
+
+    #[test]
+    fn build_cmd_args_omits_secret_seed_from_argv() {
+        let seed = a_seed();
+        let (argv, debug) = RpcClient::build_cmd_args(&cfg_with_source(&seed), "init", &[]);
+        assert!(
+            !argv.iter().any(|a| a == &seed),
+            "secret seed must not appear in argv: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--source"),
+            "--source flag must be dropped for a raw seed"
+        );
+        assert!(!debug.contains(&seed), "seed must not be printed: {debug}");
+        assert!(debug.starts_with("STELLAR_SECRET_KEY=<redacted> stellar "));
+    }
+
+    #[test]
+    fn build_cmd_args_keeps_source_for_identity_name() {
+        let (argv, debug) = RpcClient::build_cmd_args(&cfg_with_source("alice"), "init", &[]);
+        let src = argv
+            .iter()
+            .position(|a| a == "--source")
+            .expect("--source present");
+        assert_eq!(argv[src + 1], "alice");
+        assert!(debug.starts_with("stellar contract invoke"));
+    }
+
+    #[test]
+    fn preview_never_prints_a_secret_seed() {
+        let seed = a_seed();
+        let preview = RpcClient::preview(&cfg_with_source(&seed), "init", &[]);
+        assert!(
+            !preview.contains(&seed),
+            "dry-run leaked the seed: {preview}"
+        );
+        assert!(preview.contains("<redacted>"));
     }
 }

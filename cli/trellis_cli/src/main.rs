@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod rpc;
+mod sanitizer;
 mod utils;
 
 use clap::{CommandFactory, Parser};
@@ -59,6 +60,13 @@ struct Cli {
     #[arg(long, global = true)]
     network_passphrase: Option<String>,
 
+    /// Read the source key from this file instead of the `TRELLIS_SOURCE_KEY`
+    /// environment variable. Preferred for raw `S…` secret seeds: file
+    /// contents never appear in `ps` / `/proc` the way an argv or exported
+    /// env var can (#240). Overrides `TRELLIS_SOURCE_KEY_FILE`.
+    #[arg(long, global = true, value_name = "PATH")]
+    source_key_file: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 
@@ -97,10 +105,9 @@ struct Cli {
 fn validate_environment() -> Result<(), String> {
     use std::process::Command;
 
-    match Command::new("stellar").arg("--version").output() {
+    match Command::new(rpc::stellar_bin()).arg("--version").output() {
         Ok(_) => Ok(()),
-        Err(_) => Err(
-            "Error: `stellar` CLI not found in PATH.\n\
+        Err(_) => Err("Error: `stellar` CLI not found in PATH.\n\
              \n\
              Install it with:\n\
              \n\
@@ -110,8 +117,7 @@ fn validate_environment() -> Result<(), String> {
              \thttps://developers.stellar.org/docs/tools/cli/install-cli\n\
              \n\
              After installing, run `stellar --version` to confirm the installation."
-                .to_string(),
-        ),
+            .to_string()),
     }
 }
 
@@ -146,8 +152,12 @@ fn main() {
         process::exit(1);
     }
 
-    // ── #80: Resolve config from the --network preset + CLI/env overrides ──
-    let config = match config::Config::resolve(cli.network, cli.rpc_url, cli.network_passphrase) {
+    // ── #80: Resolve config from --network preset + CLI / env overrides ───
+    let config = match config::Config::resolve(
+        cli.network,
+        cli.rpc_url.clone(),
+        cli.network_passphrase.clone(),
+    ) {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("{msg}");
@@ -155,22 +165,16 @@ fn main() {
         }
     };
 
-    // ── #246: Fail fast on missing required configuration ─────────────────
-    // Config::resolve() substitutes `UNSET_*` placeholders when
-    // TRELLIS_CONTRACT_ID / TRELLIS_SOURCE_KEY are absent. Without this check
-    // those placeholders would only surface as a cryptic RPC failure deep in
-    // the invoke pipeline. `completion` is handled above and never reaches here.
-    if let Err(missing) = config.validate() {
+    // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
+    // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
+    if let Err(errors) = config.validate() {
+        eprintln!("Error: invalid configuration:");
+        for e in &errors {
+            eprintln!("  - {e}");
+        }
         eprintln!(
-            "Error: missing required configuration: {names}\n\n\
-             Set the variable(s) below in a `.env` file (see .env.example) or your environment:\n\
-             {exports}",
-            names = missing.join(", "),
-            exports = missing
-                .iter()
-                .map(|v| format!("  export {v}=<value>"))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY) or pass the matching CLI flags."
         );
         process::exit(1);
     }

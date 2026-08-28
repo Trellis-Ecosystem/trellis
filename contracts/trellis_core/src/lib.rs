@@ -69,6 +69,8 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
+        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+
         let total_amount = validate_milestones(&milestones)?;
 
         let agreement = Agreement {
@@ -115,18 +117,19 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Transfer tokens from payer → this contract.
-        token::Client::new(&env, &agreement.token).transfer(
-            &agreement.payer,
-            &env.current_contract_address(),
-            &milestone.amount,
-        );
-
-        // Mutate the milestone value and persist it back to the agreement.
+        // Mutate the milestone value and persist it back to the agreement
+        // before any external calls (checks-effects-interactions pattern).
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Funded;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        // Transfer tokens from payer → this contract.
+        token::Client::new(&env, &agreement.token).transfer(
+            &agreement.payer,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         events::funds_locked(&env, agreement_id, milestone_id, amount);
 
@@ -199,17 +202,17 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Transfer tokens from this contract → payee.
-        token::Client::new(&env, &agreement.token).transfer(
-            &env.current_contract_address(),
-            &agreement.payee,
-            &milestone.amount,
-        );
-
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Completed;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        // Transfer tokens from this contract → payee after state change.
+        token::Client::new(&env, &agreement.token).transfer(
+            &env.current_contract_address(),
+            &agreement.payee,
+            &amount,
+        );
 
         events::funds_released(&env, agreement_id, milestone_id, amount);
 
@@ -306,26 +309,31 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
+        let amount = milestone.amount;
         if refund_to_payer {
-            // Rule: payer wins — return locked funds to payer.
-            token::Client::new(&env, &agreement.token).transfer(
-                &env.current_contract_address(),
-                &agreement.payer,
-                &milestone.amount,
-            );
             milestone.status = EscrowStatus::Refunded;
         } else {
-            // Rule: payee wins — release locked funds to payee.
-            token::Client::new(&env, &agreement.token).transfer(
-                &env.current_contract_address(),
-                &agreement.payee,
-                &milestone.amount,
-            );
             milestone.status = EscrowStatus::Completed;
         }
 
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        if refund_to_payer {
+            // Rule: payer wins — return locked funds to payer.
+            token::Client::new(&env, &agreement.token).transfer(
+                &env.current_contract_address(),
+                &agreement.payer,
+                &amount,
+            );
+        } else {
+            // Rule: payee wins — release locked funds to payee.
+            token::Client::new(&env, &agreement.token).transfer(
+                &env.current_contract_address(),
+                &agreement.payee,
+                &amount,
+            );
+        }
 
         events::milestone_resolved(&env, agreement_id, milestone_id, refund_to_payer);
 
@@ -452,8 +460,6 @@ impl TrellisContract {
             }
 
             let amount = milestone.amount;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &amount);
-
             milestone.status = EscrowStatus::Funded;
             agreement.milestones.set(milestone_id, milestone);
 
@@ -462,6 +468,14 @@ impl TrellisContract {
         }
 
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        for milestone_id in milestone_ids.iter() {
+            let milestone = agreement
+                .milestones
+                .get(milestone_id)
+                .ok_or(TrellisError::InvalidMilestone)?;
+            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+        }
 
         Ok(funded)
     }
@@ -523,13 +537,15 @@ impl TrellisContract {
 /// # Errors
 /// Returns [`TrellisError::InvalidMilestone`] on the first milestone whose
 /// `amount` is zero or negative.
+/// Returns [`TrellisError::TotalAmountOverflow`] if the sum of milestone
+/// amounts exceeds i128::MAX.
 fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError> {
     let mut total: i128 = 0;
     for m in milestones.iter() {
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total += m.amount;
+        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }

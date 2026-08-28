@@ -61,9 +61,9 @@ export function HowItWorks() {
           <li key={step.id} className="flex gap-4">
             <div
               aria-hidden="true"
-              className={`flex-shrink-0 w-8 h-8 bg-cyan-400 rounded-full flex items-center justify-center text-navy-900${
-                typeof step.icon === 'string' ? ' font-bold text-sm' : ''
-              }`}
+              className={`flex-shrink-0 w-8 h-8 bg-cyan-400 rounded-full flex items-center justify-center text-navy-900 ${
+                typeof step.icon === 'string' ? 'font-bold text-sm' : ''
+              }`.trimEnd()}
             >
               {step.icon}
             </div>
