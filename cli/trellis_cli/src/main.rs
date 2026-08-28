@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod rpc;
+mod sanitizer;
 mod utils;
 
 use clap::{CommandFactory, Parser};
