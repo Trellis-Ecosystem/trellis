@@ -10,6 +10,7 @@ interface TransactionStatusProps {
   error: string | null
   onRetry: () => void
   method: string
+  retrying?: boolean
 }
 
 const PHASE_LABELS: Record<InvokeStatus, string> = {
@@ -23,7 +24,7 @@ const PHASE_LABELS: Record<InvokeStatus, string> = {
 
 const PHASE_ORDER: InvokeStatus[] = ['building', 'signing', 'submitting']
 
-export default function TransactionStatus({ status, txHash, error, onRetry, method }: TransactionStatusProps) {
+export default function TransactionStatus({ status, txHash, error, onRetry, method, retrying }: TransactionStatusProps) {
   const [timeoutWarning, setTimeoutWarning] = useState(false)
   const startRef = useRef<number | null>(null)
 
@@ -67,9 +68,10 @@ export default function TransactionStatus({ status, txHash, error, onRetry, meth
         {txHash && <ExplorerLink type="tx" value={txHash} label="View failed transaction" />}
         <button
           onClick={onRetry}
-          className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded transition-colors"
+          disabled={retrying}
+          className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Retry with adjusted gas
+          {retrying ? 'Retrying…' : 'Retry with adjusted gas'}
         </button>
       </div>
     )
