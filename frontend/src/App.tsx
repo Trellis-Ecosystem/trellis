@@ -9,7 +9,7 @@ import { CONTRACT_ID } from './lib/config'
 import { explorerBaseUrl, networkLabel } from './lib/explorer'
 import HomePage from './pages/HomePage'
 import StatusPage from './pages/StatusPage'
-import CreatePage from './pages/CreatePage'
+import CreateAgreementPage from './pages/CreateAgreementPage'
 import AgreementHistoryPage from './pages/AgreementHistoryPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -27,7 +27,7 @@ function App() {
                 <Route path="/" element={<HomePage />} />
                 <Route path="/status" element={<StatusPage />} />
                 <Route path="/agreement/:id" element={<StatusPage />} />
-                <Route path="/create" element={<CreatePage />} />
+                <Route path="/create" element={<CreateAgreementPage />} />
                 <Route path="/history" element={<AgreementHistoryPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
