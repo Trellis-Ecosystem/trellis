@@ -5,6 +5,7 @@ mod utils;
 
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
+use config::Network;
 use std::process;
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,13 @@ struct Cli {
     #[arg(long, global = true)]
     network_passphrase: Option<String>,
 
+    /// Read the source key from this file instead of the `TRELLIS_SOURCE_KEY`
+    /// environment variable. Preferred for raw `S…` secret seeds: file
+    /// contents never appear in `ps` / `/proc` the way an argv or exported
+    /// env var can (#240). Overrides `TRELLIS_SOURCE_KEY_FILE`.
+    #[arg(long, global = true, value_name = "PATH")]
+    source_key_file: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 
@@ -95,10 +103,9 @@ struct Cli {
 fn validate_environment() -> Result<(), String> {
     use std::process::Command;
 
-    match Command::new("stellar").arg("--version").output() {
+    match Command::new(rpc::stellar_bin()).arg("--version").output() {
         Ok(_) => Ok(()),
-        Err(_) => Err(
-            "Error: `stellar` CLI not found in PATH.\n\
+        Err(_) => Err("Error: `stellar` CLI not found in PATH.\n\
              \n\
              Install it with:\n\
              \n\
@@ -108,8 +115,7 @@ fn validate_environment() -> Result<(), String> {
              \thttps://developers.stellar.org/docs/tools/cli/install-cli\n\
              \n\
              After installing, run `stellar --version` to confirm the installation."
-                .to_string(),
-        ),
+            .to_string()),
     }
 }
 
@@ -144,7 +150,39 @@ fn main() {
         process::exit(1);
     }
 
-    let config = config::Config::from_env();
+    // ── Resolve configuration: CLI flags > env vars > network preset. ─────
+    let config = match config::Config::resolve(
+        cli.network,
+        cli.rpc_url.clone(),
+        cli.network_passphrase.clone(),
+        cli.source_key_file.clone(),
+    ) {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    };
+
+    // ── Fail fast with a clear message if a required var is still unset. ──
+    if let Err(missing) = config.validate() {
+        eprintln!(
+            "Error: missing required configuration: {}\n\
+             Set it as an environment variable (or in a .env file); for the \
+             source key prefer --source-key-file for raw S… secret seeds.",
+            missing.join(", ")
+        );
+        process::exit(1);
+    }
+
+    // ── #240: warn when a raw secret seed is used directly. ──────────────
+    if config::is_secret_seed(&config.source_key) && !cli.quiet {
+        eprintln!(
+            "warning: TRELLIS_SOURCE_KEY looks like a raw secret seed. Prefer a \
+             named `stellar keys` identity, or --source-key-file, so the key is \
+             never exposed in the process list."
+        );
+    }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

@@ -225,41 +225,55 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             token,
             resolver,
             milestones,
+            yes,
             opts,
         ),
 
         Commands::LockFunds {
             agreement_id,
             milestone_id,
-        } => run_lock_funds(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_lock_funds(config, agreement_id, milestone_id, yes, opts),
 
         Commands::SubmitWork {
             agreement_id,
             milestone_id,
             proof_uri,
-        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, opts),
+            yes,
+        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, yes, opts),
 
         Commands::ApproveRelease {
             agreement_id,
             milestone_id,
-        } => run_approve_release(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_approve_release(config, agreement_id, milestone_id, yes, opts),
 
         Commands::RaiseDispute {
             agreement_id,
             milestone_id,
             caller,
-        } => run_raise_dispute(config, agreement_id, milestone_id, caller, opts),
+            yes,
+        } => run_raise_dispute(config, agreement_id, milestone_id, caller, yes, opts),
 
         Commands::ResolveDispute {
             agreement_id,
             milestone_id,
             refund_to_payer,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, opts),
+            yes,
+        } => run_resolve_dispute(
+            config,
+            agreement_id,
+            milestone_id,
+            refund_to_payer,
+            yes,
+            opts,
+        ),
 
         Commands::CancelMilestone {
             agreement_id,
             milestone_id,
-        } => run_cancel_milestone(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_cancel_milestone(config, agreement_id, milestone_id, yes, opts),
 
         Commands::Status { agreement_id } => run_status(config, agreement_id, opts),
 
@@ -321,6 +335,37 @@ fn fail_validation(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Interactive `y/N` confirmation gate for state-mutating commands (#78).
+///
+/// Prints `summary`, then blocks on a `Continue? [y/N]` prompt. Returns
+/// `Ok(())` only on an explicit `y`/`yes`; any other answer (including EOF)
+/// is an `Err` that aborts the command. `skip` is the `-y/--yes` flag —
+/// when set, the prompt is bypassed entirely so the command stays usable
+/// from scripts.
+fn confirm_action(summary: &str, skip: bool) -> Result<(), String> {
+    if skip {
+        return Ok(());
+    }
+
+    use std::io::Write;
+
+    println!("{summary}");
+    print!("Continue? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to write prompt: {e}"))?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read confirmation: {e}"))?;
+
+    match input.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err("Aborted: operation not confirmed.".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Active command implementations
 // ---------------------------------------------------------------------------
@@ -334,6 +379,7 @@ fn fail_validation(msg: &str) -> ! {
 ///   --agreement-id <hex> --payer <G> --payee <G>
 ///   --token <C> --milestones <JSON> --dispute-resolver <G>
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn run_init(
     config: &Config,
     agreement_id: String,
@@ -342,8 +388,11 @@ fn run_init(
     token: String,
     resolver: String,
     milestones_csv: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
@@ -386,8 +435,16 @@ fn run_lock_funds(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
+    confirm_action(
+        &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -415,8 +472,11 @@ fn run_submit_work(
     agreement_id: String,
     milestone_id: u32,
     proof_uri: Option<String>,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
         yes,
@@ -451,8 +511,18 @@ fn run_approve_release(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
+    confirm_action(
+        &format!(
+            "This will approve work and release funds for milestone {milestone_id} of agreement {agreement_id}."
+        ),
+        yes,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -479,8 +549,18 @@ fn run_raise_dispute(
     agreement_id: String,
     milestone_id: u32,
     caller: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
+    confirm_action(
+        &format!(
+            "This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."
+        ),
+        yes,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -505,8 +585,11 @@ fn run_resolve_dispute(
     agreement_id: String,
     milestone_id: u32,
     refund_to_payer: bool,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let outcome = if refund_to_payer {
         "refund locked funds to the payer"
     } else {
@@ -542,8 +625,16 @@ fn run_cancel_milestone(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
+    confirm_action(
+        &format!("This will cancel unfunded milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -565,6 +656,8 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
     execute(config, "get_agreement", &args, opts)
@@ -586,6 +679,8 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
+    validate_agreement_id(&agreement_id)?;
+
     let args = vec![
         "--agreement-id".to_string(),
         format!("\"{}\"", agreement_id),
@@ -652,7 +747,12 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
 /// This is the single entry point every command handler funnels through, so
 /// `--dry-run`, `--json`, `--human-readable`, and `--quiet` behave
 /// consistently across all commands (#74, #76, #77).
-fn execute(config: &Config, fn_name: &str, args: &[String], opts: &OutputOpts) -> Result<(), String> {
+fn execute(
+    config: &Config,
+    fn_name: &str,
+    args: &[String],
+    opts: &OutputOpts,
+) -> Result<(), String> {
     if opts.dry_run {
         println!("{}", RpcClient::preview(config, fn_name, args));
         return Ok(());
@@ -946,7 +1046,9 @@ mod tests {
 
     #[test]
     fn proof_uri_valid_ipfs() {
-        assert!(validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok());
+        assert!(
+            validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok()
+        );
     }
 
     #[test]
@@ -1002,5 +1104,150 @@ mod tests {
         let stderr = "info: starting\nEvent: transfer occurred\ndone";
         let events = extract_events(stderr);
         assert!(matches!(events, serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- output rendering functions (#241) --------------------------------
+    //
+    // render_raw / render_json / render_human all print to stdout and signal
+    // success/failure through their `Result`. These tests pin the return
+    // contract (what `main` relies on to set the exit code and decide whether
+    // to print a message) and the structure of the JSON envelope.
+
+    fn ok_output(stdout: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            success: true,
+            command_debug: "stellar contract invoke ...".to_string(),
+        }
+    }
+
+    fn fail_output(stdout: &str, stderr: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            success: false,
+            command_debug: "stellar contract invoke --id CAABC -- boom".to_string(),
+        }
+    }
+
+    // --- json_envelope ---
+
+    #[test]
+    fn json_envelope_success_parses_json_stdout() {
+        let env = json_envelope(&ok_output(r#"{"balance":"100"}"#));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"]["balance"], "100");
+        assert_eq!(env["error"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_envelope_success_wraps_non_json_stdout_as_string() {
+        let env = json_envelope(&ok_output("plain text result"));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"], "plain text result");
+    }
+
+    #[test]
+    fn json_envelope_error_uses_stderr_as_message() {
+        let env = json_envelope(&fail_output("", "error: contract not found"));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["result"], serde_json::Value::Null);
+        assert_eq!(env["error"], "error: contract not found");
+    }
+
+    #[test]
+    fn json_envelope_error_falls_back_to_stdout_when_stderr_empty() {
+        let env = json_envelope(&fail_output("stdout failure detail", ""));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["error"], "stdout failure detail");
+    }
+
+    #[test]
+    fn json_envelope_success_extracts_tx_hash_and_events() {
+        let hash = "a".repeat(64);
+        let mut out = ok_output("{}");
+        out.stderr = format!("submitted {hash}\nevent: Transfer");
+        let env = json_envelope(&out);
+        assert_eq!(env["tx_hash"], hash);
+        assert!(matches!(env["events"], serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- render_raw ---
+
+    #[test]
+    fn render_raw_ok_on_success() {
+        assert!(render_raw(&ok_output("done")).is_ok());
+    }
+
+    #[test]
+    fn render_raw_err_includes_command_and_streams_on_failure() {
+        let err = render_raw(&fail_output("some stdout", "some stderr")).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+        assert!(err.contains("stellar contract invoke --id CAABC -- boom"));
+        assert!(err.contains("some stdout"));
+        assert!(err.contains("some stderr"));
+    }
+
+    // --- render_json ---
+
+    #[test]
+    fn render_json_ok_on_success() {
+        assert!(render_json(&ok_output("{}")).is_ok());
+    }
+
+    #[test]
+    fn render_json_returns_empty_err_on_failure() {
+        // Empty message => main() exits non-zero without printing again
+        // (the detail is already in the JSON envelope on stdout). This is
+        // what "--quiet suppresses non-error output" relies on.
+        let err = render_json(&fail_output("", "boom")).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    // --- render_human ---
+
+    #[test]
+    fn render_human_ok_on_success() {
+        assert!(render_human(&ok_output(r#"{"k":"v"}"#)).is_ok());
+    }
+
+    #[test]
+    fn render_human_returns_empty_err_on_failure() {
+        assert_eq!(render_human(&fail_output("", "boom")).unwrap_err(), "");
+    }
+
+    #[test]
+    fn render_human_handles_non_json_stdout_without_error() {
+        assert!(render_human(&ok_output("not json at all")).is_ok());
+    }
+
+    // --- render_output dispatch ---
+
+    fn opts(format: OutputFormat) -> OutputOpts {
+        OutputOpts {
+            format,
+            quiet: false,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn render_output_raw_failure_bubbles_detailed_message() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Raw)).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+    }
+
+    #[test]
+    fn render_output_json_failure_is_silent_err() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Json)).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn render_output_all_formats_ok_on_success() {
+        for f in [OutputFormat::Raw, OutputFormat::Json, OutputFormat::Human] {
+            assert!(render_output(&ok_output("{}"), &opts(f)).is_ok(), "{f:?}");
+        }
     }
 }
