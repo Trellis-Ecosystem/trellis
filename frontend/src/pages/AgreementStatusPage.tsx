@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { addToHistory } from '../lib/history'
+import { isValidHexAgreementId } from '../lib/agreementId'
 import { useAgreement } from '../hooks/useAgreement'
 import AgreementDetail from '../components/AgreementDetail'
 import EventFeed from '../components/EventFeed'
@@ -9,6 +10,7 @@ function AgreementStatusPage() {
   const { id } = useParams<{ id: string }>()
   const [searchId, setSearchId] = useState(id || '')
   const [queriedId, setQueriedId] = useState<string | null>(id || null)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
   const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId)
 
@@ -19,9 +21,17 @@ function AgreementStatusPage() {
   }, [queriedId])
 
   const handleSearch = () => {
-    if (searchId.trim()) {
-      setQueriedId(searchId.trim())
+    const trimmed = searchId.trim()
+    if (!trimmed) {
+      setValidationError('Please enter an agreement ID')
+      return
     }
+    if (!isValidHexAgreementId(trimmed)) {
+      setValidationError('Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).')
+      return
+    }
+    setValidationError(null)
+    setQueriedId(trimmed)
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -42,7 +52,7 @@ function AgreementStatusPage() {
         <input
           type="text"
           value={searchId}
-          onChange={(e) => setSearchId(e.target.value)}
+          onChange={(e) => { setSearchId(e.target.value); setValidationError(null) }}
           onKeyPress={handleKeyPress}
           placeholder="Enter agreement ID (hex)"
           className="flex-1 px-4 py-3 bg-navy-800 border border-navy-700 text-white rounded-lg focus:outline-none focus:border-cyan-400"
@@ -55,6 +65,9 @@ function AgreementStatusPage() {
           Search
         </button>
       </div>
+      {validationError && (
+        <p className="mt-2 text-red-400 text-sm">{validationError}</p>
+      )}
 
       {/* Loading State */}
       {isLoading && (
