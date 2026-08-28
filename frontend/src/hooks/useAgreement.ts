@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk'
 import { useContractRead } from './useContractRead'
+import { hexToBytes } from '../lib/format'
 import type { Agreement } from '../lib/soroban'
 
 const MAX_RETRIES = 3
@@ -27,7 +28,7 @@ export function useAgreement(agreementId: string | null) {
     if (!agreementId) return []
 
     // Convert agreement ID (hex string) to ScVal bytes
-    const idBytes = Buffer.from(agreementId, 'hex')
+    const idBytes = hexToBytes(agreementId)
     return [nativeToScVal(idBytes, { type: 'bytes' })]
   }, [agreementId])
 

@@ -4,6 +4,7 @@ import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
 import { useToastActions } from '../hooks/useToast'
 import TransactionStatus from './TransactionStatus'
+import { hexToBytes } from '../lib/format'
 import type { Agreement, Milestone } from '../lib/soroban'
 
 interface MilestoneActionsProps {
@@ -31,7 +32,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'lock_funds'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -53,7 +54,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'submit_work'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -78,7 +79,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'approve_and_release'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -100,7 +101,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'raise_dispute'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),

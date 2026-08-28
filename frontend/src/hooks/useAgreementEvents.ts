@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
+import { hexToBytes } from '../lib/format'
 
 export interface AgreementEvent {
   type: string
