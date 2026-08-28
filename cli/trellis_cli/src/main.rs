@@ -1,10 +1,12 @@
 mod commands;
 mod config;
 mod rpc;
+mod sanitizer;
 mod utils;
 
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
+use config::Network;
 use std::process;
 
 // ---------------------------------------------------------------------------
@@ -144,7 +146,32 @@ fn main() {
         process::exit(1);
     }
 
-    let config = config::Config::from_env();
+    // ── #80: Resolve config from --network preset + CLI / env overrides ───
+    let config = match config::Config::resolve(
+        cli.network,
+        cli.rpc_url.clone(),
+        cli.network_passphrase.clone(),
+    ) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    };
+
+    // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
+    // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
+    if let Err(errors) = config.validate() {
+        eprintln!("Error: invalid configuration:");
+        for e in &errors {
+            eprintln!("  - {e}");
+        }
+        eprintln!(
+            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY) or pass the matching CLI flags."
+        );
+        process::exit(1);
+    }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

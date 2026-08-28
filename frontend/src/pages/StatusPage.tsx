@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Agreement, SorobanEvent } from '../lib/soroban';
 import { sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
 import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
-import { ExplorerLink } from '../components/ExplorerLink';
+import { isValidHexAgreementId } from '../lib/agreementId';
 import MilestoneRow from '../components/MilestoneRow';
 import StatsBar from '../components/StatsBar';
 import { AgreementCardSkeleton } from '../components/skeletons';
@@ -26,9 +26,14 @@ export default function StatusPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const handleQuery = async (id: string) => {
+  const handleQuery = useCallback(async (id: string) => {
     if (!id.trim()) {
       setError('Please enter an agreement ID');
+      return;
+    }
+
+    if (!isValidHexAgreementId(id.trim())) {
+      setError('Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).');
       return;
     }
 
@@ -55,7 +60,7 @@ export default function StatusPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [navigate]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,11 +68,11 @@ export default function StatusPage() {
   };
 
   useEffect(() => {
-    if (initialId && !agreement) {
+    if (initialId) {
       setAgreementId(initialId);
       handleQuery(initialId);
     }
-  }, []);
+  }, [initialId, handleQuery]);
 
   // Record successful agreement views in local history
   useEffect(() => {
@@ -135,7 +140,7 @@ export default function StatusPage() {
                 </div>
                 <div>
                   <p className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm mb-1">Agreement ID</p>
-                  <ExplorerLink type="contract" value={agreement.agreement_id} full />
+                  <ExplorerLink type="agreement" value={agreement.agreement_id} full />
                 </div>
                 <div>
                   <p className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm mb-1">Milestones</p>

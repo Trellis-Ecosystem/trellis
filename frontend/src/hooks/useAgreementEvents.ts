@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
 import { hexToBytes } from '../lib/format'
@@ -14,114 +14,203 @@ export interface AgreementEvent {
   caller?: string
 }
 
-const POLL_INTERVAL_MS = 10000 // Poll every 10 seconds
+const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
+const MAX_POLL_INTERVAL_MS = 60_000  // Cap backoff at 60 seconds
+const FETCH_TIMEOUT_MS = 30_000     // Per-request timeout: 30 seconds
 
 /**
  * Fetch and parse contract events for a specific agreement.
- * Polls for new events periodically to show live timeline.
+ *
+ * Uses a recursive setTimeout chain so the next poll only starts after the
+ * current fetch completes, preventing concurrent request stacking.  Applies
+ * linear backoff (capped at MAX_POLL_INTERVAL_MS) when a fetch fails so a
+ * flaky network doesn't hammer the RPC endpoint.
  */
 export function useAgreementEvents(agreementId: string | null) {
   const [events, setEvents] = useState<AgreementEvent[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchEvents = useCallback(async (signal: AbortSignal) => {
-    if (!agreementId) return
+  // Tracks consecutive failure count for backoff calculation.
+  const failureCount = useRef(0)
+  // Holds the scheduled timer handle so we can cancel it on unmount.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Signals that the component has unmounted — used to suppress state updates.
+  const unmountedRef = useRef(false)
 
-    try {
+  const fetchEvents = useCallback(
+    async (signal: AbortSignal): Promise<boolean> => {
+      if (!agreementId) return true // treat no-id as "success" (no-op)
+
       setIsLoading(true)
       setError(null)
 
-      // Encode agreement_id topic filter
-      const idBytes = hexToBytes(agreementId)
-      // xdr.ScVal.scvBytes expects a Buffer; casting the Uint8Array is safe
-      // because they share the same underlying ArrayBuffer layout and the
-      // Stellar SDK only uses the byte data at runtime.
-      const idScVal = xdr.ScVal.scvBytes(idBytes as unknown as Buffer)
-      const idTopic = idScVal.toXDR('base64')
+      // Combine the caller's signal with a per-request timeout signal.
+      const timeoutId = setTimeout(() => {
+        /* The fetch API will reject once the timeout AbortController fires. */
+      }, FETCH_TIMEOUT_MS)
+      const timeoutController = new AbortController()
+      const timeoutHandle = setTimeout(
+        () => timeoutController.abort(),
+        FETCH_TIMEOUT_MS,
+      )
 
-      const body = {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getEvents',
-        params: {
-          startLedger: 1,
-          filters: [
-            {
-              type: 'contract',
-              contractIds: [CONTRACT_ID],
-              topics: [[idTopic]],
-            },
-          ],
-          pagination: { limit: 100 },
-        },
-      }
+      // Merge two abort signals: unmount signal + timeout signal.
+      const mergedSignal = (() => {
+        const ac = new AbortController()
+        signal.addEventListener('abort', () => ac.abort(), { once: true })
+        timeoutController.signal.addEventListener('abort', () => ac.abort(), {
+          once: true,
+        })
+        return ac.signal
+      })()
 
-      const response = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal,
-      })
+      clearTimeout(timeoutId)
 
-      if (!response.ok) {
-        throw new Error(`RPC HTTP ${response.status}`)
-      }
+      try {
+        // Encode agreement_id topic filter
+        const idBytes = Buffer.from(agreementId, 'hex')
+        const idScVal = xdr.ScVal.scvBytes(idBytes)
+        const idTopic = idScVal.toXDR('base64')
 
-      const json = await response.json()
-
-      if (json.error) {
-        throw new Error(json.error.message)
-      }
-
-      const rawEvents = json.result?.events || []
-
-      const parsed: AgreementEvent[] = rawEvents.map((e: any) => {
-        const eventType = parseEventType(e)
-        const eventData = parseEventData(e)
-
-        return {
-          type: eventType,
-          ledger: e.ledger || 0,
-          txHash: e.txHash || '',
-          timestamp: e.ledgerClosedAt || new Date().toISOString(),
-          agreementId,
-          ...eventData,
+        const body = {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getEvents',
+          params: {
+            startLedger: 1,
+            filters: [
+              {
+                type: 'contract',
+                contractIds: [CONTRACT_ID],
+                topics: [[idTopic]],
+              },
+            ],
+            pagination: { limit: 100 },
+          },
         }
-      })
 
-      // Sort by ledger descending (newest first)
-      parsed.sort((a, b) => b.ledger - a.ledger)
+        const response = await fetch(RPC_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: mergedSignal,
+        })
 
-      setEvents(parsed)
-      setIsLoading(false)
-    } catch (err) {
-      if (signal.aborted) return
+        if (!response.ok) {
+          throw new Error(`RPC HTTP ${response.status}`)
+        }
 
-      console.error('[useAgreementEvents] Failed to fetch:', err)
-      setError(err instanceof Error ? err.message : 'Failed to fetch events')
-      setIsLoading(false)
-    }
-  }, [agreementId])
+        const json = await response.json()
+
+        if (json.error) {
+          throw new Error(json.error.message)
+        }
+
+        const rawEvents = json.result?.events || []
+
+        const parsed: AgreementEvent[] = rawEvents.map((e: any) => {
+          const eventType = parseEventType(e)
+          const eventData = parseEventData(e)
+
+          return {
+            type: eventType,
+            ledger: e.ledger || 0,
+            txHash: e.txHash || '',
+            timestamp: e.ledgerClosedAt || new Date().toISOString(),
+            agreementId,
+            ...eventData,
+          }
+        })
+
+        // Sort by ledger descending (newest first)
+        parsed.sort((a, b) => b.ledger - a.ledger)
+
+        if (!unmountedRef.current) {
+          setEvents(parsed)
+          setIsLoading(false)
+        }
+
+        failureCount.current = 0
+        return true
+      } catch (err) {
+        clearTimeout(timeoutHandle)
+
+        // Abort errors (unmount or timeout) are not user-facing failures.
+        if (
+          signal.aborted ||
+          (err instanceof Error && err.name === 'AbortError')
+        ) {
+          if (!unmountedRef.current) setIsLoading(false)
+          return false
+        }
+
+        console.error('[useAgreementEvents] Failed to fetch:', err)
+
+        if (!unmountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Failed to fetch events')
+          setIsLoading(false)
+        }
+
+        failureCount.current += 1
+        return false
+      } finally {
+        clearTimeout(timeoutHandle)
+      }
+    },
+    [agreementId],
+  )
 
   useEffect(() => {
+    unmountedRef.current = false
+    failureCount.current = 0
+
     const controller = new AbortController()
 
-    // Initial fetch
-    void fetchEvents(controller.signal)
+    /**
+     * Recursive polling: schedule the next poll only after the current fetch
+     * resolves, preventing concurrent in-flight requests.  Back off linearly on
+     * repeated failures (each failure adds one base interval, capped at max).
+     */
+    const schedule = (delayMs: number) => {
+      timerRef.current = setTimeout(async () => {
+        if (controller.signal.aborted) return
+        await fetchEvents(controller.signal)
+        if (!controller.signal.aborted) {
+          const nextDelay = Math.min(
+            BASE_POLL_INTERVAL_MS +
+              failureCount.current * BASE_POLL_INTERVAL_MS,
+            MAX_POLL_INTERVAL_MS,
+          )
+          schedule(nextDelay)
+        }
+      }, delayMs)
+    }
 
-    // Poll for updates
-    const interval = setInterval(() => {
-      void fetchEvents(controller.signal)
-    }, POLL_INTERVAL_MS)
+    // Fire immediately (0 ms delay), then recurse.
+    schedule(0)
 
     return () => {
+      unmountedRef.current = true
       controller.abort()
-      clearInterval(interval)
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
     }
   }, [fetchEvents])
 
-  return { events, isLoading, error, refetch: () => fetchEvents(new AbortController().signal) }
+  const refetch = useCallback(() => {
+    // Cancel any pending timer and fire immediately.
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    failureCount.current = 0
+    void fetchEvents(new AbortController().signal)
+  }, [fetchEvents])
+
+  return { events, isLoading, error, refetch }
 }
 
 function parseEventType(event: any): string {
