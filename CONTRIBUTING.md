@@ -94,7 +94,24 @@ Important files:
 - `src/commands/mod.rs` — command implementations.
 - `src/utils.rs` — small CLI utility helpers.
 
-## 4. Running the Contract Tests
+## 4. Static Analysis with Semgrep
+
+Before committing contract code, run Semgrep to detect common Soroban vulnerability patterns:
+
+```bash
+semgrep --config .semgrep/ contracts/
+```
+
+Install Semgrep if not already available:
+
+```bash
+brew install semgrep   # macOS
+pip install semgrep    # Linux/Windows with Python
+```
+
+Fix any warnings before opening a PR. The CI will automatically scan all pull requests.
+
+## 5. Running the Contract Tests
 
 Run the contract test suite before changing contract code:
 
@@ -123,7 +140,7 @@ After running tests from inside `contracts/trellis_core`, return to the workspac
 cd ../..
 ```
 
-## 5. Building the CLI
+## 6. Building the CLI
 
 Build the CLI from its crate directory:
 
@@ -145,7 +162,7 @@ Return to the workspace root after the build:
 cd ../..
 ```
 
-## 6. Understanding the State Machine
+## 7. Understanding the State Machine
 
 Read this before touching contract code. Trellis models each milestone as a state machine:
 
@@ -182,7 +199,7 @@ Transitions and entrypoints:
 
 Never add a new transition or bypass an existing state without first discussing it in the linked issue.
 
-## 7. How to Claim an Issue
+## 8. How to Claim an Issue
 
 1. Browse open issues and look for `good first issue` or `help wanted` labels.
 2. Comment exactly: `I'd like to work on this`.
@@ -192,7 +209,7 @@ Never add a new transition or bypass an existing state without first discussing 
 
 This avoids duplicated effort and keeps maintainers from reviewing competing solutions for the same small task.
 
-## 8. Branch Naming
+## 9. Branch Naming
 
 Use short, scoped branch names:
 
@@ -210,7 +227,7 @@ git checkout -b docs/contributing-guide
 git checkout -b test/live-status-command
 ```
 
-## 9. PR Requirements
+## 10. PR Requirements
 
 All of the following must be true before requesting review:
 

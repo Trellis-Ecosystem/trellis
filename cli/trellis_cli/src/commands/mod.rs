@@ -217,6 +217,31 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Manage Stellar secret keys securely using OS keychain or encrypted keystore.
+    #[command(subcommand)]
+    Keys(KeysSubcommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum KeysSubcommand {
+    /// Store a Stellar secret key in the OS keychain for a named identity.
+    Add {
+        /// Identity name (e.g., "alice", "bob").
+        identity: String,
+
+        /// Stellar secret key (S...).
+        key: String,
+    },
+
+    /// Remove a Stellar secret key from the OS keychain.
+    Remove {
+        /// Identity name to remove.
+        identity: String,
+    },
+
+    /// List all Stellar secret keys stored in the keychain.
+    List,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +326,43 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
         // Handled in main() before dispatch is ever reached — completions
         // need the clap `Command` object, not a `Config`.
         Commands::Completion { .. } => Ok(()),
+
+        Commands::Keys(subcmd) => run_keys(subcmd),
+    }
+}
+
+fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
+    use crate::keystore::Keystore;
+
+    let keystore = Keystore::new();
+
+    match subcmd {
+        KeysSubcommand::Add { identity, key } => {
+            keystore
+                .store_in_keychain(&identity, &key)
+                .map_err(|e| format!("Failed to store key: {}", e))?;
+            println!("✓ Key stored for identity '{}'", identity);
+            Ok(())
+        }
+        KeysSubcommand::Remove { identity } => {
+            keystore
+                .remove_from_keychain(&identity)
+                .map_err(|e| format!("Failed to remove key: {}", e))?;
+            println!("✓ Key removed for identity '{}'", identity);
+            Ok(())
+        }
+        KeysSubcommand::List => {
+            let identities = keystore.list_keychain_identities();
+            if identities.is_empty() {
+                println!("No keys stored. Use 'trellis keys add <identity> <key>' to store one.");
+            } else {
+                println!("Stored identities:");
+                for identity in identities {
+                    println!("  - {}", identity);
+                }
+            }
+            Ok(())
+        }
     }
 }
 

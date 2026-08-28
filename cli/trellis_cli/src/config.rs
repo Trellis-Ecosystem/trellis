@@ -225,6 +225,15 @@ impl Config {
             Err(errors)
         }
     }
+
+    /// Try to resolve the source key from keystore, then fall back to env var.
+    pub fn resolve_source_key(&self) -> Result<String, String> {
+        use crate::keystore::Keystore;
+        let keystore = Keystore::new();
+        keystore
+            .resolve_source_key(&self.source_key)
+            .map_err(|e| format!("Failed to resolve source key: {}", e))
+    }
 }
 
 /// Read a source key from `path`, trimming surrounding whitespace / newlines.
