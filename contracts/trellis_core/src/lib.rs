@@ -20,6 +20,12 @@ use errors::TrellisError;
 use types::{Agreement, EscrowStatus, Milestone};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_MILESTONES: u32 = 50;
+
+// ---------------------------------------------------------------------------
 // Contract struct
 // ---------------------------------------------------------------------------
 
@@ -86,6 +92,14 @@ impl TrellisContract {
 
         if milestones.is_empty() {
             return Err(TrellisError::EmptyMilestoneSet);
+        }
+
+        if milestones.len() > MAX_MILESTONES as usize {
+            return Err(TrellisError::MilestoneCountExceeded);
+        }
+
+        if payer == payee {
+            return Err(TrellisError::PayerEqualsPayee);
         }
 
         if dispute_resolver == payer || dispute_resolver == payee {
@@ -164,7 +178,9 @@ impl TrellisContract {
     /// The payee authorises this call.
     ///
     /// Pass `Some(uri)` to attach delivery proof, or `None` to advance the
-    /// milestone to `WorkSubmitted` without one.
+    /// milestone to `WorkSubmitted` without one. Empty-string proofs are
+    /// normalized to `None` to ensure semantic consistency — indexers pattern
+    /// match on `Some(uri)` and must never see an empty string.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -188,8 +204,7 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // proof_uri is stored verbatim — `None` is the sole representation of
-        // "no proof", so there is no sentinel value to normalise.
+        let proof_uri = proof_uri.filter(|s| !s.is_empty());
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
         agreement.milestones.set(milestone_id, milestone);
