@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
+import { hexToBytes } from '../lib/format'
 
 export interface AgreementEvent {
   type: string
@@ -32,8 +33,11 @@ export function useAgreementEvents(agreementId: string | null) {
       setError(null)
 
       // Encode agreement_id topic filter
-      const idBytes = Buffer.from(agreementId, 'hex')
-      const idScVal = xdr.ScVal.scvBytes(idBytes)
+      const idBytes = hexToBytes(agreementId)
+      // xdr.ScVal.scvBytes expects a Buffer; casting the Uint8Array is safe
+      // because they share the same underlying ArrayBuffer layout and the
+      // Stellar SDK only uses the byte data at runtime.
+      const idScVal = xdr.ScVal.scvBytes(idBytes as unknown as Buffer)
       const idTopic = idScVal.toXDR('base64')
 
       const body = {
