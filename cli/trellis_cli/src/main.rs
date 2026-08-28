@@ -1,10 +1,13 @@
 mod commands;
 mod config;
+mod input;
 mod rpc;
+mod sanitizer;
 mod utils;
 
 use clap::{CommandFactory, Parser};
 use commands::{Commands, OutputFormat, OutputOpts};
+use config::Network;
 use std::process;
 
 // ---------------------------------------------------------------------------
@@ -24,6 +27,7 @@ use std::process;
 /// Optional variables (Soroban Testnet used as default):
 ///   STELLAR_RPC_URL            — Soroban JSON-RPC endpoint
 ///   STELLAR_NETWORK_PASSPHRASE — Network passphrase for transaction signing
+///   STELLAR_RPC_RETRIES        — Retries for transient RPC failures (default 3; 0 disables)
 #[derive(Parser, Debug)]
 #[command(
     name = "trellis",
@@ -57,6 +61,13 @@ struct Cli {
     #[arg(long, global = true)]
     network_passphrase: Option<String>,
 
+    /// Read the source key from this file instead of the `TRELLIS_SOURCE_KEY`
+    /// environment variable. Preferred for raw `S…` secret seeds: file
+    /// contents never appear in `ps` / `/proc` the way an argv or exported
+    /// env var can (#240). Overrides `TRELLIS_SOURCE_KEY_FILE`.
+    #[arg(long, global = true, value_name = "PATH")]
+    source_key_file: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 
@@ -78,6 +89,15 @@ struct Cli {
     /// executing it or submitting anything on-chain.
     #[arg(long, global = true)]
     dry_run: bool,
+
+    /// Allow a cleartext `http://` RPC endpoint for a non-localhost host.
+    ///
+    /// By default the CLI refuses any RPC URL that is not `https://` unless
+    /// the host is loopback (`localhost` / `127.0.0.1` / `::1`), so a planted
+    /// `.env` file cannot silently redirect traffic to an unauthenticated
+    /// endpoint. Pass this flag for development against a self-hosted devnet.
+    #[arg(long, global = true)]
+    unsafe_rpc: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,10 +115,9 @@ struct Cli {
 fn validate_environment() -> Result<(), String> {
     use std::process::Command;
 
-    match Command::new("stellar").arg("--version").output() {
+    match Command::new(rpc::stellar_bin()).arg("--version").output() {
         Ok(_) => Ok(()),
-        Err(_) => Err(
-            "Error: `stellar` CLI not found in PATH.\n\
+        Err(_) => Err("Error: `stellar` CLI not found in PATH.\n\
              \n\
              Install it with:\n\
              \n\
@@ -108,8 +127,7 @@ fn validate_environment() -> Result<(), String> {
              \thttps://developers.stellar.org/docs/tools/cli/install-cli\n\
              \n\
              After installing, run `stellar --version` to confirm the installation."
-                .to_string(),
-        ),
+            .to_string()),
     }
 }
 
@@ -144,7 +162,45 @@ fn main() {
         process::exit(1);
     }
 
-    let config = config::Config::from_env();
+    // ── #80: Resolve config from --network preset + CLI / env overrides ───
+    let config = match config::Config::resolve(
+        cli.network,
+        cli.rpc_url.clone(),
+        cli.network_passphrase.clone(),
+    ) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    };
+
+    // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
+    // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
+    if let Err(errors) = config.validate() {
+        eprintln!("Error: invalid configuration:");
+        for e in &errors {
+            eprintln!("  - {e}");
+        }
+        eprintln!(
+            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY) or pass the matching CLI flags."
+        );
+        process::exit(1);
+    }
+
+    // ── #156: Validate the resolved RPC URL before any network use ────────
+    // Rejects malformed URLs and cleartext HTTP to non-localhost hosts so a
+    // compromised `.env` cannot point the CLI at a forged RPC endpoint.
+    // `--unsafe-rpc` downgrades the hard error to a printed warning.
+    match config::validate_rpc_url(&config.rpc_url, cli.unsafe_rpc) {
+        Ok(Some(warning)) => eprintln!("{warning}"),
+        Ok(None) => {}
+        Err(msg) => {
+            eprintln!("{msg}");
+            process::exit(1);
+        }
+    }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet
     // forces the JSON envelope so the only stdout line is the result. ──────

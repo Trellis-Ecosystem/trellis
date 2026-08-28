@@ -3,8 +3,10 @@ import type { ReactNode } from 'react'
 import ToastItem from './ToastItem'
 import {
   DEFAULT_DURATIONS,
+  ToastActionsContext,
   ToastContext,
   type Toast,
+  type ToastActionsContextValue,
   type ToastOptions,
   type ToastType,
 } from './toast-context'
@@ -16,6 +18,10 @@ function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const nextId = useRef(0)
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+
+  // ---------------------------------------------------------------------------
+  // Internal helpers — defined once via useRef so they are always stable
+  // ---------------------------------------------------------------------------
 
   const clearTimer = useCallback((id: string) => {
     const timer = timers.current.get(id)
@@ -81,9 +87,13 @@ function ToastProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const value = useMemo(
+  // ---------------------------------------------------------------------------
+  // Stable actions context — never recreated after mount.
+  // Consumers that only call actions (show / dismiss / update) subscribe here
+  // and will NOT re-render when the toasts array changes.
+  // ---------------------------------------------------------------------------
+  const actionsValue = useMemo<ToastActionsContextValue>(
     () => ({
-      toasts,
       show,
       pending: (options: ToastOptions) => show('pending', options),
       success: (options: ToastOptions) => show('success', options),
@@ -93,21 +103,35 @@ function ToastProvider({ children }: { children: ReactNode }) {
       dismiss,
       dismissAll,
     }),
-    [toasts, show, update, dismiss, dismissAll],
+    // show / update / dismiss / dismissAll are all stable useCallback refs
+    // so this memo is only computed once.
+    [show, update, dismiss, dismissAll],
+  )
+
+  // ---------------------------------------------------------------------------
+  // Full context — includes the toasts array for backward-compatibility.
+  // This value changes every time toasts changes, but useToast() consumers
+  // that only need actions can migrate to useToastActions() to opt out.
+  // ---------------------------------------------------------------------------
+  const fullValue = useMemo(
+    () => ({ ...actionsValue, toasts }),
+    [actionsValue, toasts],
   )
 
   return (
-    <ToastContext.Provider value={value}>
-      {children}
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed top-4 right-4 z-50 flex w-full max-w-sm flex-col gap-3 px-4 sm:px-0"
-      >
-        {toasts.map((toast) => (
-          <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
-        ))}
-      </div>
-    </ToastContext.Provider>
+    <ToastActionsContext.Provider value={actionsValue}>
+      <ToastContext.Provider value={fullValue}>
+        {children}
+        <div
+          aria-live="polite"
+          className="pointer-events-none fixed top-4 right-4 z-50 flex w-full max-w-sm flex-col gap-3 px-4 sm:px-0"
+        >
+          {toasts.map((toast) => (
+            <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
+          ))}
+        </div>
+      </ToastContext.Provider>
+    </ToastActionsContext.Provider>
   )
 }
 

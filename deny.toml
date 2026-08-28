@@ -1,0 +1,103 @@
+# cargo-deny configuration — supply-chain policy for the Rust workspace.
+#
+# Enforced in CI (see .github/workflows/contract-ci.yml, job `supply-chain`)
+# via `cargo deny check`, alongside `cargo audit`. Together these fail the
+# build when a crate in the dependency graph (soroban-sdk, clap, tokio,
+# reqwest, …) picks up a known RustSec advisory, a disallowed licence, or an
+# unexpected source registry — so a compromised or vulnerable transitive
+# dependency is caught before it reaches the compiled contract WASM or the
+# CLI binary.
+#
+# Run locally with:
+#   cargo install --locked cargo-deny
+#   cargo deny check
+
+[graph]
+# Check every target the workspace actually builds for: the host (CLI) and
+# the Soroban contract's wasm32 target.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "wasm32-unknown-unknown" },
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Advisories — RustSec vulnerability database
+# ---------------------------------------------------------------------------
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Reject crates that have been yanked from the registry — a yank is often the
+# first signal of a compromised or broken release.
+yanked = "deny"
+# Advisories acknowledged and deliberately tolerated. Each entry is a
+# transitive, dev-/build-only *unmaintained* notice (not a vulnerability)
+# pulled in through `soroban-sdk`'s host crates, with no patched version
+# available. They must be revisited whenever `soroban-sdk` is upgraded.
+ignore = [
+    # `derivative` is unmaintained. Reached only via
+    # soroban-sdk → soroban-env-host → ark-{ec,ff,poly} (dev-dependency).
+    # No safe upgrade exists upstream.
+    "RUSTSEC-2024-0388",
+    # `paste` is unmaintained. Reached only via soroban-sdk's macro crates.
+    # No drop-in replacement is wired through soroban-sdk yet.
+    "RUSTSEC-2024-0436",
+]
+
+# ---------------------------------------------------------------------------
+# Licences — allowlist of SPDX identifiers permitted in the dependency graph
+# ---------------------------------------------------------------------------
+[licenses]
+# Permissive licences only. A copyleft or unknown licence in a transitive
+# dependency fails the build until it is reviewed and explicitly added here.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+# Per-crate licence exceptions (crate = "…", allow = ["…"]). None today.
+exceptions = []
+
+[licenses.private]
+# Do not evaluate licences for the workspace's own unpublished crates.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Bans — duplicate versions, wildcard deps, explicitly (dis)allowed crates
+# ---------------------------------------------------------------------------
+[bans]
+# Duplicate-version check: warn when two versions of the same crate are
+# pulled into the graph. `warn` (not `deny`) keeps CI green on unavoidable
+# transitive skew while still surfacing it in the log for review.
+multiple-versions = "warn"
+# A wildcard (`*`) version requirement disables version pinning and lets an
+# attacker's newly published version be pulled in silently.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Sources — where crates are allowed to come from
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

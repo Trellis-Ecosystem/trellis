@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import { formatRelativeTime, truncateAgreementId } from '../lib/format'
 import {
   clearHistory,
@@ -22,7 +22,7 @@ const ROLE_STYLES: Record<AgreementRole, string> = {
 function AgreementHistoryPage() {
   const [entries, setEntries] = useState<HistoryEntry[]>([])
   const [confirmingClear, setConfirmingClear] = useState(false)
-  const toast = useToast()
+  const toast = useToastActions()
 
   useEffect(() => {
     setEntries(getHistory())
@@ -112,7 +112,7 @@ function AgreementHistoryPage() {
                   <code className="font-mono text-sm text-gray-400">
                     {truncateAgreementId(entry.agreementId)}
                   </code>
-                  <ExplorerLink type="contract" value={entry.agreementId} />
+                  <ExplorerLink type="agreement" value={entry.agreementId} />
                   <CopyButton text={entry.agreementId} label={`Copy agreement ID ${entry.agreementId}`} />
                 </div>
 

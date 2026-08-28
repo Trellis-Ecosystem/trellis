@@ -68,4 +68,13 @@ describe('<ExplorerLink />', () => {
     expect(container).toBeEmptyDOMElement()
     expect(screen.queryByTestId('explorer-link')).not.toBeInTheDocument()
   })
+
+  it('renders nothing for agreement type — hex IDs have no Stellar Expert page', () => {
+    const { container } = render(
+      <ExplorerLink type="agreement" value="abcdef1234567890abcdef1234567890" />,
+    )
+
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByTestId('explorer-link')).not.toBeInTheDocument()
+  })
 })
