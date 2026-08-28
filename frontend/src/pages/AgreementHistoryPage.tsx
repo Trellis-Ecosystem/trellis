@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import { formatRelativeTime, truncateAgreementId } from '../lib/format'
 import {
   clearHistory,
@@ -22,7 +22,7 @@ const ROLE_STYLES: Record<AgreementRole, string> = {
 function AgreementHistoryPage() {
   const [entries, setEntries] = useState<HistoryEntry[]>([])
   const [confirmingClear, setConfirmingClear] = useState(false)
-  const toast = useToast()
+  const toast = useToastActions()
 
   useEffect(() => {
     setEntries(getHistory())
