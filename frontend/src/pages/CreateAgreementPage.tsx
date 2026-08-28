@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { nativeToScVal, StrKey } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import MilestoneBuilder, { type MilestoneInput } from '../components/MilestoneBuilder'
 import { AgreementIdGenerator } from '../components/AgreementIdGenerator'
 
@@ -25,7 +25,7 @@ interface ValidationErrors {
 function CreateAgreementPage() {
   const navigate = useNavigate()
   const wallet = useWallet()
-  const toast = useToast()
+  const toast = useToastActions()
   const { invoke, status } = useContractInvoke()
 
   const [agreementId, setAgreementId] = useState<string>('')

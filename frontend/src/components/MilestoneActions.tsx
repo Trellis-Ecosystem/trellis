@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { nativeToScVal } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import TransactionStatus from './TransactionStatus'
 import type { Agreement, Milestone } from '../lib/soroban'
 
@@ -14,7 +14,7 @@ interface MilestoneActionsProps {
 
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
-  const toast = useToast()
+  const toast = useToastActions()
   const { invoke, status, txHash, error, reset } = useContractInvoke()
   const [showProofInput, setShowProofInput] = useState(false)
   const [proofUri, setProofUri] = useState('')
