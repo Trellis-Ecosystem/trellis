@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import QRCode from 'qrcode'
 import { generateAgreementId } from '../lib/agreementId'
 import { TruncatedAddress } from './TruncatedAddress'
+import useToast from '../hooks/useToast'
 
 interface AgreementIdGeneratorProps {
   /** Called when a new ID is generated so the parent form can consume it. */
@@ -9,6 +10,7 @@ interface AgreementIdGeneratorProps {
 }
 
 export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) {
+  const toast = useToast()
   const [agreementId, setAgreementId] = useState<string>('')
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
   const [showQR, setShowQR] = useState(false)
@@ -33,10 +35,7 @@ export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) 
       })
       setQrDataUrl(url)
     } catch {
-      // Fallback: external API if local canvas generation fails
-      setQrDataUrl(
-        `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(newId)}`,
-      )
+      // Local QR generation failed; QR display will be skipped
     }
 
     setShowQR(true)
@@ -47,10 +46,14 @@ export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) 
   }, [onGenerate])
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(agreementId)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }, [agreementId])
+    try {
+      await navigator.clipboard.writeText(agreementId)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error({ title: 'Copy failed', message: 'Could not access clipboard. Check browser permissions.' })
+    }
+  }, [agreementId, toast])
 
   const handleShare = useCallback(async () => {
     if (navigator.share) {

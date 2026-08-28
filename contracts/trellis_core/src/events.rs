@@ -18,8 +18,8 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //     which stores the string in the host's symbol table.
 //
 // Prefixed topic names and their lengths:
-//   1. "trellis_cr"  (10 chars) → Symbol::new   — agreement_created
-//   2. "trlls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated to stay ≤9)
+//   1. "trlls_crte"  ( 9 chars) → symbol_short! — agreement_created  (abbreviated to stay ≤9)
+//   2. "trlls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated)
 //   3. "trlls_sbmt"  ( 9 chars) → symbol_short! — work_submitted     (abbreviated)
 //   4. "trlls_rlsd"  ( 9 chars) → symbol_short! — funds_released     (abbreviated)
 //   5. "trlls_dspt"  ( 9 chars) → symbol_short! — dispute_raised     (abbreviated)
@@ -101,7 +101,7 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 
 /// Emitted when either party raises a dispute on a funded or work-submitted milestone.
 ///
-/// Topics: `("disputed", agreement_id)`
+/// Topics: `("trlls_dspt", agreement_id)`
 /// Data:   `(milestone_id, caller)`
 ///
 /// `caller` is the party (payer or payee) that triggered the dispute, provided

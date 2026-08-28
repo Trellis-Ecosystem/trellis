@@ -11,13 +11,14 @@
 #   make build-cli     — build only the CLI binary
 #   make build-frontend — build only the frontend bundle
 #   make test-contract — run only contract tests
+#   make test-snapshots-update — regenerate Soroban test snapshots (commit the result)
 #   make test-frontend — run only frontend tests
 #   make lint-contract — run only clippy on contract and CLI
 #   make lint-frontend — run only oxlint on frontend
 
 .PHONY: help build test lint deploy clean
 .PHONY: build-contract build-cli build-frontend
-.PHONY: test-contract test-frontend
+.PHONY: test-contract test-snapshots-update test-frontend
 .PHONY: lint-contract lint-frontend
 
 help:
@@ -47,6 +48,10 @@ test: test-contract test-frontend
 
 test-contract:
 	cargo test --manifest-path contracts/trellis_core/Cargo.toml
+
+test-snapshots-update:
+	SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
+	@echo "Snapshots regenerated. Review the diff with: git diff contracts/trellis_core/test_snapshots/"
 
 test-frontend:
 	cd frontend && npm install && npm test

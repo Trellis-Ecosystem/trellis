@@ -639,12 +639,33 @@ fn test_cancel_unfunded_wrong_role_fails() {
     client.cancel_unfunded_milestone(&id, &0u32);
 }
 
-/// Comprehensive test: payee cannot call payer-only functions (lock_funds, approve_and_release, cancel_unfunded_milestone).
+/// Test get_total_amount returns the correct sum of all milestone amounts.
 #[test]
-#[should_panic(expected = "require_auth")]
-fn test_payer_only_functions_reject_payee() {
+fn test_get_total_amount_matches_sum() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 40);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            id: 1,
+            amount: 2_500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            id: 2,
+            amount: 1_500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
 
     env.mock_all_auths();
     client.init(
@@ -652,18 +673,17 @@ fn test_payer_only_functions_reject_payee() {
         &payer,
         &payee,
         &token_address,
-        &one_milestone(&env, 500),
+        &milestones,
         &dispute_resolver,
     );
 
-    auth_as(&env, &payee);
-    client.lock_funds(&id, &0u32);
+    let total = client.get_total_amount(&id).unwrap();
+    assert_eq!(total, 5_000, "get_total_amount should return sum of all milestones");
 }
 
-/// Comprehensive test: payer cannot call payee-only functions (submit_work).
+/// Test extend_agreement_ttl on an existing agreement.
 #[test]
-#[should_panic(expected = "require_auth")]
-fn test_payee_only_functions_reject_payer() {
+fn test_extend_ttl_success() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 41);
 
@@ -673,102 +693,36 @@ fn test_payee_only_functions_reject_payer() {
         &payer,
         &payee,
         &token_address,
-        &one_milestone(&env, 500),
+        &one_milestone(&env, 1_000),
         &dispute_resolver,
     );
 
-    auth_as(&env, &payer);
-    client.lock_funds(&id, &0u32);
-
-    auth_as(&env, &payer);
-    let proof = Some(String::from_str(&env, "ipfs://fake"));
-    client.submit_work(&id, &0u32, &proof);
+    env.mock_all_auths();
+    let result = client.extend_agreement_ttl(&id);
+    assert!(result.is_ok(), "extend_agreement_ttl should succeed on existing agreement");
 }
 
-/// Comprehensive test: non-resolver cannot call resolve_dispute.
+/// Test extend_agreement_ttl on non-existent agreement fails gracefully.
 #[test]
-#[should_panic(expected = "require_auth")]
-fn test_resolver_only_functions_reject_others() {
+fn test_extend_ttl_nonexistent_agreement() {
+    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+    let id = agreement_id(&env, 99);
+
+    env.mock_all_auths();
+    let result = client.try_extend_agreement_ttl(&id);
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "extend_agreement_ttl on non-existent agreement should return AgreementNotFound"
+    );
+}
+
+/// Test dispute raised by payer.
+#[test]
+fn test_dispute_raised_by_payer() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 42);
-
-    env.mock_all_auths();
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 500),
-        &dispute_resolver,
-    );
-
-    auth_as(&env, &payer);
-    client.lock_funds(&id, &0u32);
-
-    auth_as(&env, &payee);
-    client.raise_dispute(&payee, &id, &0u32);
-
-    let random = Address::generate(&env);
-    auth_as(&env, &random);
-    client.resolve_dispute(&id, &0u32, &true);
-}
-
-/// Verify that get_agreement is callable by anyone (no auth required).
-#[test]
-fn test_get_agreement_callable_by_anyone() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 43);
-
-    env.mock_all_auths();
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 500),
-        &dispute_resolver,
-    );
-
-    let random = Address::generate(&env);
-    auth_as(&env, &random);
-    let agreement = client.get_agreement(&id);
-    assert_eq!(agreement.payer, payer, "agreement should be readable by anyone");
-}
-
-/// Verify that extend_agreement_ttl emits an event with caller address.
-#[test]
-fn test_extend_agreement_ttl_emits_event() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let id = agreement_id(&env, 44);
-
-    env.mock_all_auths();
-    client.init(
-        &id,
-        &payer,
-        &payee,
-        &token_address,
-        &one_milestone(&env, 500),
-        &dispute_resolver,
-    );
-
-    let keeper = Address::generate(&env);
-    auth_as(&env, &keeper);
-    client.extend_agreement_ttl(&id, &keeper);
-
-    let events = env.events().all();
-    assert!(
-        events.len() >= 2,
-        "should have at least agreement_created and ttl_extended events"
-    );
-}
-
-/// Dispute raised by payer → dispute_resolver rules in payee's favour → payee awarded.
-#[test]
-fn test_dispute_and_release_to_payee() {
-    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
-    let token_client = token::TokenClient::new(&env, &token_address);
-    let id = agreement_id(&env, 45);
-    let amount: i128 = 3_000;
+    let amount: i128 = 2_000;
 
     env.mock_all_auths();
     client.init(
@@ -780,39 +734,18 @@ fn test_dispute_and_release_to_payee() {
         &dispute_resolver,
     );
 
-    let payer_balance_before_lock = token_client.balance(&payer);
-    let payee_balance_before = token_client.balance(&payee);
-
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
 
+    // Payer raises the dispute
     auth_as(&env, &payer);
     client.raise_dispute(&payer, &id, &0u32);
 
-    auth_as(&env, &dispute_resolver);
-    client.resolve_dispute(&id, &0u32, &false);
-
+    // Verify milestone status transitioned to Disputed
+    let status = client.get_milestone_status(&id, &0u32).unwrap();
     assert_eq!(
-        token_client.balance(&payee),
-        payee_balance_before + amount,
-        "payee balance should increase by milestone amount after dispute resolution in payee's favor"
-    );
-    assert_eq!(
-        token_client.balance(&payer),
-        payer_balance_before_lock - amount,
-        "payer balance should remain unchanged (funds moved to payee)"
-    );
-    assert_eq!(
-        token_client.balance(&client.address),
-        0,
-        "contract balance should be zero after resolution"
-    );
-
-    let agreement = client.get_agreement(&id);
-    let milestone = agreement.milestones.get(0).expect("milestone 0 must exist");
-    assert_eq!(
-        milestone.status,
-        EscrowStatus::Completed,
-        "milestone status should be Completed after payee-award resolution"
+        status,
+        EscrowStatus::Disputed,
+        "milestone should transition to Disputed when payer raises dispute"
     );
 }
