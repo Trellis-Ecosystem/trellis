@@ -225,41 +225,55 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             token,
             resolver,
             milestones,
+            yes,
             opts,
         ),
 
         Commands::LockFunds {
             agreement_id,
             milestone_id,
-        } => run_lock_funds(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_lock_funds(config, agreement_id, milestone_id, yes, opts),
 
         Commands::SubmitWork {
             agreement_id,
             milestone_id,
             proof_uri,
-        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, opts),
+            yes,
+        } => run_submit_work(config, agreement_id, milestone_id, proof_uri, yes, opts),
 
         Commands::ApproveRelease {
             agreement_id,
             milestone_id,
-        } => run_approve_release(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_approve_release(config, agreement_id, milestone_id, yes, opts),
 
         Commands::RaiseDispute {
             agreement_id,
             milestone_id,
             caller,
-        } => run_raise_dispute(config, agreement_id, milestone_id, caller, opts),
+            yes,
+        } => run_raise_dispute(config, agreement_id, milestone_id, caller, yes, opts),
 
         Commands::ResolveDispute {
             agreement_id,
             milestone_id,
             refund_to_payer,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, opts),
+            yes,
+        } => run_resolve_dispute(
+            config,
+            agreement_id,
+            milestone_id,
+            refund_to_payer,
+            yes,
+            opts,
+        ),
 
         Commands::CancelMilestone {
             agreement_id,
             milestone_id,
-        } => run_cancel_milestone(config, agreement_id, milestone_id, opts),
+            yes,
+        } => run_cancel_milestone(config, agreement_id, milestone_id, yes, opts),
 
         Commands::Status { agreement_id } => run_status(config, agreement_id, opts),
 
@@ -325,10 +339,75 @@ fn validate_address(addr: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
+/// `resolver`, `caller`).
+///
+/// Soroban `Address` values are strkey-encoded: exactly 56 characters, starting
+/// with `G` (account) or `C` (contract), containing only RFC 4648 base32
+/// characters (`A`–`Z`, `2`–`7`). Anything else — a stray space, a quote, an
+/// embedded `--flag`, any shell metacharacter — fails this check, so no
+/// user-supplied address can smuggle extra tokens into the argument list
+/// forwarded to `stellar contract invoke`.
+fn validate_address(field: &str, value: &str) -> Result<(), String> {
+    if value.len() != 56 {
+        return Err(format!(
+            "{field} must be a 56-character Stellar address, got {} characters",
+            value.len()
+        ));
+    }
+    match value.chars().next() {
+        Some('G') | Some('C') => {}
+        _ => {
+            return Err(format!(
+                "{field} must be a Stellar address starting with 'G' (account) or 'C' (contract)"
+            ));
+        }
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c))
+    {
+        return Err(format!(
+            "{field} must contain only base32 characters (A-Z, 2-7); \
+             whitespace, quotes and other shell metacharacters are not allowed"
+        ));
+    }
+    Ok(())
+}
+
 /// Print a validation error and exit with code 1.
 fn fail_validation(msg: &str) -> ! {
     eprintln!("error: {msg}");
     std::process::exit(1);
+}
+
+/// Print a summary of a state-mutating operation and block on a y/N prompt,
+/// unless `skip` (the `-y`/`--yes` flag) is set.
+///
+/// Returns `Err` (without executing anything) if the user does not answer
+/// `y`/`yes`, so a fat-fingered command aborts instead of running.
+fn confirm_action(summary: &str, skip: bool) -> Result<(), String> {
+    if skip {
+        return Ok(());
+    }
+
+    use std::io::Write;
+
+    println!("{summary}");
+    print!("Continue? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to write prompt: {e}"))?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read confirmation: {e}"))?;
+
+    match input.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err("Aborted: operation not confirmed.".to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +431,7 @@ fn run_init(
     token: String,
     resolver: String,
     milestones_csv: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -394,6 +474,7 @@ fn run_lock_funds(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -425,6 +506,7 @@ fn run_submit_work(
     agreement_id: String,
     milestone_id: u32,
     proof_uri: Option<String>,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -458,6 +540,7 @@ fn run_approve_release(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -488,6 +571,7 @@ fn run_raise_dispute(
     agreement_id: String,
     milestone_id: u32,
     caller: String,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -517,6 +601,7 @@ fn run_resolve_dispute(
     agreement_id: String,
     milestone_id: u32,
     refund_to_payer: bool,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -544,6 +629,7 @@ fn run_cancel_milestone(
     config: &Config,
     agreement_id: String,
     milestone_id: u32,
+    yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
@@ -596,7 +682,7 @@ fn run_milestone_status(
 
     let args = vec![
         "--agreement-id".to_string(),
-        format!("\"{}\"", agreement_id),
+        agreement_id,
         "--milestone-id".to_string(),
         milestone_id.to_string(),
     ];
@@ -628,11 +714,25 @@ fn run_milestone_status(
 ///  {"id":1,"amount":"2000","status":{"Pending":null},"proof_uri":null}]
 /// ```
 fn build_milestones_json(csv: &str) -> Result<String, String> {
+    if csv.trim().is_empty() {
+        return Err(
+            "no milestone amounts provided — pass a comma-separated list of positive \
+             integers in the token's base unit, e.g. --milestones \"1000,2000,500\""
+                .to_string(),
+        );
+    }
+
     let entries: Vec<String> = csv
         .split(',')
         .enumerate()
         .map(|(idx, part)| -> Result<String, String> {
             let trimmed = part.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "empty milestone amount at index {idx} — remove the leading, trailing, \
+                     or doubled comma in \"{csv}\" (expected e.g. \"1000,2000,500\")"
+                ));
+            }
             let amount: i128 = trimmed.parse().map_err(|_| {
                 format!(
                     "invalid milestone amount {:?} at index {} — expected a positive integer",
@@ -660,7 +760,12 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
 /// This is the single entry point every command handler funnels through, so
 /// `--dry-run`, `--json`, `--human-readable`, and `--quiet` behave
 /// consistently across all commands (#74, #76, #77).
-fn execute(config: &Config, fn_name: &str, args: &[String], opts: &OutputOpts) -> Result<(), String> {
+fn execute(
+    config: &Config,
+    fn_name: &str,
+    args: &[String],
+    opts: &OutputOpts,
+) -> Result<(), String> {
     if opts.dry_run {
         println!("{}", RpcClient::preview(config, fn_name, args));
         return Ok(());
@@ -901,6 +1006,116 @@ mod tests {
         );
     }
 
+    // --- build_milestones_json: empty / malformed input (#238) ---
+
+    #[test]
+    fn test_build_milestones_json_empty_string_rejected() {
+        let err = build_milestones_json("").unwrap_err();
+        assert!(
+            err.contains("no milestone amounts") && err.contains("1000,2000,500"),
+            "empty input should give a clear error with a format example, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_whitespace_only_rejected() {
+        let err = build_milestones_json("   ").unwrap_err();
+        assert!(err.contains("no milestone amounts"), "got: {err}");
+    }
+
+    #[test]
+    fn test_build_milestones_json_trailing_comma_rejected() {
+        let err = build_milestones_json("1000,2000,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "trailing comma should be flagged clearly, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_leading_comma_rejected() {
+        let err = build_milestones_json(",1000,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_doubled_comma_rejected() {
+        let err = build_milestones_json("1000,,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    // --- validate_address: CLI argument injection prevention (#239) ---
+
+    fn valid_g_addr() -> String {
+        format!("G{}", "A".repeat(55))
+    }
+
+    #[test]
+    fn address_accepts_well_formed_g_and_c() {
+        assert!(validate_address("payer", &valid_g_addr()).is_ok());
+        assert!(validate_address("token", &format!("C{}", "A".repeat(55))).is_ok());
+        // A mixed-alphabet 56-char strkey (G + 55 base32 chars).
+        let realistic: String = std::iter::once('G')
+            .chain("BCDEFGHIJKLMNOPQRSTUVWXYZ234567".chars().cycle().take(55))
+            .collect();
+        assert_eq!(realistic.len(), 56);
+        assert!(validate_address("payee", &realistic).is_ok());
+    }
+
+    #[test]
+    fn address_rejects_wrong_length() {
+        assert!(validate_address("payer", "GABC").is_err());
+        assert!(validate_address("payer", &format!("G{}", "A".repeat(60))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_wrong_prefix() {
+        assert!(validate_address("payer", &format!("S{}", "A".repeat(55))).is_err());
+        assert!(validate_address("payer", &format!("X{}", "A".repeat(55))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_injected_flag_via_spaces() {
+        // Exactly 56 chars but with an embedded space — a space is the vector
+        // for smuggling an extra "--flag value" token into the argument list.
+        let spaced = format!("G{} {}", "A".repeat(27), "A".repeat(27));
+        assert_eq!(spaced.len(), 56);
+        assert!(validate_address("payer", &spaced).is_err());
+
+        // Longer overt injection payloads are rejected too.
+        assert!(validate_address("payer", "GAAAA --network mainnet --source attacker").is_err());
+        assert!(validate_address("payer", &format!("{} --help", "A".repeat(56))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_quotes_and_shell_metacharacters() {
+        for bad in [
+            format!("G{}\"{}", "A".repeat(27), "A".repeat(27)),
+            format!("G{};rm -rf {}", "A".repeat(20), "A".repeat(25)),
+            format!("G{}$(id){}", "A".repeat(24), "A".repeat(26)),
+            format!("G{}`id`{}", "A".repeat(25), "A".repeat(26)),
+        ] {
+            assert!(
+                validate_address("payer", &bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn address_rejects_lowercase_and_padding_chars() {
+        assert!(validate_address("payer", &format!("G{}", "a".repeat(55))).is_err());
+        // '0', '1', '8', '9' and '=' are not in the RFC 4648 base32 alphabet
+        assert!(validate_address("payer", &format!("G{}0", "A".repeat(54))).is_err());
+        assert!(validate_address("payer", &format!("G{}=", "A".repeat(54))).is_err());
+    }
+
     // --- validate_agreement_id ---
 
     #[test]
@@ -954,7 +1169,9 @@ mod tests {
 
     #[test]
     fn proof_uri_valid_ipfs() {
-        assert!(validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok());
+        assert!(
+            validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok()
+        );
     }
 
     #[test]
