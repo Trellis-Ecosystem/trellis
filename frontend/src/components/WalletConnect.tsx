@@ -67,17 +67,34 @@ export default function WalletConnect() {
       {wrongNetwork && (
         <span className="text-gold-400 text-xs font-medium">Switch to Testnet</span>
       )}
-      <span className="text-gray-300 text-sm font-mono bg-navy-800 px-3 py-1.5 rounded-md border border-navy-600">
-        {truncateAddress(publicKey!)}
-      </span>
-      <button
-        onClick={disconnect}
-        aria-pressed={true}
-        aria-label={`Disconnect wallet ${truncateAddress(publicKey!)}`}
-        className="text-gray-500 text-xs hover:text-gray-300 transition-colors"
-      >
-        Disconnect
-      </button>
+      {publicKey ? (
+        <>
+          <span className="text-gray-300 text-sm font-mono bg-navy-800 px-3 py-1.5 rounded-md border border-navy-600">
+            {truncateAddress(publicKey)}
+          </span>
+          <button
+            onClick={disconnect}
+            aria-pressed={true}
+            aria-label={`Disconnect wallet ${truncateAddress(publicKey)}`}
+            className="text-gray-500 text-xs hover:text-gray-300 transition-colors"
+          >
+            Disconnect
+          </button>
+        </>
+      ) : (
+        <>
+          {import.meta.env.DEV && console.warn('[WalletConnect] Connected status but publicKey is null/undefined — unexpected state')}
+          <span className="text-gold-400 text-xs font-medium">Wallet key unavailable</span>
+          <button
+            onClick={disconnect}
+            aria-pressed={true}
+            aria-label="Disconnect wallet"
+            className="text-gray-500 text-xs hover:text-gray-300 transition-colors"
+          >
+            Disconnect
+          </button>
+        </>
+      )}
     </div>
   );
 }

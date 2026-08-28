@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod rpc;
+mod sanitizer;
 mod utils;
 
 use clap::{CommandFactory, Parser};
@@ -150,38 +151,31 @@ fn main() {
         process::exit(1);
     }
 
-    // ── Resolve configuration: CLI flags > env vars > network preset. ─────
+    // ── #80: Resolve config from --network preset + CLI / env overrides ───
     let config = match config::Config::resolve(
         cli.network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
-        cli.source_key_file.clone(),
     ) {
-        Ok(cfg) => cfg,
+        Ok(c) => c,
         Err(msg) => {
             eprintln!("{msg}");
             process::exit(1);
         }
     };
 
-    // ── Fail fast with a clear message if a required var is still unset. ──
-    if let Err(missing) = config.validate() {
+    // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
+    // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
+    if let Err(errors) = config.validate() {
+        eprintln!("Error: invalid configuration:");
+        for e in &errors {
+            eprintln!("  - {e}");
+        }
         eprintln!(
-            "Error: missing required configuration: {}\n\
-             Set it as an environment variable (or in a .env file); for the \
-             source key prefer --source-key-file for raw S… secret seeds.",
-            missing.join(", ")
+            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY) or pass the matching CLI flags."
         );
         process::exit(1);
-    }
-
-    // ── #240: warn when a raw secret seed is used directly. ──────────────
-    if config::is_secret_seed(&config.source_key) && !cli.quiet {
-        eprintln!(
-            "warning: TRELLIS_SOURCE_KEY looks like a raw secret seed. Prefer a \
-             named `stellar keys` identity, or --source-key-file, so the key is \
-             never exposed in the process list."
-        );
     }
 
     // ── #77/#74: --json takes priority over --human-readable; --quiet

@@ -1764,6 +1764,9 @@ dependencies = [
  "clap_complete",
  "dotenvy",
  "serde_json",
+ "sha2",
+ "tokio",
+ "url",
 ]
 
 [[package]]
