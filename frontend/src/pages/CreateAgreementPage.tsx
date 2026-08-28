@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { nativeToScVal, StrKey } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import MilestoneBuilder, { type MilestoneInput } from '../components/MilestoneBuilder'
 import { AgreementIdGenerator } from '../components/AgreementIdGenerator'
 
@@ -25,7 +25,7 @@ interface ValidationErrors {
 function CreateAgreementPage() {
   const navigate = useNavigate()
   const wallet = useWallet()
-  const toast = useToast()
+  const toast = useToastActions()
   const { invoke, status } = useContractInvoke()
 
   const [agreementId, setAgreementId] = useState<string>('')
@@ -41,15 +41,20 @@ function CreateAgreementPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const validateAddress = (address: string, field: string): string | undefined => {
-    if (!address.trim()) {
-      return `${field} is required`
+    const trimmed = address.trim()
+    if (!trimmed) return `${field} is required`
+
+    if (trimmed.startsWith('C')) {
+      return StrKey.isValidContractKey(trimmed)
+        ? undefined
+        : `${field} must be a valid contract address (starts with C)`
     }
-    
+
     try {
-      StrKey.decodeEd25519PublicKey(address)
+      StrKey.decodeEd25519PublicKey(trimmed)
       return undefined
     } catch {
-      return `Invalid Stellar address for ${field}`
+      return `${field} must be a valid account address (starts with G)`
     }
   }
 

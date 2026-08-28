@@ -2,8 +2,9 @@ import { useRef, useState } from 'react'
 import { nativeToScVal } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
-import useToast from '../hooks/useToast'
+import { useToastActions } from '../hooks/useToast'
 import TransactionStatus from './TransactionStatus'
+import { hexToBytes } from '../lib/format'
 import type { Agreement, Milestone } from '../lib/soroban'
 
 interface MilestoneActionsProps {
@@ -17,12 +18,12 @@ const BASE_FEE = 100_000
 
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
-  const toast = useToast()
+  const toast = useToastActions()
   const { invoke, status, txHash, error, reset } = useContractInvoke()
   const [showProofInput, setShowProofInput] = useState(false)
   const [proofUri, setProofUri] = useState('')
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
+  const [isRetrying, setIsRetrying] = useState(false)
   const pendingAction = useRef<string | null>(null)
 
   const isLoading = status === 'building' || status === 'signing' || status === 'submitting'
@@ -34,7 +35,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'lock_funds'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -57,7 +58,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'submit_work'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -83,7 +84,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'approve_and_release'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -106,7 +107,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
     pendingAction.current = 'raise_dispute'
     try {
-      const idBytes = Buffer.from(agreement.agreement_id, 'hex')
+      const idBytes = hexToBytes(agreement.agreement_id)
       const args = [
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
@@ -124,16 +125,20 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     }
   }
 
-  const handleRetry = () => {
-    if (retryCount >= MAX_RETRIES) return
-    const next = retryCount + 1
-    setRetryCount(next)
-    reset()
-    const adjustedFee = String(Math.round(BASE_FEE * Math.pow(1.1, next)))
-    if (pendingAction.current === 'lock_funds') handleLockFunds(adjustedFee)
-    else if (pendingAction.current === 'submit_work') handleSubmitWork(adjustedFee)
-    else if (pendingAction.current === 'approve_and_release') handleApproveRelease(adjustedFee)
-    else if (pendingAction.current === 'raise_dispute') handleRaiseDispute(adjustedFee)
+  const handleRetry = async () => {
+    if (isRetrying) return
+    setIsRetrying(true)
+    try {
+      reset()
+      if (pendingAction.current === 'lock_funds') await handleLockFunds()
+      else if (pendingAction.current === 'submit_work') await handleSubmitWork()
+      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease()
+      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute()
+    } catch (err) {
+      toast.error({ title: 'Retry failed', message: err instanceof Error ? err.message : 'Unknown error' })
+    } finally {
+      setIsRetrying(false)
+    }
   }
 
   // Determine available actions based on milestone status and user role
@@ -196,8 +201,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         error={error}
         onRetry={handleRetry}
         method={pendingAction.current || ''}
-        retryCount={retryCount}
-        maxRetries={MAX_RETRIES}
+        retrying={isRetrying}
       />
 
       {/* Proof URI Input */}

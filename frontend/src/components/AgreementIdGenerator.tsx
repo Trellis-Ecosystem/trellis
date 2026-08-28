@@ -35,10 +35,7 @@ export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) 
       })
       setQrDataUrl(url)
     } catch {
-      // Fallback: external API if local canvas generation fails
-      setQrDataUrl(
-        `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(newId)}`,
-      )
+      // Local QR generation failed; QR display will be skipped
     }
 
     setShowQR(true)

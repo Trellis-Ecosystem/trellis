@@ -62,6 +62,70 @@ pub struct Config {
     pub source_key: String,
 }
 
+/// Number of characters in a Stellar strkey address (`C…` / `G…` / `S…`),
+/// including the one-character type prefix.
+const STRKEY_LEN: usize = 56;
+
+/// Validate the format of a Stellar contract address (`C…`).
+///
+/// A contract ID is a strkey-encoded value: exactly [`STRKEY_LEN`] characters,
+/// beginning with `C`, containing only RFC 4648 base32 characters (`A`–`Z`,
+/// `2`–`7`). This is a cheap structural check — it does not verify the trailing
+/// CRC16 checksum — but it catches the overwhelmingly common mistakes (a
+/// truncated paste, a stray space, the wrong key type such as an `S…` secret)
+/// before they turn into a confusing failure deep inside the Stellar CLI.
+pub fn validate_contract_id(id: &str) -> Result<(), String> {
+    if !id.starts_with('C') {
+        return Err(format!(
+            "TRELLIS_CONTRACT_ID must be a Stellar contract address starting with 'C' \
+             (e.g. CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ); got {id:?}"
+        ));
+    }
+    if id.len() != STRKEY_LEN {
+        return Err(format!(
+            "TRELLIS_CONTRACT_ID must be exactly {STRKEY_LEN} characters, got {}",
+            id.len()
+        ));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c))
+    {
+        return Err(
+            "TRELLIS_CONTRACT_ID must contain only base32 characters (A-Z, 2-7)".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate that an RPC endpoint URL is well-formed and uses an HTTP(S) scheme.
+///
+/// A typo like `httsp://…` or a bare `soroban-testnet.stellar.org` with no
+/// scheme otherwise surfaces only much later as an opaque connection error.
+/// Both `http` and `https` are accepted so a locally-run RPC
+/// (`http://localhost:8000`) still works; any other scheme (`ftp`, `file`,
+/// `ws`, …) and any URL with an empty host is rejected here with a clear
+/// message.
+pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
+    let parsed =
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "RPC URL scheme must be http or https, got {other:?} (in {raw:?})"
+            ));
+        }
+    }
+
+    if parsed.host_str().map_or(true, str::is_empty) {
+        return Err(format!("RPC URL {raw:?} is missing a host"));
+    }
+
+    Ok(())
+}
+
 impl Config {
     /// Resolve configuration from a `--network` preset plus optional CLI
     /// overrides for RPC URL / passphrase.
@@ -95,8 +159,8 @@ impl Config {
         let contract_id = std::env::var("TRELLIS_CONTRACT_ID")
             .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
 
-        let source_key = std::env::var("TRELLIS_SOURCE_KEY")
-            .unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string());
+        let source_key =
+            std::env::var("TRELLIS_SOURCE_KEY").unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string());
 
         Ok(Config {
             rpc_url,
@@ -112,19 +176,26 @@ impl Config {
     /// at startup before dispatching any command so users see a clear error
     /// instead of a cryptic RPC failure deep in the pipeline.
     pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut missing = Vec::new();
+        let mut errors = Vec::new();
 
         if self.contract_id == "UNSET_CONTRACT_ID" {
-            missing.push("TRELLIS_CONTRACT_ID".to_string());
-        }
-        if self.source_key == "UNSET_SOURCE_KEY" {
-            missing.push("TRELLIS_SOURCE_KEY".to_string());
+            errors.push("TRELLIS_CONTRACT_ID".to_string());
+        } else if let Err(e) = validate_contract_id(&self.contract_id) {
+            errors.push(e);
         }
 
-        if missing.is_empty() {
+        if self.source_key == "UNSET_SOURCE_KEY" {
+            errors.push("TRELLIS_SOURCE_KEY".to_string());
+        }
+
+        if let Err(e) = validate_rpc_url(&self.rpc_url) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
             Ok(())
         } else {
-            Err(missing)
+            Err(errors)
         }
     }
 }
@@ -132,6 +203,11 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A syntactically valid contract address (`C` + 55 base32 chars).
+    fn valid_contract_id() -> String {
+        format!("C{}", "A".repeat(STRKEY_LEN - 1))
+    }
 
     fn config_with(contract_id: &str, source_key: &str) -> Config {
         Config {
@@ -144,7 +220,7 @@ mod tests {
 
     #[test]
     fn validate_passes_when_all_vars_set() {
-        let cfg = config_with("CAABC123", "SABC123");
+        let cfg = config_with(&valid_contract_id(), "SABC123");
         assert!(cfg.validate().is_ok());
     }
 
@@ -158,7 +234,7 @@ mod tests {
 
     #[test]
     fn validate_fails_on_unset_source_key() {
-        let cfg = config_with("CAABC123", "UNSET_SOURCE_KEY");
+        let cfg = config_with(&valid_contract_id(), "UNSET_SOURCE_KEY");
         let err = cfg.validate().unwrap_err();
         assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
         assert!(!err.contains(&"TRELLIS_CONTRACT_ID".to_string()));
@@ -171,5 +247,90 @@ mod tests {
         assert_eq!(err.len(), 2);
         assert!(err.contains(&"TRELLIS_CONTRACT_ID".to_string()));
         assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
+    }
+
+    // --- validate_contract_id (#236) ---
+
+    #[test]
+    fn contract_id_accepts_well_formed_address() {
+        assert!(validate_contract_id(&valid_contract_id()).is_ok());
+        assert!(
+            validate_contract_id("CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn contract_id_rejects_missing_c_prefix() {
+        let err = validate_contract_id(&format!("G{}", "A".repeat(STRKEY_LEN - 1))).unwrap_err();
+        assert!(err.contains("starting with 'C'"), "got: {err}");
+    }
+
+    #[test]
+    fn contract_id_rejects_wrong_length() {
+        assert!(validate_contract_id("CABC123").is_err());
+        assert!(validate_contract_id(&format!("C{}", "A".repeat(STRKEY_LEN))).is_err());
+    }
+
+    #[test]
+    fn contract_id_rejects_non_base32_chars() {
+        // lowercase, `1`, `0`, `8`, `9` and punctuation are outside the alphabet
+        let bad = format!("C{}1", "A".repeat(STRKEY_LEN - 2));
+        assert!(validate_contract_id(&bad).is_err());
+        let spaced = format!("C{} x{}", "A".repeat(26), "A".repeat(STRKEY_LEN - 29));
+        assert!(validate_contract_id(&spaced).is_err());
+    }
+
+    #[test]
+    fn validate_reports_malformed_contract_id() {
+        let cfg = config_with("CBOGUS", "SABC123");
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].contains("TRELLIS_CONTRACT_ID"), "got: {:?}", err);
+    }
+
+    // --- validate_rpc_url (#237) ---
+
+    #[test]
+    fn rpc_url_accepts_https_and_http_localhost() {
+        assert!(validate_rpc_url("https://soroban-testnet.stellar.org").is_ok());
+        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc").is_ok());
+        assert!(validate_rpc_url("http://127.0.0.1:8000").is_ok());
+    }
+
+    #[test]
+    fn rpc_url_rejects_scheme_typo() {
+        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org").unwrap_err();
+        assert!(
+            err.contains("scheme") || err.contains("valid URL"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rpc_url_rejects_missing_scheme() {
+        assert!(validate_rpc_url("soroban-testnet.stellar.org").is_err());
+    }
+
+    #[test]
+    fn rpc_url_rejects_non_http_scheme() {
+        assert!(validate_rpc_url("ftp://example.com").is_err());
+        assert!(validate_rpc_url("ws://example.com").is_err());
+        assert!(validate_rpc_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rpc_url_rejects_empty_host() {
+        assert!(validate_rpc_url("https://").is_err());
+        assert!(validate_rpc_url("http://").is_err());
+    }
+
+    #[test]
+    fn validate_reports_malformed_rpc_url() {
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.rpc_url = "not-a-url".to_string();
+        let err = cfg.validate().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].contains("RPC URL"), "got: {:?}", err);
     }
 }

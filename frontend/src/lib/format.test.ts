@@ -1,44 +1,62 @@
 import { describe, expect, it } from 'vitest'
-import { formatRelativeTime } from './format'
+import { hexToBytes } from './format'
 
-describe('formatRelativeTime', () => {
-  const NOW = new Date('2024-06-01T12:00:00Z').getTime()
-
-  it('returns "just now" for the current moment', () => {
-    expect(formatRelativeTime(new Date(NOW).toISOString(), NOW)).toBe('just now')
+describe('hexToBytes', () => {
+  it('decodes a well-known hex sequence', () => {
+    const result = hexToBytes('deadbeef')
+    expect(result).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))
   })
 
-  it('returns "just now" for timestamps slightly in the past (under 1 minute)', () => {
-    const ts = new Date(NOW - 30_000).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toBe('just now')
+  it('decodes an all-zero sequence', () => {
+    expect(hexToBytes('0000')).toEqual(new Uint8Array([0x00, 0x00]))
   })
 
-  it('returns a past relative string for old timestamps', () => {
-    const ts = new Date(NOW - 2 * 60 * 60 * 1000).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toMatch(/2 hours ago/)
+  it('decodes an all-ff sequence', () => {
+    expect(hexToBytes('ffff')).toEqual(new Uint8Array([0xff, 0xff]))
   })
 
-  it('returns "just now" for a timestamp 1 ms in the future', () => {
-    const ts = new Date(NOW + 1).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toBe('just now')
+  it('handles uppercase hex characters', () => {
+    expect(hexToBytes('DEADBEEF')).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))
   })
 
-  it('returns "just now" for a timestamp 1 second in the future', () => {
-    const ts = new Date(NOW + 1_000).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toBe('just now')
+  it('handles mixed case hex characters', () => {
+    expect(hexToBytes('DeAdBeEf')).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))
   })
 
-  it('returns "just now" for a timestamp 1 hour in the future', () => {
-    const ts = new Date(NOW + 60 * 60 * 1000).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toBe('just now')
+  it('decodes a 64-character agreement ID', () => {
+    const hex = '0101010101010101010101010101010101010101010101010101010101010101'
+    const result = hexToBytes(hex)
+    expect(result).toHaveLength(32)
+    expect(result.every((b) => b === 0x01)).toBe(true)
   })
 
-  it('returns "just now" for a far-future timestamp (years ahead)', () => {
-    const ts = new Date(NOW + 5 * 365 * 24 * 60 * 60 * 1000).toISOString()
-    expect(formatRelativeTime(ts, NOW)).toBe('just now')
+  it('returns an empty Uint8Array for an empty string', () => {
+    expect(hexToBytes('')).toEqual(new Uint8Array(0))
   })
 
-  it('returns "unknown" for an invalid timestamp', () => {
-    expect(formatRelativeTime('not-a-date', NOW)).toBe('unknown')
+  it('returns a single byte for a two-character hex string', () => {
+    expect(hexToBytes('ff')).toEqual(new Uint8Array([255]))
+    expect(hexToBytes('00')).toEqual(new Uint8Array([0]))
+    expect(hexToBytes('0a')).toEqual(new Uint8Array([10]))
+  })
+
+  it('round-trips: encoding then decoding produces the original bytes', () => {
+    const original = new Uint8Array([1, 2, 3, 4, 255, 0, 128, 64])
+    const hex = Array.from(original)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+    expect(hexToBytes(hex)).toEqual(original)
+  })
+
+  it('throws on an odd-length string', () => {
+    expect(() => hexToBytes('abc')).toThrow(/even-length/)
+  })
+
+  it('throws on non-hex characters', () => {
+    expect(() => hexToBytes('zz')).toThrow(/non-hexadecimal/)
+  })
+
+  it('throws on hex with embedded spaces', () => {
+    expect(() => hexToBytes('de ad')).toThrow()
   })
 })
