@@ -26,6 +26,7 @@ use std::process;
 /// Optional variables (Soroban Testnet used as default):
 ///   STELLAR_RPC_URL            — Soroban JSON-RPC endpoint
 ///   STELLAR_NETWORK_PASSPHRASE — Network passphrase for transaction signing
+///   STELLAR_RPC_RETRIES        — Retries for transient RPC failures (default 3; 0 disables)
 #[derive(Parser, Debug)]
 #[command(
     name = "trellis",
