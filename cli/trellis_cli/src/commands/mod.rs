@@ -423,6 +423,7 @@ fn confirm_action(summary: &str, skip: bool) -> Result<(), String> {
 ///   --agreement-id <hex> --payer <G> --payee <G>
 ///   --token <C> --milestones <JSON> --dispute-resolver <G>
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn run_init(
     config: &Config,
     agreement_id: String,
@@ -1227,5 +1228,150 @@ mod tests {
         let stderr = "info: starting\nEvent: transfer occurred\ndone";
         let events = extract_events(stderr);
         assert!(matches!(events, serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- output rendering functions (#241) --------------------------------
+    //
+    // render_raw / render_json / render_human all print to stdout and signal
+    // success/failure through their `Result`. These tests pin the return
+    // contract (what `main` relies on to set the exit code and decide whether
+    // to print a message) and the structure of the JSON envelope.
+
+    fn ok_output(stdout: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            success: true,
+            command_debug: "stellar contract invoke ...".to_string(),
+        }
+    }
+
+    fn fail_output(stdout: &str, stderr: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            success: false,
+            command_debug: "stellar contract invoke --id CAABC -- boom".to_string(),
+        }
+    }
+
+    // --- json_envelope ---
+
+    #[test]
+    fn json_envelope_success_parses_json_stdout() {
+        let env = json_envelope(&ok_output(r#"{"balance":"100"}"#));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"]["balance"], "100");
+        assert_eq!(env["error"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_envelope_success_wraps_non_json_stdout_as_string() {
+        let env = json_envelope(&ok_output("plain text result"));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"], "plain text result");
+    }
+
+    #[test]
+    fn json_envelope_error_uses_stderr_as_message() {
+        let env = json_envelope(&fail_output("", "error: contract not found"));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["result"], serde_json::Value::Null);
+        assert_eq!(env["error"], "error: contract not found");
+    }
+
+    #[test]
+    fn json_envelope_error_falls_back_to_stdout_when_stderr_empty() {
+        let env = json_envelope(&fail_output("stdout failure detail", ""));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["error"], "stdout failure detail");
+    }
+
+    #[test]
+    fn json_envelope_success_extracts_tx_hash_and_events() {
+        let hash = "a".repeat(64);
+        let mut out = ok_output("{}");
+        out.stderr = format!("submitted {hash}\nevent: Transfer");
+        let env = json_envelope(&out);
+        assert_eq!(env["tx_hash"], hash);
+        assert!(matches!(env["events"], serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- render_raw ---
+
+    #[test]
+    fn render_raw_ok_on_success() {
+        assert!(render_raw(&ok_output("done")).is_ok());
+    }
+
+    #[test]
+    fn render_raw_err_includes_command_and_streams_on_failure() {
+        let err = render_raw(&fail_output("some stdout", "some stderr")).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+        assert!(err.contains("stellar contract invoke --id CAABC -- boom"));
+        assert!(err.contains("some stdout"));
+        assert!(err.contains("some stderr"));
+    }
+
+    // --- render_json ---
+
+    #[test]
+    fn render_json_ok_on_success() {
+        assert!(render_json(&ok_output("{}")).is_ok());
+    }
+
+    #[test]
+    fn render_json_returns_empty_err_on_failure() {
+        // Empty message => main() exits non-zero without printing again
+        // (the detail is already in the JSON envelope on stdout). This is
+        // what "--quiet suppresses non-error output" relies on.
+        let err = render_json(&fail_output("", "boom")).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    // --- render_human ---
+
+    #[test]
+    fn render_human_ok_on_success() {
+        assert!(render_human(&ok_output(r#"{"k":"v"}"#)).is_ok());
+    }
+
+    #[test]
+    fn render_human_returns_empty_err_on_failure() {
+        assert_eq!(render_human(&fail_output("", "boom")).unwrap_err(), "");
+    }
+
+    #[test]
+    fn render_human_handles_non_json_stdout_without_error() {
+        assert!(render_human(&ok_output("not json at all")).is_ok());
+    }
+
+    // --- render_output dispatch ---
+
+    fn opts(format: OutputFormat) -> OutputOpts {
+        OutputOpts {
+            format,
+            quiet: false,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn render_output_raw_failure_bubbles_detailed_message() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Raw)).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+    }
+
+    #[test]
+    fn render_output_json_failure_is_silent_err() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Json)).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn render_output_all_formats_ok_on_success() {
+        for f in [OutputFormat::Raw, OutputFormat::Json, OutputFormat::Human] {
+            assert!(render_output(&ok_output("{}"), &opts(f)).is_ok(), "{f:?}");
+        }
     }
 }

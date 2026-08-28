@@ -134,10 +134,17 @@ impl Config {
     /// `Network::Custom` has no preset, so it requires the RPC URL and
     /// passphrase to come from a CLI flag or env var — returns `Err` naming
     /// whichever is still missing.
+    ///
+    /// The source key is resolved with the same priority, reading from a file
+    /// first so a raw `S…` secret seed never has to be placed in an
+    /// environment variable that leaks into `/proc/<pid>/environ` or shell
+    /// history (see #240):
+    ///   `--source-key-file` > `TRELLIS_SOURCE_KEY_FILE` > `TRELLIS_SOURCE_KEY`.
     pub fn resolve(
         network: Network,
         cli_rpc_url: Option<String>,
         cli_network_passphrase: Option<String>,
+        cli_source_key_file: Option<String>,
     ) -> Result<Self, String> {
         let preset = network.preset();
 
@@ -198,6 +205,31 @@ impl Config {
             Err(errors)
         }
     }
+}
+
+/// Read a source key from `path`, trimming surrounding whitespace / newlines.
+///
+/// Keeping the secret in a file (ideally mode `0600`) instead of an argv
+/// entry or exported env var is the mitigation for #240: file contents are
+/// never visible in `ps` output.
+fn read_source_key_file(path: &str) -> Result<String, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("Error: cannot read --source-key-file {path:?}: {e}"))?;
+    let key = raw.trim().to_string();
+    if key.is_empty() {
+        return Err(format!("Error: --source-key-file {path:?} is empty"));
+    }
+    Ok(key)
+}
+
+/// True when `s` looks like a Stellar strkey secret seed (`S…`, 56 base32
+/// chars). Such values must never be passed on a command line — see
+/// `crate::rpc` and #240.
+pub fn is_secret_seed(s: &str) -> bool {
+    s.len() == 56
+        && s.starts_with('S')
+        && s.bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
 #[cfg(test)]
