@@ -12,6 +12,11 @@ export interface AgreementEvent {
   milestoneId?: number
   amount?: string
   caller?: string
+  payer?: string
+  payee?: string
+  proofUri?: string
+  refundedToPayer?: boolean
+  cancelledBy?: string
 }
 
 const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
@@ -219,7 +224,9 @@ function parseEventType(event: any): string {
     if (topics.length > 0) {
       const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
       if (firstTopic.switch().name === 'scvSymbol') {
-        return firstTopic.sym().toString()
+        const symbol = firstTopic.sym().toString()
+        // Map abbreviated symbols to human-readable names
+        return EVENT_TYPE_MAP[symbol] || symbol
       }
     }
   } catch {
@@ -228,17 +235,204 @@ function parseEventType(event: any): string {
   return 'unknown'
 }
 
+/**
+ * Map event type symbols to human-readable names.
+ * Symbols are abbreviated to fit in 9 characters per contract/events.rs.
+ */
+const EVENT_TYPE_MAP: Record<string, string> = {
+  trlls_crte: 'agreement_created',
+  trlls_lckd: 'funds_locked',
+  trlls_sbmt: 'work_submitted',
+  trlls_rlsd: 'funds_released',
+  trlls_dspt: 'dispute_raised',
+  trlls_rslv: 'milestone_resolved',
+  trlls_cncl: 'milestone_cancelled',
+  trlls_ttle: 'ttl_extended',
+}
+
+/**
+ * Convert a Soroban Address ScVal to its string representation (account ID).
+ */
+function scValToAddress(scVal: any): string {
+  try {
+    if (scVal.switch().name === 'scvAddress') {
+      const addr = scVal.address()
+      if (addr.switch().name === 'accountId') {
+        return addr.accountId().accountId().toString('hex')
+      }
+      if (addr.switch().name === 'contractId') {
+        return addr.contractId().toString('hex')
+      }
+    }
+  } catch {
+    // Fallback
+  }
+  return ''
+}
+
+/**
+ * Extract a u32 value from a Soroban ScVal.
+ */
+function scValToU32(scVal: any): number {
+  try {
+    if (scVal.switch().name === 'scvU32') {
+      return scVal.u32().toNumber()
+    }
+  } catch {
+    // Fallback
+  }
+  return 0
+}
+
+/**
+ * Extract an i128 value from a Soroban ScVal.
+ */
+function scValToI128(scVal: any): string {
+  try {
+    if (scVal.switch().name === 'scvI128') {
+      const hi = scVal.i128().hi().toNumber()
+      const lo = scVal.i128().lo().toNumber()
+      // Reconstruct the i128 as a bigint for accurate representation
+      const value = BigInt(hi) * BigInt(Math.pow(2, 64)) + BigInt(lo)
+      return value.toString()
+    }
+  } catch {
+    // Fallback
+  }
+  return '0'
+}
+
+/**
+ * Extract a boolean value from a Soroban ScVal.
+ */
+function scValToBool(scVal: any): boolean {
+  try {
+    if (scVal.switch().name === 'scvBool') {
+      return scVal.b()
+    }
+  } catch {
+    // Fallback
+  }
+  return false
+}
+
+/**
+ * Extract a string value from a Soroban ScVal (Option<String>).
+ */
+function scValToOptionalString(scVal: any): string | undefined {
+  try {
+    if (scVal.switch().name === 'scvOption') {
+      const optVal = scVal.opt()
+      if (optVal === null) {
+        return undefined
+      }
+      if (optVal.switch().name === 'scvString') {
+        return optVal.str().toString()
+      }
+    }
+  } catch {
+    // Fallback
+  }
+  return undefined
+}
+
+/**
+ * Parse event data payload based on the event type.
+ * Event data is an XDR-encoded tuple with fields specific to each event type.
+ *
+ * Based on contract/events.rs schema:
+ *   1. "trlls_crte" (agreement_created) → (payer: Address, payee: Address)
+ *   2. "trlls_lckd" (funds_locked) → (milestone_id: u32, amount: i128)
+ *   3. "trlls_sbmt" (work_submitted) → (milestone_id: u32, proof_uri: Option<String>)
+ *   4. "trlls_rlsd" (funds_released) → (milestone_id: u32, amount: i128)
+ *   5. "trlls_dspt" (dispute_raised) → (milestone_id: u32, caller: Address)
+ *   6. "trlls_rslv" (milestone_resolved) → (milestone_id: u32, refunded_to_payer: bool)
+ *   7. "trlls_cncl" (milestone_cancelled) → (milestone_id: u32, payer: Address, cancelled_by: Address)
+ *   8. "trlls_ttle" (ttl_extended) → (caller: Address)
+ */
 function parseEventData(event: any): Partial<AgreementEvent> {
   try {
     const value = event.value?.xdr
     if (!value) return {}
 
+    // Get the event type from topics
+    const topics = event.topic || []
+    let eventTypeSymbol = 'unknown'
+    if (topics.length > 0) {
+      try {
+        const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
+        if (firstTopic.switch().name === 'scvSymbol') {
+          eventTypeSymbol = firstTopic.sym().toString()
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
     const scVal = xdr.ScVal.fromXDR(value, 'base64')
-    
-    // Parse common fields from event data structure
-    // This is simplified - actual parsing depends on contract event schema
-    return {}
-  } catch {
+
+    // Event data is always a tuple; extract elements
+    if (scVal.switch().name !== 'scvVec') {
+      return {}
+    }
+
+    const elements = scVal.vec() || []
+
+    // Parse based on event type
+    switch (eventTypeSymbol) {
+      case 'trlls_crte': // agreement_created (payer, payee)
+        return {
+          payer: scValToAddress(elements[0]),
+          payee: scValToAddress(elements[1]),
+        }
+
+      case 'trlls_lckd': // funds_locked (milestone_id, amount)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          amount: scValToI128(elements[1]),
+        }
+
+      case 'trlls_sbmt': // work_submitted (milestone_id, proof_uri)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          proofUri: scValToOptionalString(elements[1]),
+        }
+
+      case 'trlls_rlsd': // funds_released (milestone_id, amount)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          amount: scValToI128(elements[1]),
+        }
+
+      case 'trlls_dspt': // dispute_raised (milestone_id, caller)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          caller: scValToAddress(elements[1]),
+        }
+
+      case 'trlls_rslv': // milestone_resolved (milestone_id, refunded_to_payer)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          refundedToPayer: scValToBool(elements[1]),
+        }
+
+      case 'trlls_cncl': // milestone_cancelled (milestone_id, payer, cancelled_by)
+        return {
+          milestoneId: scValToU32(elements[0]),
+          payer: scValToAddress(elements[1]),
+          cancelledBy: scValToAddress(elements[2]),
+        }
+
+      case 'trlls_ttle': // ttl_extended (caller)
+        return {
+          caller: scValToAddress(elements[0]),
+        }
+
+      default:
+        return {}
+    }
+  } catch (err) {
+    console.warn('[useAgreementEvents] Failed to parse event data:', err)
     return {}
   }
 }
