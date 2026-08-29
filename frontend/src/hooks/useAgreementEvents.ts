@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
 import { hexToBytes } from '../lib/format'
+import type { RawEventResponse } from '../lib/soroban'
+import { isValidEventResponse } from '../lib/soroban'
 
 export interface AgreementEvent {
   type: string
@@ -107,21 +109,23 @@ export function useAgreementEvents(agreementId: string | null) {
           throw new Error(json.error.message)
         }
 
-        const rawEvents = json.result?.events || []
+        const rawEvents: unknown[] = json.result?.events || []
 
-        const parsed: AgreementEvent[] = rawEvents.map((e: any) => {
-          const eventType = parseEventType(e)
-          const eventData = parseEventData(e)
+        const parsed: AgreementEvent[] = rawEvents
+          .filter(isValidEventResponse)
+          .map((e: RawEventResponse) => {
+            const eventType = parseEventType(e)
+            const eventData = parseEventData(e)
 
-          return {
-            type: eventType,
-            ledger: e.ledger || 0,
-            txHash: e.txHash || '',
-            timestamp: e.ledgerClosedAt || new Date().toISOString(),
-            agreementId,
-            ...eventData,
-          }
-        })
+            return {
+              type: eventType,
+              ledger: e.ledger || 0,
+              txHash: e.txHash || '',
+              timestamp: e.ledgerClosedAt || new Date().toISOString(),
+              agreementId,
+              ...eventData,
+            }
+          })
 
         // Sort by ledger descending (newest first)
         parsed.sort((a, b) => b.ledger - a.ledger)
@@ -213,28 +217,30 @@ export function useAgreementEvents(agreementId: string | null) {
   return { events, isLoading, error, refetch }
 }
 
-function parseEventType(event: any): string {
+function parseEventType(event: RawEventResponse): string {
   try {
     const topics = event.topic || []
-    if (topics.length > 0) {
+    if (topics.length > 0 && typeof topics[0] === 'string') {
       const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
       if (firstTopic.switch().name === 'scvSymbol') {
         return firstTopic.sym().toString()
       }
     }
   } catch {
-    // Fallback
+    // Fallback to unknown
   }
   return 'unknown'
 }
 
-function parseEventData(event: any): Partial<AgreementEvent> {
+function parseEventData(event: RawEventResponse): Partial<AgreementEvent> {
   try {
     const value = event.value?.xdr
-    if (!value) return {}
+    if (!value || typeof value !== 'string') {
+      return {}
+    }
 
     const scVal = xdr.ScVal.fromXDR(value, 'base64')
-    
+
     // Parse common fields from event data structure
     // This is simplified - actual parsing depends on contract event schema
     return {}

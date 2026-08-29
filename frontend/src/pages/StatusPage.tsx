@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import type { Agreement, SorobanEvent } from '../lib/soroban';
-import { sorobanServer } from '../lib/soroban';
+import type { Agreement, SorobanEvent, RawEventResponse } from '../lib/soroban';
+import { sorobanServer, isValidEventResponse } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
 import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
@@ -227,13 +227,16 @@ async function queryEvents(): Promise<SorobanEvent[]> {
       ],
     });
 
-    return (events.events || []).map((event: any) => ({
-      type: 'event',
-      ledger: event.ledger,
-      txHash: event.txHash,
-      timestamp: Date.now(),
-      data: {},
-    }));
+    const rawEvents: unknown[] = events.events || [];
+    return rawEvents
+      .filter(isValidEventResponse)
+      .map((event: RawEventResponse) => ({
+        type: 'event',
+        ledger: event.ledger || 0,
+        txHash: event.txHash || '',
+        timestamp: Date.now(),
+        data: {},
+      }));
   } catch (error) {
     console.error('Failed to fetch events:', error);
     return [];
