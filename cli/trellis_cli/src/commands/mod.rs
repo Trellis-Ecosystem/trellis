@@ -803,6 +803,22 @@ fn run_milestone_status(
 /// Convert a comma-separated amount string like `"1000,2000"` into the JSON
 /// array format the `stellar` CLI accepts for a `Vec<Milestone>` argument.
 ///
+/// ## Accepted CSV format
+///
+/// - One or more amounts separated by a single `,`.
+/// - Surrounding whitespace around each amount is trimmed, so
+///   `" 100 , 200 "` and `"100,200"` are equivalent.
+/// - Every field between commas must be a non-empty, positive `i128`.
+///
+/// ## Rejected (whole command fails with a descriptive error)
+///
+/// - Empty / whitespace-only input.
+/// - A leading comma (`",1000"`), trailing comma (`"1000,"`), or doubled
+///   comma (`"1000,,2000"`) — each leaves an empty field. These are treated
+///   as user typos rather than silently dropped, so a mistyped list can never
+///   quietly create fewer milestones than intended (#238).
+/// - Any field that is not a valid integer, is zero, or is negative.
+///
 /// Amounts are parsed as `i128` to match the contract's `Milestone.amount` type.
 /// Values that are not valid integers, are zero, or are negative are rejected
 /// with a descriptive error — the entire command fails rather than silently
@@ -1172,6 +1188,66 @@ mod tests {
         let err = build_milestones_json("1000,,2000").unwrap_err();
         assert!(
             err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    // --- build_milestones_json: comma + whitespace edge cases (#248) ---
+
+    #[test]
+    fn test_build_milestones_json_trailing_comma_with_space_rejected() {
+        // A trailing ", " (comma then whitespace) still produces an empty field.
+        let err = build_milestones_json("1000,2000, ").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_leading_comma_with_space_rejected() {
+        let err = build_milestones_json(" ,1000,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_whitespace_only_field_rejected() {
+        // A field that is nothing but spaces/tabs between two commas.
+        let err = build_milestones_json("1000, \t ,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_multiple_trailing_commas_rejected() {
+        let err = build_milestones_json("1000,2000,,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_mixed_tabs_and_newlines_trimmed() {
+        // Mixed whitespace (tabs, newlines, spaces) around otherwise valid
+        // amounts is tolerated and stripped.
+        let json = build_milestones_json("\t1000 ,\n 2000\t,  500\n").unwrap();
+        assert_eq!(
+            json,
+            r#"[{"id":0,"amount":"1000","status":{"Pending":null},"proof_uri":null},{"id":1,"amount":"2000","status":{"Pending":null},"proof_uri":null},{"id":2,"amount":"500","status":{"Pending":null},"proof_uri":null}]"#
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_only_commas_rejected() {
+        let err = build_milestones_json(",,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
             "got: {err}"
         );
     }
