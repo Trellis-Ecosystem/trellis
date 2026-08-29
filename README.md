@@ -114,6 +114,8 @@
 
 [![Contract CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml)
 [![Frontend CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml)
+[![npm audit](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml)
+[![CodeQL](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)]()
 [![Soroban](https://img.shields.io/badge/soroban-sdk%2022.x-blue)]()
 [![Deployed](https://img.shields.io/badge/testnet-live-success)]()
@@ -557,6 +559,16 @@ cargo audit           # RustSec advisory database check
 Policy lives in [`deny.toml`](./deny.toml) at the repository root. A new
 RustSec advisory against any dependency (direct or transitive) fails the
 build.
+
+Frontend npm dependencies are scanned by `npm audit` in CI
+(`.github/workflows/npm-audit.yml`) — run it locally with:
+
+```bash
+cd frontend
+npm audit --audit-level=high
+```
+
+Known false positives are documented in [`frontend/.audit-allowlist.json`](./frontend/.audit-allowlist.json).
 
 ### Building the contract WASM
 
