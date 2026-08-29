@@ -153,6 +153,31 @@ describe('auto-eviction', () => {
     expect(entries[0].agreementId).toBe('fresh')
   })
 
+  it('preserves entries with invalid lastViewed dates instead of silently evicting', () => {
+    const freshDate = new Date().toISOString()
+
+    setRawStorage([
+      { agreementId: 'invalid-date', lastViewed: 'not-a-valid-date' },
+      { agreementId: 'valid-date', lastViewed: freshDate },
+    ])
+
+    const entries = getHistory()
+    expect(entries).toHaveLength(2)
+    expect(entries.some((e) => e.agreementId === 'invalid-date')).toBe(true)
+    expect(entries.some((e) => e.agreementId === 'valid-date')).toBe(true)
+  })
+
+  it('preserves multiple entries with invalid dates', () => {
+    setRawStorage([
+      { agreementId: 'invalid-1', lastViewed: 'bad-date-1' },
+      { agreementId: 'invalid-2', lastViewed: 'bad-date-2' },
+      { agreementId: 'valid', lastViewed: new Date().toISOString() },
+    ])
+
+    const entries = getHistory()
+    expect(entries).toHaveLength(3)
+  })
+
   it('does not throw when localStorage is full (5 MB limit)', () => {
     const originalSetItem = localStorage.setItem.bind(localStorage)
     localStorage.setItem = () => {
