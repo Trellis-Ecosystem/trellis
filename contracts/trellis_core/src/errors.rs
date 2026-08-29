@@ -12,8 +12,11 @@ use soroban_sdk::contracterror;
 /// end.  While the protocol is pre-release (no mainnet deployment yet) the
 /// numbering is still being compacted — variant `6` (`NotDisputeResolver`)
 /// was removed because no codepath could ever return it, and `NoFundsToRefund`
-/// was renumbered from `7` to `6` to close the gap.  SDK consumers pinned to
-/// the old numbering must regenerate their bindings.
+/// was renumbered from `7` to `6` to close the gap. `NoFundsToRefund` (then
+/// discriminant `6`) was itself later removed for the same reason: no
+/// codepath ever returned it. Discriminant `6` is left vacant rather than
+/// reused, per the append-only rule above. SDK consumers pinned to the old
+/// numbering must regenerate their bindings.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -36,16 +39,12 @@ pub enum TrellisError {
     /// e.g. attempting to release funds before work has been submitted.
     InvalidStateTransition = 5,
 
-    /// Reserved for a genuine "nothing to refund" economic condition.
-    ///
-    /// No codepath currently returns this: `cancel_unfunded_milestone` only
-    /// ever runs while a milestone still holds no funds, so calling it on a
-    /// milestone that has left `Pending` is a state machine violation
-    /// ([`TrellisError::InvalidStateTransition`]), not an economic one. Kept
-    /// as a distinct variant — rather than removed like the former
-    /// `NotDisputeResolver` — in case a future refund-eligible path needs to
-    /// distinguish "no funds exist" from "wrong state" at the ABI level.
-    NoFundsToRefund = 6,
+    // Discriminant 6 vacant — formerly `NoFundsToRefund`, removed as
+    // dead code: no codepath ever returned it. `cancel_unfunded_milestone`
+    // only ever runs while a milestone still holds no funds, so calling it
+    // on a milestone that has left `Pending` is a state machine violation
+    // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
+    // one. Left vacant rather than reused, per the append-only rule above.
 
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently

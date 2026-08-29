@@ -4,6 +4,7 @@ import { CONTRACT_ID } from '../lib/config'
 import { ACTIVE_NETWORK, explorerBaseUrl, networkLabel } from '../lib/explorer'
 import { ExplorerLink } from './ExplorerLink'
 import WalletConnect from './WalletConnect'
+import { WalletErrorBoundary } from './WalletErrorBoundary'
 import MoonIcon from './icons/MoonIcon'
 import SunIcon from './icons/SunIcon'
 
@@ -97,7 +98,9 @@ function Navbar() {
             <SunIcon className="w-5 h-5" />
           )}
         </button>
-        <WalletConnect />
+        <WalletErrorBoundary>
+          <WalletConnect />
+        </WalletErrorBoundary>
       </div>
     </nav>
   );
