@@ -8,6 +8,7 @@ on:
       - 'cli/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/contract-ci.yml'
   pull_request:
     branches: [master, main]
@@ -16,6 +17,7 @@ on:
       - 'cli/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/contract-ci.yml'
   workflow_dispatch:
 
@@ -51,12 +53,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
-
+      # rust-toolchain.toml at the repo root pins the exact compiler version,
+      # wasm32-unknown-unknown target, rustfmt, and clippy.  rustup reads the
+      # file automatically, so no separate toolchain-install step is needed.
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 
