@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Agreement, SorobanEvent } from '../lib/soroban';
 import { sorobanServer } from '../lib/soroban';
-import { useWallet } from '../lib/useWallet';
+import { useWallet } from '../context/WalletContext';
 import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
 import { isValidHexAgreementId } from '../lib/agreementId';
