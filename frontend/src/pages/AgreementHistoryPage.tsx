@@ -56,14 +56,14 @@ function AgreementHistoryPage() {
               <button
                 type="button"
                 onClick={handleClearAll}
-                className="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white dark:text-white light:text-gray-900 transition-colors hover:bg-red-400"
+                className="min-h-[44px] rounded-lg bg-red-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-400"
               >
                 Confirm
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmingClear(false)}
-                className="rounded-lg border border-navy-700 dark:border-navy-700 light:border-gray-200 px-3 py-2 text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 transition-colors hover:text-gray-200 dark:hover:text-gray-200 light:hover:text-gray-700"
+                className="min-h-[44px] rounded-lg border border-navy-700 px-4 text-sm text-gray-400 transition-colors hover:text-gray-200"
               >
                 Cancel
               </button>
@@ -72,7 +72,7 @@ function AgreementHistoryPage() {
             <button
               type="button"
               onClick={() => setConfirmingClear(true)}
-              className="shrink-0 rounded-lg border border-navy-700 dark:border-navy-700 light:border-gray-200 px-3 py-2 text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 transition-colors hover:border-red-400/40 hover:text-red-400"
+              className="min-h-[44px] shrink-0 rounded-lg border border-navy-700 px-4 text-sm text-gray-400 transition-colors hover:border-red-400/40 hover:text-red-400"
             >
               Clear All
             </button>
@@ -124,14 +124,14 @@ function AgreementHistoryPage() {
               <div className="mt-4 flex shrink-0 gap-2 sm:mt-0">
                 <Link
                   to={`/agreement/${entry.agreementId}`}
-                  className="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-navy-900 transition-colors hover:bg-cyan-300"
+                  className="min-h-[44px] flex items-center rounded-lg bg-cyan-400 px-4 text-sm font-semibold text-navy-900 transition-colors hover:bg-cyan-300"
                 >
                   View
                 </Link>
                 <button
                   type="button"
                   onClick={() => handleRemove(entry.agreementId)}
-                  className="rounded-lg border border-navy-700 dark:border-navy-700 light:border-gray-200 px-4 py-2 text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 transition-colors hover:border-red-400/40 hover:text-red-400"
+                  className="min-h-[44px] rounded-lg border border-navy-700 px-4 text-sm text-gray-400 transition-colors hover:border-red-400/40 hover:text-red-400"
                 >
                   Remove
                 </button>

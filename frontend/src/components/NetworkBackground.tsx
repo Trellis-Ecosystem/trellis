@@ -297,6 +297,8 @@ export function NetworkBackground() {
       ref={canvasRef}
       className="absolute inset-0 z-0"
       style={{ display: 'block' }}
+      aria-hidden="true"
+      role="presentation"
     />
   )
 }

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
-import { WalletProvider } from './WalletContext'
+import { WalletProvider, useWallet } from './WalletContext'
 
 vi.mock('../lib/wallet', () => ({
   isFreighterInstalled: vi.fn().mockResolvedValue(false),
@@ -16,7 +16,7 @@ vi.mock('../lib/config', () => ({
   RPC_URL: 'https://rpc.test',
 }))
 
-describe('WalletProvider polling cleanup', () => {
+describe('WalletProvider', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     localStorage.clear()
@@ -24,6 +24,32 @@ describe('WalletProvider polling cleanup', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('provides wallet context values', () => {
+    let contextValue: any = null
+
+    function TestComponent() {
+      contextValue = useWallet()
+      return null
+    }
+
+    render(
+      <WalletProvider>
+        <TestComponent />
+      </WalletProvider>
+    )
+
+    expect(contextValue).toBeDefined()
+    expect(contextValue).toHaveProperty('status')
+    expect(contextValue).toHaveProperty('publicKey')
+    expect(contextValue).toHaveProperty('connected')
+    expect(contextValue).toHaveProperty('wrongNetwork')
+    expect(contextValue).toHaveProperty('error')
+    expect(contextValue).toHaveProperty('connect')
+    expect(contextValue).toHaveProperty('disconnect')
+    expect(contextValue).toHaveProperty('clearError')
+    expect(contextValue).toHaveProperty('recheckInstall')
   })
 
   it('clears polling interval when component unmounts', async () => {
@@ -56,5 +82,64 @@ describe('WalletProvider polling cleanup', () => {
         unmount()
       }
     }).not.toThrow()
+  })
+
+  it('initializes with detecting status', () => {
+    let contextValue: any = null
+
+    function TestComponent() {
+      contextValue = useWallet()
+      return null
+    }
+
+    render(
+      <WalletProvider>
+        <TestComponent />
+      </WalletProvider>
+    )
+
+    expect(contextValue.status).toBe('detecting')
+  })
+
+  it('handles disconnection gracefully', async () => {
+    let contextValue: any = null
+
+    function TestComponent() {
+      contextValue = useWallet()
+      return null
+    }
+
+    const { rerender } = render(
+      <WalletProvider>
+        <TestComponent />
+      </WalletProvider>
+    )
+
+    await act(async () => {
+      contextValue.disconnect()
+    })
+
+    expect(contextValue.connected).toBe(false)
+  })
+
+  it('clears errors with clearError function', async () => {
+    let contextValue: any = null
+
+    function TestComponent() {
+      contextValue = useWallet()
+      return null
+    }
+
+    render(
+      <WalletProvider>
+        <TestComponent />
+      </WalletProvider>
+    )
+
+    await act(async () => {
+      contextValue.clearError()
+    })
+
+    expect(contextValue.error).toBeNull()
   })
 })

@@ -259,21 +259,54 @@ impl RpcClient {
 /// U+FFFD, which can erase the very error detail a caller needs to debug a
 /// non-UTF-8 failure. This tries strict UTF-8 first; on failure it falls
 /// back to Latin-1 (ISO-8859-1), a direct byte→codepoint mapping that never
-/// fails and preserves every original byte, and logs a warning to stderr so
-/// the user knows the output was not clean UTF-8.
+/// fails and preserves every original byte, and logs a warning to stderr
+/// (including a hex preview of the raw bytes) so the user still has the
+/// original context even though the string could not be decoded cleanly.
 fn decode_process_output(label: &str, bytes: Vec<u8>) -> String {
-    match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            let bytes = e.into_bytes();
-            eprintln!(
-                "warning: stellar CLI {label} was not valid UTF-8 ({} bytes); \
-                 decoding as Latin-1 — output may not render correctly",
-                bytes.len()
-            );
-            bytes.iter().map(|&b| b as char).collect()
-        }
+    let (decoded, fell_back) = decode_bytes(&bytes);
+    if let Some(first_bad) = fell_back {
+        eprintln!(
+            "warning: stellar CLI {label} was not valid UTF-8 ({} bytes, first \
+             invalid byte at offset {first_bad}); decoded as Latin-1 — output \
+             may not render correctly. Raw bytes (hex): {}",
+            bytes.len(),
+            hex_preview(&bytes),
+        );
     }
+    decoded
+}
+
+/// Decode `bytes` as UTF-8, falling back to a lossless Latin-1 mapping.
+///
+/// Returns the decoded string and, when the Latin-1 fallback was used, the
+/// byte offset of the first invalid UTF-8 sequence (so callers can point at
+/// exactly where the stream stopped being valid UTF-8).
+fn decode_bytes(bytes: &[u8]) -> (String, Option<usize>) {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => (s.to_string(), None),
+        Err(e) => (
+            // Latin-1: every byte maps 1:1 to U+0000..=U+00FF, so no byte is
+            // ever lost and the original stream can be recovered.
+            bytes.iter().map(|&b| b as char).collect(),
+            Some(e.valid_up_to()),
+        ),
+    }
+}
+
+/// Render up to the first 64 bytes of `bytes` as space-separated hex, so a
+/// non-UTF-8 stream still leaves a reproducible trace in the warning.
+fn hex_preview(bytes: &[u8]) -> String {
+    const MAX: usize = 64;
+    let mut out = bytes
+        .iter()
+        .take(MAX)
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if bytes.len() > MAX {
+        out.push_str(&format!(" … (+{} more)", bytes.len() - MAX));
+    }
+    out
 }
 
 /// Return true when stderr content indicates a transient, retriable RPC error.
@@ -281,25 +314,40 @@ fn decode_process_output(label: &str, bytes: Vec<u8>) -> String {
 /// Matches common patterns from Stellar RPC responses, HTTP errors, and
 /// OS-level network failures. Contract-level errors (e.g. "contract not found",
 /// "invalid argument") do not match and will not be retried.
+///
+/// Patterns are deliberately specific. A bare `"network"` substring, for
+/// example, also matches the *permanent* error "network passphrase mismatch",
+/// which would send the CLI into an endless retry loop (issue #249). Each entry
+/// below is an exact phrase that only appears in genuinely transient failures;
+/// add a negative test to `non_transient_*` whenever a new pattern is added.
 fn is_transient_error(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
-    lower.contains("timeout")
-        || lower.contains("timed out")
-        || lower.contains("connection refused")
-        || lower.contains("connection reset")
-        || lower.contains("connection closed")
-        || lower.contains("network")
-        || lower.contains("rate limit")
-        || lower.contains("too many requests")
-        || lower.contains("service unavailable")
-        || lower.contains("bad gateway")
-        || lower.contains("deadline")
-        || lower.contains("unreachable")
-        || lower.contains("temporary")
-        || lower.contains(" 429")
-        || lower.contains(" 502")
-        || lower.contains(" 503")
-        || lower.contains(" 504")
+    const TRANSIENT_PATTERNS: &[&str] = &[
+        "timeout",
+        "timed out",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "connection error",
+        "network error",
+        "network timeout",
+        "network is unreachable",
+        "network is down",
+        "temporary failure in name resolution",
+        "rate limit",
+        "too many requests",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "deadline exceeded",
+        "host unreachable",
+        "no route to host",
+        " 429",
+        " 502",
+        " 503",
+        " 504",
+    ];
+    TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
 /// Compute a 0–199 ms jitter value from the subsecond part of the system clock.
@@ -360,6 +408,85 @@ mod tests {
     #[test]
     fn non_transient_empty_stderr_not_retried() {
         assert!(!is_transient_error(""));
+    }
+
+    /// #249: permanent errors that merely *contain* a transient-looking word
+    /// (most notably "network") must never trigger a retry.
+    #[test]
+    fn non_transient_network_config_errors_not_retried() {
+        assert!(!is_transient_error(
+            "error: network passphrase mismatch: expected 'Test SDF Network ; September 2015'"
+        ));
+        assert!(!is_transient_error("unknown network 'testnet'"));
+        assert!(!is_transient_error("no network configured; run `stellar network add`"));
+        assert!(!is_transient_error("network name contains invalid characters"));
+        // "deadline" / "temporary" / "unreachable" as bare words in an
+        // unrelated message are no longer enough on their own.
+        assert!(!is_transient_error("filing deadline for the proposal has passed"));
+        assert!(!is_transient_error("temporary directory could not be created"));
+    }
+
+    #[test]
+    fn transient_detects_network_failure_phrases() {
+        assert!(is_transient_error("network error: could not reach RPC endpoint"));
+        assert!(is_transient_error("Os error: network is unreachable (os error 101)"));
+        assert!(is_transient_error("dns lookup failed: Temporary failure in name resolution"));
+        assert!(is_transient_error("504 Gateway Timeout"));
+        assert!(is_transient_error("grpc status: deadline exceeded"));
+    }
+
+    // --- decode_process_output / decode_bytes ---
+
+    #[test]
+    fn decode_bytes_passes_through_valid_utf8() {
+        let (s, fell_back) = decode_bytes("héllo — 世界".as_bytes());
+        assert_eq!(s, "héllo — 世界");
+        assert_eq!(fell_back, None);
+    }
+
+    #[test]
+    fn decode_bytes_falls_back_to_latin1_on_invalid_utf8() {
+        // 0xE9 is "é" in Latin-1 but an incomplete UTF-8 lead byte here.
+        let raw = b"caf\xE9 not utf8";
+        let (s, fell_back) = decode_bytes(raw);
+        assert_eq!(s, "café not utf8");
+        assert_eq!(fell_back, Some(3), "first invalid byte is at offset 3");
+        // Every original byte is still recoverable from the decoded string.
+        assert_eq!(s.chars().count(), raw.len());
+    }
+
+    #[test]
+    fn decode_bytes_handles_mixed_valid_and_invalid_sequences() {
+        // Valid multi-byte UTF-8 ("→", 0xE2 0x86 0x92) followed by a lone 0xFF.
+        let raw = b"ok \xE2\x86\x92 then \xFF end";
+        let (s, fell_back) = decode_bytes(raw);
+        assert_eq!(fell_back, Some(3));
+        assert!(s.starts_with("ok "));
+        assert!(s.ends_with(" end"));
+        assert_eq!(s.chars().count(), raw.len());
+    }
+
+    #[test]
+    fn decode_process_output_returns_clean_string_for_valid_utf8() {
+        assert_eq!(
+            decode_process_output("stdout", "all good".as_bytes().to_vec()),
+            "all good"
+        );
+    }
+
+    #[test]
+    fn decode_process_output_still_returns_bytes_on_fallback() {
+        let out = decode_process_output("stderr", b"bad \xC0\xC0 byte".to_vec());
+        assert!(out.contains("bad "));
+        assert!(out.contains(" byte"));
+    }
+
+    #[test]
+    fn hex_preview_formats_and_truncates() {
+        assert_eq!(hex_preview(&[0x00, 0x1f, 0xff]), "00 1f ff");
+        let long: Vec<u8> = (0..80).map(|_| 0xABu8).collect();
+        let preview = hex_preview(&long);
+        assert!(preview.contains("(+16 more)"), "got: {preview}");
     }
 
     // --- jitter_millis ---

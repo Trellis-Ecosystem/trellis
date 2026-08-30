@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { Milestone, Agreement, EscrowStatus } from '../lib/soroban';
+import type { Milestone, Agreement } from '../lib/soroban';
+import { getStatusBadgeColor, useMilestoneActions } from '../hooks/useMilestoneActions';
 
 interface WalletLike {
   connected: boolean;
@@ -14,171 +14,18 @@ interface MilestoneRowProps {
   onUpdate?: () => void;
 }
 
+/** Desktop table row — paired with `MilestoneCard` for the mobile layout. */
 export default function MilestoneRow({ milestone, agreement, wallet }: MilestoneRowProps) {
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [showProofInput, setShowProofInput] = useState(false);
-  const [proofUri, setProofUri] = useState('');
-
-  const getStatusBadgeColor = (status: EscrowStatus) => {
-    const colors: Record<EscrowStatus, string> = {
-      Pending: 'bg-gray-600',
-      Funded: 'bg-blue-600',
-      WorkSubmitted: 'bg-yellow-600',
-      Completed: 'bg-green-600',
-      Disputed: 'bg-red-600',
-      Refunded: 'bg-gray-600',
-    };
-    return colors[status];
-  };
-
-  const isUserPayer = wallet.publicKey === agreement.payer;
-  const isUserPayee = wallet.publicKey === agreement.payee;
-
-  const getAvailableActions = () => {
-    const actions: Array<{ label: string; action: () => void; requiresWallet?: boolean }> = [];
-
-    if (milestone.status === 'Pending' && isUserPayer) {
-      actions.push({
-        label: 'Lock Funds',
-        action: handleLockFunds,
-        requiresWallet: true,
-      });
-    }
-
-    if (milestone.status === 'Funded' && isUserPayee) {
-      actions.push({
-        label: 'Submit Work',
-        action: handleSubmitWork,
-        requiresWallet: true,
-      });
-    }
-
-    if (milestone.status === 'WorkSubmitted' && isUserPayer) {
-      actions.push({
-        label: 'Approve & Release',
-        action: handleApproveRelease,
-        requiresWallet: true,
-      });
-    }
-
-    if ((milestone.status === 'Funded' || milestone.status === 'WorkSubmitted') && wallet.connected) {
-      actions.push({
-        label: 'Raise Dispute',
-        action: handleRaiseDispute,
-        requiresWallet: true,
-      });
-    }
-
-    return actions;
-  };
-
-  const handleLockFunds = async () => {
-    if (!wallet.connected) {
-      setActionError('Please connect your wallet');
-      return;
-    }
-
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      // TODO: Implement contract call to lock_funds
-      // const result = await invokeContractFunction('lock_funds', {
-      //   agreement_id: agreement.agreement_id,
-      //   milestone_id: milestone.id,
-      // }, wallet);
-      console.log('Lock funds action not yet implemented');
-      setActionError('Lock funds action not yet implemented');
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to lock funds');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleSubmitWork = async () => {
-    if (!wallet.connected) {
-      setActionError('Please connect your wallet');
-      return;
-    }
-
-    if (!proofUri.trim()) {
-      setActionError('Please enter a proof URI');
-      return;
-    }
-
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      // TODO: Implement contract call to submit_work
-      // const result = await invokeContractFunction('submit_work', {
-      //   agreement_id: agreement.agreement_id,
-      //   milestone_id: milestone.id,
-      //   proof_uri: proofUri,
-      // }, wallet);
-      console.log('Submit work action not yet implemented');
-      setActionError('Submit work action not yet implemented');
-      setShowProofInput(false);
-      setProofUri('');
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to submit work');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleApproveRelease = async () => {
-    if (!wallet.connected) {
-      setActionError('Please connect your wallet');
-      return;
-    }
-
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      // TODO: Implement contract call to approve_and_release
-      // const result = await invokeContractFunction('approve_and_release', {
-      //   agreement_id: agreement.agreement_id,
-      //   milestone_id: milestone.id,
-      // }, wallet);
-      console.log('Approve and release action not yet implemented');
-      setActionError('Approve and release action not yet implemented');
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to approve and release');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleRaiseDispute = async () => {
-    if (!wallet.connected) {
-      setActionError('Please connect your wallet');
-      return;
-    }
-
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      // TODO: Implement contract call to raise_dispute
-      // const result = await invokeContractFunction('raise_dispute', {
-      //   caller: wallet.address,
-      //   agreement_id: agreement.agreement_id,
-      //   milestone_id: milestone.id,
-      // }, wallet);
-      console.log('Raise dispute action not yet implemented');
-      setActionError('Raise dispute action not yet implemented');
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to raise dispute');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const availableActions = getAvailableActions();
+  const {
+    availableActions,
+    actionLoading,
+    actionError,
+    showProofInput,
+    setShowProofInput,
+    proofUri,
+    setProofUri,
+    isUserPayee,
+  } = useMilestoneActions(milestone, agreement, wallet);
 
   return (
     <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200 hover:bg-navy-700/50 dark:hover:bg-navy-700/50 light:hover:bg-gray-100">
