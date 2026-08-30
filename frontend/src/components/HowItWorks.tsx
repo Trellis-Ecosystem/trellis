@@ -51,7 +51,7 @@ export function HowItWorks() {
     <section aria-labelledby="how-it-works-heading" className="mt-20 max-w-2xl w-full">
       <h2
         id="how-it-works-heading"
-        className="text-2xl font-bold text-white mb-8 text-center"
+        className="text-2xl font-bold text-white dark:text-white light:text-gray-900 mb-8 text-center"
       >
         How It Works
       </h2>
@@ -66,8 +66,8 @@ export function HowItWorks() {
               {step.icon}
             </div>
             <div>
-              <h3 className="text-white font-bold mb-1">{step.title}</h3>
-              <p className="text-gray-400 text-sm">{step.description}</p>
+              <h3 className="text-white dark:text-white light:text-gray-900 font-bold mb-1">{step.title}</h3>
+              <p className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm">{step.description}</p>
             </div>
           </li>
         ))}

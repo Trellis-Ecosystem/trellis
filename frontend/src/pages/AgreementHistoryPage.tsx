@@ -44,8 +44,8 @@ function AgreementHistoryPage() {
     <main className="px-6 pt-16 pb-32 max-w-3xl mx-auto">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-white">Agreement History</h1>
-          <p className="mt-2 text-gray-400">
+          <h1 className="text-3xl font-bold text-white dark:text-white light:text-gray-900">Agreement History</h1>
+          <p className="mt-2 text-gray-400 dark:text-gray-400 light:text-gray-600">
             Agreements you've recently viewed or created, stored on this device.
           </p>
         </div>
@@ -80,10 +80,10 @@ function AgreementHistoryPage() {
       </div>
 
       {entries.length === 0 ? (
-        <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 p-10 text-center">
-          <p className="text-gray-400">
-            No agreements viewed yet — <Link to="/create" className="text-cyan-400 hover:underline">create one</Link>{' '}
-            or <Link to="/status" className="text-cyan-400 hover:underline">check an existing agreement</Link> to get
+        <div className="mt-10 rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-10 text-center">
+          <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">
+            No agreements viewed yet — <Link to="/create" className="text-cyan-400 dark:text-cyan-400 light:text-cyan-600 hover:underline">create one</Link>{' '}
+            or <Link to="/status" className="text-cyan-400 dark:text-cyan-400 light:text-cyan-600 hover:underline">check an existing agreement</Link> to get
             started
           </p>
         </div>
@@ -92,11 +92,11 @@ function AgreementHistoryPage() {
           {entries.map((entry) => (
             <li
               key={entry.agreementId}
-              className="rounded-xl border border-navy-700 bg-navy-800/60 p-5 sm:flex sm:items-center sm:justify-between sm:gap-4"
+              className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-5 sm:flex sm:items-center sm:justify-between sm:gap-4"
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="truncate font-semibold text-white">
+                  <p className="truncate font-semibold text-white dark:text-white light:text-gray-900">
                     {entry.label || 'Unnamed Agreement'}
                   </p>
                   {entry.role && (
@@ -109,14 +109,14 @@ function AgreementHistoryPage() {
                 </div>
 
                 <div className="mt-2 flex items-center gap-2">
-                  <code className="font-mono text-sm text-gray-400">
+                  <code className="font-mono text-sm text-gray-400 dark:text-gray-400 light:text-gray-600">
                     {truncateAgreementId(entry.agreementId)}
                   </code>
                   <ExplorerLink type="agreement" value={entry.agreementId} />
                   <CopyButton text={entry.agreementId} label={`Copy agreement ID ${entry.agreementId}`} />
                 </div>
 
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-500 light:text-gray-600">
                   {formatRelativeTime(entry.lastViewed)}
                 </p>
               </div>

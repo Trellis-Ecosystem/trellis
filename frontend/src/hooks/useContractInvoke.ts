@@ -11,6 +11,36 @@ import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 
 export type InvokeStatus = 'idle' | 'building' | 'signing' | 'submitting' | 'success' | 'error'
 
+/**
+ * Build a user-facing message for a failed `sendTransaction` call.
+ *
+ * `errorResult.toXDR()` can itself return `undefined` (or throw, if the
+ * result is malformed) even when `errorResult` is present, which previously
+ * surfaced as the confusing "Transaction failed: undefined". This falls back
+ * to the transaction result's error code (e.g. "txFAILED"), and finally to a
+ * generic message, so the user always sees something meaningful.
+ */
+export function formatSendTransactionError(errorResult: xdr.TransactionResult | undefined): string {
+  let code: string | undefined
+  try {
+    code = errorResult?.result().switch().name
+  } catch {
+    code = undefined
+  }
+
+  let base64: string | undefined
+  try {
+    base64 = errorResult?.toXDR('base64') || undefined
+  } catch {
+    base64 = undefined
+  }
+
+  if (base64) {
+    return code ? `Transaction failed: ${code} (${base64})` : `Transaction failed: ${base64}`
+  }
+  return code ? `Transaction failed: ${code}` : 'Transaction failed: unknown error'
+}
+
 interface UseContractInvokeResult {
   invoke: (method: string, args: xdr.ScVal[], publicKey: string, fee?: string) => Promise<string>
   status: InvokeStatus
@@ -117,7 +147,7 @@ export function useContractInvoke(): UseContractInvokeResult {
         if (signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
         if (sendResult.status === 'ERROR') {
-          throw new Error(`Transaction failed: ${sendResult.errorResult?.toXDR('base64')}`)
+          throw new Error(formatSendTransactionError(sendResult.errorResult))
         }
 
         // Poll for transaction result

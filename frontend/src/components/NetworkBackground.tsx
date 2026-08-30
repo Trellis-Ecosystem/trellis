@@ -54,7 +54,14 @@ export function NetworkBackground() {
     const RETURN_SPEED = 0.04
     const PARTICLE_COLOR = '0, 194, 255'
     const LINE_COLOR = '0, 194, 255'
-    const BG_COLOR = '#0A0E17'
+    const DARK_BG_COLOR = '#0A0E17'
+    const LIGHT_BG_COLOR = '#ffffff'
+
+    // Read fresh each frame rather than once, so the canvas repaints
+    // immediately when the theme toggle flips the `light` class on <html>.
+    function currentBgColor() {
+      return document.documentElement.classList.contains('light') ? LIGHT_BG_COLOR : DARK_BG_COLOR
+    }
 
     function resize() {
       const dpr = window.devicePixelRatio || 1
@@ -111,7 +118,7 @@ export function NetworkBackground() {
       mouse.lastX = mouse.x
       mouse.lastY = mouse.y
 
-      ctx.fillStyle = BG_COLOR
+      ctx.fillStyle = currentBgColor()
       ctx.fillRect(0, 0, cssW, cssH)
 
       for (let i = 0; i < particles.length; i++) {
