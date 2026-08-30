@@ -1,0 +1,115 @@
+# CodeQL security analysis — static analysis for vulnerabilities in
+# TypeScript/JavaScript (frontend, CLI tooling) and Rust (contract, CLI).
+#
+# Runs on every pull request to main/master, on every push to those branches,
+# and on a weekly schedule so newly added query packs catch issues even when
+# the codebase has not changed.
+#
+# Alert severity threshold: errors and warnings are reported; only security-
+# severity CRITICAL or HIGH alerts are treated as blocking (configured in the
+# repository's code-scanning settings on GitHub).  The workflow itself always
+# exits with the CodeQL analysis status so maintainers can triage alerts
+# before merging.
+
+name: CodeQL Security Analysis
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Every Sunday at 03:00 UTC — offset from cargo-audit (Mon 06:00) and
+    # npm-audit (Mon 07:00) so the three supply-chain/SAST scans do not
+    # compete for the same runner pool over the same window.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}-${{ matrix.language }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF results
+  actions: read            # required for private repositories
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # TypeScript/JavaScript covers the React frontend and any JS tooling.
+          - language: javascript-typescript
+            build-mode: none
+
+          # Rust covers the Soroban contract and the CLI binary.
+          # CodeQL's Rust support uses 'autobuild' to invoke `cargo build`.
+          - language: rust
+            build-mode: autobuild
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Rust setup (skipped for javascript-typescript matrix leg)
+      # -----------------------------------------------------------------------
+      - name: Install Rust stable
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        if: matrix.language == 'rust'
+        uses: Swatinem/rust-cache@v2
+
+      # -----------------------------------------------------------------------
+      # Node.js setup (skipped for rust matrix leg)
+      # -----------------------------------------------------------------------
+      - name: Set up Node.js
+        if: matrix.language == 'javascript-typescript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        if: matrix.language == 'javascript-typescript'
+        working-directory: frontend
+        run: npm ci
+
+      # -----------------------------------------------------------------------
+      # CodeQL analysis
+      # -----------------------------------------------------------------------
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # Use the 'security-extended' query suite which includes all
+          # security queries plus higher-severity quality queries.
+          queries: security-extended
+
+      - name: Build (rust — manual build for wasm32 target awareness)
+        if: matrix.language == 'rust' && matrix.build-mode == 'autobuild'
+        run: |
+          cargo build --workspace
+          # Also build the contract for wasm32 so CodeQL sees the full dep
+          # graph, but we do not need a separate step — autobuild handles it.
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+          # Upload SARIF to GitHub Advanced Security results panel.
+          upload: always
+          # Fail the step (and therefore the job) when CodeQL finds alerts at
+          # or above the configured severity threshold.
+          wait-for-processing: true

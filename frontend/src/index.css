@@ -28,6 +28,7 @@
 
 body {
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  @apply bg-navy-900 text-gray-200 transition-colors duration-200 light:bg-white light:text-gray-900;
 }
 
 :root {
@@ -46,14 +47,6 @@ body {
   --text-primary: #111827;
   --text-secondary: #6b7280;
   --border-color: #e5e7eb;
-}
-
-body {
-  @apply bg-navy-900 text-gray-200 transition-colors duration-200;
-}
-
-:root.light body {
-  @apply bg-white text-gray-900;
 }
 
 /* ==============================
@@ -93,4 +86,14 @@ body {
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
+}
+
+:root.light .skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    #e5e7eb 25%,
+    #f3f4f6 50%,
+    #e5e7eb 75%
+  );
+  background-size: 200% 100%;
 }

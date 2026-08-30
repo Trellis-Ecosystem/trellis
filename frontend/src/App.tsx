@@ -39,7 +39,7 @@ function App() {
               </p>
             </div>
 
-            <footer className="border-t border-navy-700/60 px-6 py-8 text-center text-sm text-gray-500">
+            <footer className="border-t border-navy-700/60 dark:border-navy-700/60 light:border-gray-200 px-6 py-8 text-center text-sm text-gray-500">
               <p>
                 Every agreement, deposit, and dispute resolution is recorded on-chain. Verify any of
                 them yourself on{' '}

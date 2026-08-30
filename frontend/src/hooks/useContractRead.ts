@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Contract, SorobanRpc, xdr } from '@stellar/stellar-sdk'
+import { Account, Contract, TransactionBuilder, rpc, xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
+
+// Soroban RPC requires a signed-looking source account even for a read-only
+// simulation; this well-known all-zero-signature address never needs a real
+// key since the transaction is simulated, never submitted.
+const READ_ONLY_SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF'
 
 export type ReadStatus = 'idle' | 'loading' | 'success' | 'error'
 
@@ -49,19 +54,13 @@ export function useContractRead<T = unknown>(
         setStatus('loading')
         setError(null)
 
-        const server = new SorobanRpc.Server(RPC_URL)
+        const server = new rpc.Server(RPC_URL, { allowHttp: RPC_URL.startsWith('http://') })
         const contract = new Contract(CONTRACT_ID)
 
-        const tx = new SorobanRpc.TransactionBuilder(
-          new SorobanRpc.Account(
-            'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
-            '0',
-          ),
-          {
-            fee: '100',
-            networkPassphrase: NETWORK_PASSPHRASE,
-          },
-        )
+        const tx = new TransactionBuilder(new Account(READ_ONLY_SOURCE, '0'), {
+          fee: '100',
+          networkPassphrase: NETWORK_PASSPHRASE,
+        })
           .addOperation(contract.call(method, ...args))
           .setTimeout(30)
           .build()
@@ -74,7 +73,7 @@ export function useContractRead<T = unknown>(
 
         if (signal.aborted) return
 
-        if (SorobanRpc.Api.isSimulationError(simulated)) {
+        if (rpc.Api.isSimulationError(simulated)) {
           throw new Error(simulated.error)
         }
 
