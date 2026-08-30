@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import type { Agreement, SorobanEvent } from '../lib/soroban';
+import { getAgreement, sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
 import { addToHistory } from '../lib/history';
 import { isValidHexAgreementId } from '../lib/agreementId';
@@ -7,7 +9,9 @@ import { useAgreement } from '../hooks/useAgreement';
 import { useAgreementEvents } from '../hooks/useAgreementEvents';
 import { ExplorerLink } from '../components/ExplorerLink';
 import MilestoneRow from '../components/MilestoneRow';
+import MilestoneCard from '../components/MilestoneCard';
 import StatsBar from '../components/StatsBar';
+import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
 
 export default function StatusPage() {
@@ -56,9 +60,23 @@ export default function StatusPage() {
       setValidationError(null);
       setQueriedId(id);
       navigate(`/agreement/${id}`);
-    },
-    [navigate],
-  );
+
+      // Query agreement using contract read call
+      const agreement = await getAgreement(id);
+      setAgreement(agreement);
+
+      // Query events
+      const events = await queryEvents();
+      setEvents(events);
+      setLastUpdated(new Date());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to query agreement');
+      setAgreement(null);
+      setEvents([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,11 +119,8 @@ export default function StatusPage() {
               type="text"
               placeholder="Enter Agreement ID (hex format)"
               value={agreementId}
-              onChange={(e) => {
-                setAgreementId(e.target.value);
-                setValidationError(null);
-              }}
-              className="flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
+              onChange={(e) => setAgreementId(e.target.value)}
+              className="min-w-0 flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
             />
             <button
               type="submit"
@@ -177,7 +192,9 @@ export default function StatusPage() {
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
               <h2 className="text-xl font-semibold text-cyan-400 mb-6">Milestones</h2>
 
-              <div className="overflow-x-auto">
+              {/* Desktop: full table. Mobile: single-column cards (#120) — a
+                  scrollable table is hard to read and hard to tap on a phone. */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200">
@@ -200,6 +217,18 @@ export default function StatusPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="md:hidden space-y-3">
+                {agreement.milestones.map((milestone) => (
+                  <MilestoneCard
+                    key={milestone.id}
+                    milestone={milestone}
+                    agreement={agreement}
+                    wallet={wallet}
+                    onUpdate={() => handleQuery(agreementId)}
+                  />
+                ))}
               </div>
             </div>
 
@@ -232,4 +261,35 @@ export default function StatusPage() {
       </div>
     </div>
   );
+}
+
+async function queryEvents(): Promise<SorobanEvent[]> {
+  // Query events from Soroban RPC
+  // This is a simplified implementation
+  try {
+    const events = await sorobanServer.getEvents({
+      startLedger: 0,
+      limit: 100,
+      filters: [
+        {
+          type: 'contract',
+          contractIds: [CONTRACT_ID],
+        },
+      ],
+    });
+
+    const rawEvents: unknown[] = events.events || [];
+    return rawEvents
+      .filter(isValidEventResponse)
+      .map((event: RawEventResponse) => ({
+        type: 'event',
+        ledger: event.ledger || 0,
+        txHash: event.txHash || '',
+        timestamp: Date.now(),
+        data: {},
+      }));
+  } catch (error) {
+    console.error('Failed to fetch events:', error);
+    return [];
+  }
 }

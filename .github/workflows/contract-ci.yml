@@ -84,3 +84,30 @@ jobs:
             echo "Run 'make test-snapshots-update' locally and commit the updated snapshots."
             exit 1
           fi
+
+  cli-integration:
+    name: CLI integration tests (local devnet)
+    runs-on: ubuntu-latest
+    needs: verify
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install stellar CLI
+        run: |
+          curl -sL -o stellar-cli.tar.gz https://github.com/stellar/stellar-cli/releases/download/v27.1.0/stellar-cli-27.1.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf stellar-cli.tar.gz
+          sudo mv stellar /usr/local/bin/stellar
+          stellar --version
+
+      - name: Run CLI integration tests
+        run: bash tests/cli_integration/run.sh
