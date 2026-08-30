@@ -1,0 +1,180 @@
+name: Advanced Testing
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run mutation tests weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  property-tests:
+    name: Property-Based Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Run property tests (8192 cases)
+        working-directory: contracts/trellis_core
+        run: PROPTEST_CASES=8192 cargo test test_properties
+        env:
+          RUST_LOG: debug
+
+  gas-benchmarks:
+    name: Gas Cost Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Run gas benchmarks
+        working-directory: contracts/trellis_core
+        run: |
+          cargo bench --bench contract_bench > gas_costs.json
+          cat gas_costs.json
+      
+      - name: Upload gas costs
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-costs
+          path: contracts/trellis_core/gas_costs.json
+      
+      - name: Compare with baseline (if exists)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f baseline_gas_costs.json ]; then
+            echo "Comparing gas costs with baseline..."
+            # TODO: Implement comparison script
+            # python scripts/compare_gas_costs.py baseline_gas_costs.json gas_costs.json
+          else
+            echo "No baseline found, skipping comparison"
+          fi
+
+  mutation-tests:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    # Only run on schedule (weekly) or manual trigger
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Install cargo-mutants
+        run: cargo install --locked cargo-mutants
+      
+      - name: Run mutation tests
+        working-directory: contracts/trellis_core
+        run: |
+          cargo mutants --output json > mutants.json
+          cat mutants.json
+        continue-on-error: true
+      
+      - name: Upload mutation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-test-results
+          path: contracts/trellis_core/mutants.json
+      
+      - name: Check mutation score
+        working-directory: contracts/trellis_core
+        run: |
+          # Extract caught vs missed counts from mutants.json
+          CAUGHT=$(jq '[.outcomes[] | select(.result == "caught")] | length' mutants.json)
+          TOTAL=$(jq '.outcomes | length' mutants.json)
+          SCORE=$((CAUGHT * 100 / TOTAL))
+          
+          echo "Mutation Score: $SCORE% ($CAUGHT/$TOTAL caught)"
+          
+          if [ $SCORE -lt 80 ]; then
+            echo "❌ Mutation score below 80% threshold"
+            exit 1
+          else
+            echo "✅ Mutation score meets 80% threshold"
+          fi
+
+  cli-integration-tests:
+    name: CLI Integration Tests
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Make mock executable (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x cli/trellis_cli/tests/mock_stellar.sh
+      
+      - name: Run CLI integration tests
+        working-directory: cli/trellis_cli
+        run: cargo test --test cli_integration
+        env:
+          RUST_LOG: debug
+
+  test-coverage:
+    name: Test Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+      
+      - name: Generate coverage report
+        working-directory: contracts/trellis_core
+        run: |
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: contracts/trellis_core/lcov.info
+          flags: contract-tests
+          name: contract-coverage
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [property-tests, gas-benchmarks, cli-integration-tests]
+    if: always()
+    steps:
+      - name: Check all tests passed
+        run: |
+          if [[ "${{ needs.property-tests.result }}" != "success" ]] || \
+             [[ "${{ needs.gas-benchmarks.result }}" != "success" ]] || \
+             [[ "${{ needs.cli-integration-tests.result }}" != "success" ]]; then
+            echo "❌ Some tests failed"
+            exit 1
+          else
+            echo "✅ All tests passed"
+          fi

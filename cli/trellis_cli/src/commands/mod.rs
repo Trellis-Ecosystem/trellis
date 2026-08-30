@@ -5,6 +5,22 @@ use crate::config::Config;
 use crate::rpc::{InvokeOutput, RpcClient};
 
 // ---------------------------------------------------------------------------
+// ANSI escape codes (#245)
+// ---------------------------------------------------------------------------
+// Hoisted to module level so they are compiled once instead of being
+// re-declared on every `render_human` call. `ANSI_`-prefixed to avoid
+// colliding with any other module item.
+
+/// ANSI SGR: green foreground.
+const ANSI_GREEN: &str = "\x1b[32m";
+/// ANSI SGR: red foreground.
+const ANSI_RED: &str = "\x1b[31m";
+/// ANSI SGR: bold.
+const ANSI_BOLD: &str = "\x1b[1m";
+/// ANSI SGR: reset all attributes.
+const ANSI_RESET: &str = "\x1b[0m";
+
+// ---------------------------------------------------------------------------
 // Output rendering options (#74, #76, #77)
 // ---------------------------------------------------------------------------
 
@@ -201,6 +217,31 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Manage Stellar secret keys securely using OS keychain or encrypted keystore.
+    #[command(subcommand)]
+    Keys(KeysSubcommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum KeysSubcommand {
+    /// Store a Stellar secret key in the OS keychain for a named identity.
+    Add {
+        /// Identity name (e.g., "alice", "bob").
+        identity: String,
+
+        /// Stellar secret key (S...).
+        key: String,
+    },
+
+    /// Remove a Stellar secret key from the OS keychain.
+    Remove {
+        /// Identity name to remove.
+        identity: String,
+    },
+
+    /// List all Stellar secret keys stored in the keychain.
+    List,
 }
 
 /// Prompts the caller to confirm a state-changing action before it runs.
@@ -295,7 +336,14 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             milestone_id,
             refund_to_payer,
             yes,
-        } => run_resolve_dispute(config, agreement_id, milestone_id, refund_to_payer, yes, opts),
+        } => run_resolve_dispute(
+            config,
+            agreement_id,
+            milestone_id,
+            refund_to_payer,
+            yes,
+            opts,
+        ),
 
         Commands::CancelMilestone {
             agreement_id,
@@ -313,6 +361,43 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
         // Handled in main() before dispatch is ever reached — completions
         // need the clap `Command` object, not a `Config`.
         Commands::Completion { .. } => Ok(()),
+
+        Commands::Keys(subcmd) => run_keys(subcmd),
+    }
+}
+
+fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
+    use crate::keystore::Keystore;
+
+    let keystore = Keystore::new();
+
+    match subcmd {
+        KeysSubcommand::Add { identity, key } => {
+            keystore
+                .store_in_keychain(&identity, &key)
+                .map_err(|e| format!("Failed to store key: {}", e))?;
+            println!("✓ Key stored for identity '{}'", identity);
+            Ok(())
+        }
+        KeysSubcommand::Remove { identity } => {
+            keystore
+                .remove_from_keychain(&identity)
+                .map_err(|e| format!("Failed to remove key: {}", e))?;
+            println!("✓ Key removed for identity '{}'", identity);
+            Ok(())
+        }
+        KeysSubcommand::List => {
+            let identities = keystore.list_keychain_identities();
+            if identities.is_empty() {
+                println!("No keys stored. Use 'trellis keys add <identity> <key>' to store one.");
+            } else {
+                println!("Stored identities:");
+                for identity in identities {
+                    println!("  - {}", identity);
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -325,6 +410,7 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
 /// Rejects any value that could be used to inject additional CLI flags or
 /// smuggle shell metacharacters through the argument list.
 fn validate_agreement_id(id: &str) -> Result<(), String> {
+    crate::sanitizer::sanitize_hex_id(id)?;
     if crate::utils::is_valid_hex(id, 64) {
         return Ok(());
     }
@@ -340,7 +426,7 @@ fn validate_agreement_id(id: &str) -> Result<(), String> {
 /// Validate a proof URI: printable, non-empty, within a reasonable length cap.
 ///
 /// Control characters (including newlines) are rejected so they cannot be
-/// used to confuse argument parsing downstream.
+/// used to confuse argument parsing downstream. Unicode is normalized to NFC.
 fn validate_proof_uri(uri: &str) -> Result<(), String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
@@ -351,13 +437,50 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
             uri.len()
         ));
     }
-    if uri.chars().any(|c| c.is_control()) {
-        return Err("proof_uri must not contain control characters".to_string());
+    crate::sanitizer::sanitize_proof_uri(uri)?;
+    Ok(())
+}
+
+/// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
+/// `resolver`, `caller`).
+///
+/// Soroban `Address` values are strkey-encoded: exactly 56 characters, starting
+/// with `G` (account) or `C` (contract), containing only RFC 4648 base32
+/// characters (`A`–`Z`, `2`–`7`). Anything else — a stray space, a quote, an
+/// embedded `--flag`, any shell metacharacter — fails this check, so no
+/// user-supplied address can smuggle extra tokens into the argument list
+/// forwarded to `stellar contract invoke`.
+fn validate_address(field: &str, value: &str) -> Result<(), String> {
+    if value.len() != 56 {
+        return Err(format!(
+            "{field} must be a 56-character Stellar address, got {} characters",
+            value.len()
+        ));
+    }
+    match value.chars().next() {
+        Some('G') | Some('C') => {}
+        _ => {
+            return Err(format!(
+                "{field} must be a Stellar address starting with 'G' (account) or 'C' (contract)"
+            ));
+        }
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c))
+    {
+        return Err(format!(
+            "{field} must contain only base32 characters (A-Z, 2-7); \
+             whitespace, quotes and other shell metacharacters are not allowed"
+        ));
     }
     Ok(())
 }
 
-/// Print a validation error and exit with code 1.
+/// Print a validation error and terminate the process.
+///
+/// Returns `!` so it can be used both as a statement and as the fallback in
+/// `Result::unwrap_or_else` without a type mismatch.
 fn fail_validation(msg: &str) -> ! {
     eprintln!("error: {msg}");
     std::process::exit(1);
@@ -376,6 +499,7 @@ fn fail_validation(msg: &str) -> ! {
 ///   --agreement-id <hex> --payer <G> --payee <G>
 ///   --token <C> --milestones <JSON> --dispute-resolver <G>
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn run_init(
     config: &Config,
     agreement_id: String,
@@ -387,9 +511,11 @@ fn run_init(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("payer", &payer).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("payee", &payee).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("token", &token).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("resolver", &resolver).unwrap_or_else(|e| fail_validation(&e));
 
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
@@ -437,9 +563,7 @@ fn run_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
         &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
@@ -477,9 +601,7 @@ fn run_submit_work(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
@@ -495,9 +617,7 @@ fn run_submit_work(
     ];
 
     if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        if let Err(e) = validate_proof_uri(&uri) {
-            fail_validation(&e);
-        }
+        validate_proof_uri(&uri)?;
         args.push("--proof-uri".to_string());
         // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
         // JSON, so a bare string value fails to parse — it must be JSON-quoted.
@@ -521,9 +641,7 @@ fn run_approve_release(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
         &format!(
@@ -562,9 +680,8 @@ fn run_raise_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
         &format!("This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."),
@@ -599,9 +716,7 @@ fn run_resolve_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     let outcome = if refund_to_payer {
         "refund locked funds to the payer"
@@ -622,7 +737,7 @@ fn run_resolve_dispute(
         "--milestone-id".to_string(),
         milestone_id.to_string(),
         "--refund-to-payer".to_string(),
-        refund_to_payer.to_string(), // "true" or "false"
+        refund_to_payer.to_string(),
     ];
 
     execute(config, "resolve_dispute", &args, opts)
@@ -642,9 +757,7 @@ fn run_cancel_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
         &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
@@ -673,9 +786,7 @@ fn run_cancel_milestone(
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
@@ -698,13 +809,11 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    if let Err(e) = validate_agreement_id(&agreement_id) {
-        fail_validation(&e);
-    }
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
     let args = vec![
         "--agreement-id".to_string(),
-        format!("\"{}\"", agreement_id),
+        agreement_id,
         "--milestone-id".to_string(),
         milestone_id.to_string(),
     ];
@@ -736,11 +845,25 @@ fn run_milestone_status(
 ///  {"id":1,"amount":"2000","status":{"Pending":null},"proof_uri":null}]
 /// ```
 fn build_milestones_json(csv: &str) -> Result<String, String> {
+    if csv.trim().is_empty() {
+        return Err(
+            "no milestone amounts provided — pass a comma-separated list of positive \
+             integers in the token's base unit, e.g. --milestones \"1000,2000,500\""
+                .to_string(),
+        );
+    }
+
     let entries: Vec<String> = csv
         .split(',')
         .enumerate()
         .map(|(idx, part)| -> Result<String, String> {
             let trimmed = part.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "empty milestone amount at index {idx} — remove the leading, trailing, \
+                     or doubled comma in \"{csv}\" (expected e.g. \"1000,2000,500\")"
+                ));
+            }
             let amount: i128 = trimmed.parse().map_err(|_| {
                 format!(
                     "invalid milestone amount {:?} at index {} — expected a positive integer",
@@ -768,7 +891,12 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
 /// This is the single entry point every command handler funnels through, so
 /// `--dry-run`, `--json`, `--human-readable`, and `--quiet` behave
 /// consistently across all commands (#74, #76, #77).
-fn execute(config: &Config, fn_name: &str, args: &[String], opts: &OutputOpts) -> Result<(), String> {
+fn execute(
+    config: &Config,
+    fn_name: &str,
+    args: &[String],
+    opts: &OutputOpts,
+) -> Result<(), String> {
     if opts.dry_run {
         println!("{}", RpcClient::preview(config, fn_name, args));
         return Ok(());
@@ -867,19 +995,14 @@ fn json_envelope(out: &InvokeOutput) -> serde_json::Value {
 /// and print a colorized, formatted summary. Falls back to raw text if the
 /// output isn't valid JSON.
 fn render_human(out: &InvokeOutput) -> Result<(), String> {
-    const GREEN: &str = "\x1b[32m";
-    const RED: &str = "\x1b[31m";
-    const BOLD: &str = "\x1b[1m";
-    const RESET: &str = "\x1b[0m";
-
     let trimmed = out.stdout.trim();
 
     if out.success {
-        println!("{GREEN}{BOLD}\u{2714} Success{RESET}");
+        println!("{ANSI_GREEN}{ANSI_BOLD}\u{2714} Success{ANSI_RESET}");
         match serde_json::from_str::<serde_json::Value>(trimmed) {
             Ok(serde_json::Value::Object(map)) if !map.is_empty() => {
                 for (key, value) in map {
-                    println!("  {BOLD}{key}{RESET}: {}", format_json_value(&value));
+                    println!("  {ANSI_BOLD}{key}{ANSI_RESET}: {}", format_json_value(&value));
                 }
             }
             Ok(other) if !trimmed.is_empty() => println!("  {}", format_json_value(&other)),
@@ -888,20 +1011,20 @@ fn render_human(out: &InvokeOutput) -> Result<(), String> {
         }
 
         if let serde_json::Value::Array(events) = extract_events(&out.stderr) {
-            println!("  {BOLD}events{RESET}:");
+            println!("  {ANSI_BOLD}events{ANSI_RESET}:");
             for event in events {
                 println!("    - {}", format_json_value(&event));
             }
         }
         Ok(())
     } else {
-        println!("{RED}{BOLD}\u{2718} Failed{RESET}");
-        println!("  {BOLD}command{RESET}: {}", out.command_debug);
+        println!("{ANSI_RED}{ANSI_BOLD}\u{2718} Failed{ANSI_RESET}");
+        println!("  {ANSI_BOLD}command{ANSI_RESET}: {}", out.command_debug);
         if !trimmed.is_empty() {
-            println!("  {BOLD}stdout{RESET}: {trimmed}");
+            println!("  {ANSI_BOLD}stdout{ANSI_RESET}: {trimmed}");
         }
         if !out.stderr.trim().is_empty() {
-            println!("  {BOLD}stderr{RESET}: {}", out.stderr.trim());
+            println!("  {ANSI_BOLD}stderr{ANSI_RESET}: {}", out.stderr.trim());
         }
         Err(String::new())
     }
@@ -920,13 +1043,38 @@ fn format_json_value(value: &serde_json::Value) -> String {
 /// `null` when nothing hex-shaped of the right length is found.
 fn extract_tx_hash(stdout: &str, stderr: &str) -> Option<String> {
     for text in [stdout, stderr] {
-        for token in text.split(|c: char| c.is_whitespace()) {
-            let cleaned = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            if cleaned.len() == 64 && cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(cleaned.to_lowercase());
+        // First try to find a hash with explicit hash-related prefix
+        if let Some(hash) = extract_with_prefix(text) {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Extract a 64-hex-char value that follows hash-related keywords or patterns.
+/// This prevents false positives from arbitrary 64-char hex strings in contract responses.
+fn extract_with_prefix(text: &str) -> Option<String> {
+    // Pattern: look for "tx_hash" or "hash" or similar, followed by : or =,
+    // then capture the next 64-char hex token
+    let hash_patterns = ["tx_hash", "tx_id", "transaction", "hash", "x_hash"];
+
+    for pattern in &hash_patterns {
+        // Case 1: pattern: followed by quoted value
+        for prefix in &[": \"", ":\"", ": ", "="] {
+            if let Some(pos) = text.find(&format!("{pattern}{prefix}")) {
+                let start = pos + pattern.len() + prefix.len();
+                if start < text.len() {
+                    let rest = &text[start..];
+                    for token in rest.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}') {
+                        if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+                            return Some(token.to_lowercase());
+                        }
+                    }
+                }
             }
         }
     }
+
     None
 }
 
@@ -1009,6 +1157,116 @@ mod tests {
         );
     }
 
+    // --- build_milestones_json: empty / malformed input (#238) ---
+
+    #[test]
+    fn test_build_milestones_json_empty_string_rejected() {
+        let err = build_milestones_json("").unwrap_err();
+        assert!(
+            err.contains("no milestone amounts") && err.contains("1000,2000,500"),
+            "empty input should give a clear error with a format example, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_whitespace_only_rejected() {
+        let err = build_milestones_json("   ").unwrap_err();
+        assert!(err.contains("no milestone amounts"), "got: {err}");
+    }
+
+    #[test]
+    fn test_build_milestones_json_trailing_comma_rejected() {
+        let err = build_milestones_json("1000,2000,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "trailing comma should be flagged clearly, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_leading_comma_rejected() {
+        let err = build_milestones_json(",1000,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_doubled_comma_rejected() {
+        let err = build_milestones_json("1000,,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    // --- validate_address: CLI argument injection prevention (#239) ---
+
+    fn valid_g_addr() -> String {
+        format!("G{}", "A".repeat(55))
+    }
+
+    #[test]
+    fn address_accepts_well_formed_g_and_c() {
+        assert!(validate_address("payer", &valid_g_addr()).is_ok());
+        assert!(validate_address("token", &format!("C{}", "A".repeat(55))).is_ok());
+        // A mixed-alphabet 56-char strkey (G + 55 base32 chars).
+        let realistic: String = std::iter::once('G')
+            .chain("BCDEFGHIJKLMNOPQRSTUVWXYZ234567".chars().cycle().take(55))
+            .collect();
+        assert_eq!(realistic.len(), 56);
+        assert!(validate_address("payee", &realistic).is_ok());
+    }
+
+    #[test]
+    fn address_rejects_wrong_length() {
+        assert!(validate_address("payer", "GABC").is_err());
+        assert!(validate_address("payer", &format!("G{}", "A".repeat(60))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_wrong_prefix() {
+        assert!(validate_address("payer", &format!("S{}", "A".repeat(55))).is_err());
+        assert!(validate_address("payer", &format!("X{}", "A".repeat(55))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_injected_flag_via_spaces() {
+        // Exactly 56 chars but with an embedded space — a space is the vector
+        // for smuggling an extra "--flag value" token into the argument list.
+        let spaced = format!("G{} {}", "A".repeat(27), "A".repeat(27));
+        assert_eq!(spaced.len(), 56);
+        assert!(validate_address("payer", &spaced).is_err());
+
+        // Longer overt injection payloads are rejected too.
+        assert!(validate_address("payer", "GAAAA --network mainnet --source attacker").is_err());
+        assert!(validate_address("payer", &format!("{} --help", "A".repeat(56))).is_err());
+    }
+
+    #[test]
+    fn address_rejects_quotes_and_shell_metacharacters() {
+        for bad in [
+            format!("G{}\"{}", "A".repeat(27), "A".repeat(27)),
+            format!("G{};rm -rf {}", "A".repeat(20), "A".repeat(25)),
+            format!("G{}$(id){}", "A".repeat(24), "A".repeat(26)),
+            format!("G{}`id`{}", "A".repeat(25), "A".repeat(26)),
+        ] {
+            assert!(
+                validate_address("payer", &bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn address_rejects_lowercase_and_padding_chars() {
+        assert!(validate_address("payer", &format!("G{}", "a".repeat(55))).is_err());
+        // '0', '1', '8', '9' and '=' are not in the RFC 4648 base32 alphabet
+        assert!(validate_address("payer", &format!("G{}0", "A".repeat(54))).is_err());
+        assert!(validate_address("payer", &format!("G{}=", "A".repeat(54))).is_err());
+    }
+
     // --- validate_agreement_id ---
 
     #[test]
@@ -1062,7 +1320,9 @@ mod tests {
 
     #[test]
     fn proof_uri_valid_ipfs() {
-        assert!(validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok());
+        assert!(
+            validate_proof_uri("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco").is_ok()
+        );
     }
 
     #[test]
@@ -1097,15 +1357,49 @@ mod tests {
     // --- extract_tx_hash / extract_events ---
 
     #[test]
-    fn extract_tx_hash_finds_standalone_hex() {
+    fn extract_tx_hash_finds_with_prefix() {
         let hash = "a".repeat(64);
-        let text = format!("submitted tx {hash} ok");
+        let text = format!("tx_hash: {hash}");
         assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_finds_with_quoted_prefix() {
+        let hash = "a".repeat(64);
+        let text = format!(r#"tx_hash: "{hash}""#);
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
+    }
+
+    #[test]
+    fn extract_tx_hash_ignores_standalone_hex() {
+        let hash = "a".repeat(64);
+        let text = format!("some milestone amount {hash} in response");
+        assert_eq!(extract_tx_hash(&text, ""), None, "should not match arbitrary 64-char hex");
     }
 
     #[test]
     fn extract_tx_hash_none_when_absent() {
         assert_eq!(extract_tx_hash("no hash here", ""), None);
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_contract_response() {
+        let hex_amount = "b".repeat(64);
+        let json = format!(r#"{{"milestone_amount": "{hex_amount}", "status": "pending"}}"#);
+        assert_eq!(extract_tx_hash(&json, ""), None, "should not match hex in JSON fields");
+    }
+
+    #[test]
+    fn extract_tx_hash_false_positive_random_hex() {
+        let random_hex = "c".repeat(64);
+        assert_eq!(extract_tx_hash(&random_hex, ""), None, "should not match standalone hex");
+    }
+
+    #[test]
+    fn extract_tx_hash_with_hash_equals() {
+        let hash = "d".repeat(64);
+        let text = format!("hash={hash} submitted");
+        assert_eq!(extract_tx_hash(&text, ""), Some(hash));
     }
 
     #[test]
@@ -1118,5 +1412,150 @@ mod tests {
         let stderr = "info: starting\nEvent: transfer occurred\ndone";
         let events = extract_events(stderr);
         assert!(matches!(events, serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- output rendering functions (#241) --------------------------------
+    //
+    // render_raw / render_json / render_human all print to stdout and signal
+    // success/failure through their `Result`. These tests pin the return
+    // contract (what `main` relies on to set the exit code and decide whether
+    // to print a message) and the structure of the JSON envelope.
+
+    fn ok_output(stdout: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            success: true,
+            command_debug: "stellar contract invoke ...".to_string(),
+        }
+    }
+
+    fn fail_output(stdout: &str, stderr: &str) -> InvokeOutput {
+        InvokeOutput {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            success: false,
+            command_debug: "stellar contract invoke --id CAABC -- boom".to_string(),
+        }
+    }
+
+    // --- json_envelope ---
+
+    #[test]
+    fn json_envelope_success_parses_json_stdout() {
+        let env = json_envelope(&ok_output(r#"{"balance":"100"}"#));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"]["balance"], "100");
+        assert_eq!(env["error"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn json_envelope_success_wraps_non_json_stdout_as_string() {
+        let env = json_envelope(&ok_output("plain text result"));
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["result"], "plain text result");
+    }
+
+    #[test]
+    fn json_envelope_error_uses_stderr_as_message() {
+        let env = json_envelope(&fail_output("", "error: contract not found"));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["result"], serde_json::Value::Null);
+        assert_eq!(env["error"], "error: contract not found");
+    }
+
+    #[test]
+    fn json_envelope_error_falls_back_to_stdout_when_stderr_empty() {
+        let env = json_envelope(&fail_output("stdout failure detail", ""));
+        assert_eq!(env["status"], "error");
+        assert_eq!(env["error"], "stdout failure detail");
+    }
+
+    #[test]
+    fn json_envelope_success_extracts_tx_hash_and_events() {
+        let hash = "a".repeat(64);
+        let mut out = ok_output("{}");
+        out.stderr = format!("submitted {hash}\nevent: Transfer");
+        let env = json_envelope(&out);
+        assert_eq!(env["tx_hash"], hash);
+        assert!(matches!(env["events"], serde_json::Value::Array(ref a) if a.len() == 1));
+    }
+
+    // --- render_raw ---
+
+    #[test]
+    fn render_raw_ok_on_success() {
+        assert!(render_raw(&ok_output("done")).is_ok());
+    }
+
+    #[test]
+    fn render_raw_err_includes_command_and_streams_on_failure() {
+        let err = render_raw(&fail_output("some stdout", "some stderr")).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+        assert!(err.contains("stellar contract invoke --id CAABC -- boom"));
+        assert!(err.contains("some stdout"));
+        assert!(err.contains("some stderr"));
+    }
+
+    // --- render_json ---
+
+    #[test]
+    fn render_json_ok_on_success() {
+        assert!(render_json(&ok_output("{}")).is_ok());
+    }
+
+    #[test]
+    fn render_json_returns_empty_err_on_failure() {
+        // Empty message => main() exits non-zero without printing again
+        // (the detail is already in the JSON envelope on stdout). This is
+        // what "--quiet suppresses non-error output" relies on.
+        let err = render_json(&fail_output("", "boom")).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    // --- render_human ---
+
+    #[test]
+    fn render_human_ok_on_success() {
+        assert!(render_human(&ok_output(r#"{"k":"v"}"#)).is_ok());
+    }
+
+    #[test]
+    fn render_human_returns_empty_err_on_failure() {
+        assert_eq!(render_human(&fail_output("", "boom")).unwrap_err(), "");
+    }
+
+    #[test]
+    fn render_human_handles_non_json_stdout_without_error() {
+        assert!(render_human(&ok_output("not json at all")).is_ok());
+    }
+
+    // --- render_output dispatch ---
+
+    fn opts(format: OutputFormat) -> OutputOpts {
+        OutputOpts {
+            format,
+            quiet: false,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn render_output_raw_failure_bubbles_detailed_message() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Raw)).unwrap_err();
+        assert!(err.contains("Transaction failed"));
+    }
+
+    #[test]
+    fn render_output_json_failure_is_silent_err() {
+        let err = render_output(&fail_output("o", "e"), &opts(OutputFormat::Json)).unwrap_err();
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn render_output_all_formats_ok_on_success() {
+        for f in [OutputFormat::Raw, OutputFormat::Json, OutputFormat::Human] {
+            assert!(render_output(&ok_output("{}"), &opts(f)).is_ok(), "{f:?}");
+        }
     }
 }

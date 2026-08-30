@@ -1,0 +1,30 @@
+# Mutation testing configuration for cargo-mutants
+#
+# Install: cargo install --locked cargo-mutants
+# Run: cargo mutants
+# Target: >80% mutation kill rate
+
+# Only mutate contract logic — exclude events and storage utilities
+[[package]]
+name = "trellis_core"
+
+[package.mutate]
+# Focus on core state machine validation
+include = ["src/lib.rs", "src/errors.rs", "src/types.rs"]
+
+# Exclude infrastructure code
+exclude = [
+    "src/events.rs",   # Event emission doesn't affect correctness
+    "src/storage.rs",  # Storage wrappers are thin over SDK calls
+    "src/test.rs",     # Test code
+    "src/test_properties.rs"  # Property tests
+]
+
+# Mutation timeout — kill mutants that hang for more than 60s per test
+timeout = 60
+
+# Run tests in release mode for faster feedback
+build_command = "cargo test --release"
+
+# Minimum version for features used
+minimum_test_timeout = 20

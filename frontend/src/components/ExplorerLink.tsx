@@ -28,6 +28,7 @@ const ENTITY_NOUN: Record<ExplorerEntity, string> = {
   contract: 'contract',
   ledger: 'ledger',
   asset: 'asset',
+  agreement: 'agreement',
 }
 
 /**

@@ -18,13 +18,14 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //     which stores the string in the host's symbol table.
 //
 // Prefixed topic names and their lengths:
-//   1. "trellis_cr"  (10 chars) → Symbol::new   — agreement_created
-//   2. "trls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated to stay ≤9)
+//   1. "trls_crte"  ( 9 chars) → symbol_short! — agreement_created  (abbreviated to stay ≤9)
+//   2. "trls_lckd"  ( 9 chars) → symbol_short! — funds_locked       (abbreviated)
 //   3. "trls_sbmt"  ( 9 chars) → symbol_short! — work_submitted     (abbreviated)
 //   4. "trls_rlsd"  ( 9 chars) → symbol_short! — funds_released     (abbreviated)
 //   5. "trls_dspt"  ( 9 chars) → symbol_short! — dispute_raised     (abbreviated)
 //   6. "trls_rslv"  ( 9 chars) → symbol_short! — milestone_resolved (abbreviated)
 //   7. "trls_cncl"  ( 9 chars) → symbol_short! — milestone_cancelled(abbreviated)
+//   8. "trls_ttle"  ( 9 chars) → symbol_short! — ttl_extended       (abbreviated)
 //
 // All abbreviations follow the pattern: drop the vowels from the root word
 // while keeping enough consonants to be unambiguous.  They are intentional
@@ -38,6 +39,7 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   5. "disputed"  → (milestone_id: u32, caller: Address)
 //   6. "resolved"  → (milestone_id: u32, refunded_to_payer: bool)
 //   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address)
+//   8. "ttl_extended" → (caller: Address)
 //
 // "trls_rslv" and "trls_cncl" are deliberately distinct: an indexer must be
 // able to tell an arbitrated dispute outcome apart from a payer walking back a
@@ -99,7 +101,7 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 
 /// Emitted when either party raises a dispute on a funded or work-submitted milestone.
 ///
-/// Topics: `("disputed", agreement_id)`
+/// Topics: `("trls_dspt", agreement_id)`
 /// Data:   `(milestone_id, caller)`
 ///
 /// `caller` is the party (payer or payee) that triggered the dispute, provided
@@ -157,5 +159,19 @@ pub fn milestone_cancelled(
     env.events().publish(
         (symbol_short!("trls_cncl"), agreement_id.clone()),
         (milestone_id, payer, cancelled_by),
+    );
+}
+
+/// Emitted when a keeper extends the TTL of an agreement to prevent expiry.
+///
+/// No state is modified beyond the ledger TTL. This event creates an audit
+/// trail for off-chain monitoring of keeper activity.
+///
+/// Topics: `("trls_ttle", agreement_id)`
+/// Data:   `(caller)`
+pub fn ttl_extended(env: &Env, agreement_id: BytesN<32>, caller: Address) {
+    env.events().publish(
+        (symbol_short!("trls_ttle"), agreement_id.clone()),
+        (caller,),
     );
 }

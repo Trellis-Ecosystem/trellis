@@ -11,10 +11,19 @@ mod test;
 #[cfg(test)]
 mod test_properties;
 
+#[cfg(test)]
+mod test_panic_boundaries;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, String, Vec};
 
 use errors::TrellisError;
 use types::{Agreement, EscrowStatus, Milestone};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_MILESTONES: u32 = 50;
 
 // ---------------------------------------------------------------------------
 // Contract struct
@@ -26,6 +35,26 @@ pub struct TrellisContract;
 // ---------------------------------------------------------------------------
 // Contract entrypoints
 // ---------------------------------------------------------------------------
+//
+// Panic safety (#154): a panic in a Soroban contract traps the host — the
+// transaction reverts but the caller is still charged the fee, and an
+// unexpected trap can leave callers reasoning about inconsistent state. Every
+// entrypoint below is therefore panic-free by construction:
+//
+//   * milestone lookups use `Vec::get(id).ok_or(TrellisError::InvalidMilestone)?`
+//     — never `Vec::get(id).unwrap()` or index syntax;
+//   * agreement reads go through `storage::read_agreement`, which maps a
+//     missing entry to `TrellisError::AgreementNotFound` via `Option::ok_or`;
+//   * every fallible entrypoint returns `Result<_, TrellisError>` so failures
+//     propagate as typed on-chain errors, not panics.
+//
+// There are no `unwrap()` / `expect()` calls anywhere in the contract crate's
+// non-test sources. The `token::Client` transfer calls can still trap inside
+// the SDK (e.g. insufficient balance/allowance) — that is the token
+// contract's own boundary and is intentionally left to it. A custom
+// `#[panic_handler]` is not added: `soroban-sdk` already provides one for the
+// wasm build and a second definition is a duplicate-lang-item error.
+// `test_panic_boundaries.rs` fuzzes these paths to keep the property enforced.
 
 #[contractimpl]
 impl TrellisContract {
@@ -65,9 +94,19 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
+        if milestones.len() > MAX_MILESTONES as usize {
+            return Err(TrellisError::MilestoneCountExceeded);
+        }
+
+        if payer == payee {
+            return Err(TrellisError::PayerEqualsPayee);
+        }
+
         if dispute_resolver == payer || dispute_resolver == payee {
             return Err(TrellisError::ResolverCannotBeParty);
         }
+
+        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 
@@ -115,18 +154,19 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Transfer tokens from payer → this contract.
-        token::Client::new(&env, &agreement.token).transfer(
-            &agreement.payer,
-            &env.current_contract_address(),
-            &milestone.amount,
-        );
-
-        // Mutate the milestone value and persist it back to the agreement.
+        // Mutate the milestone value and persist it back to the agreement
+        // before any external calls (checks-effects-interactions pattern).
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Funded;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        // Transfer tokens from payer → this contract.
+        token::Client::new(&env, &agreement.token).transfer(
+            &agreement.payer,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         events::funds_locked(&env, agreement_id, milestone_id, amount);
 
@@ -138,7 +178,9 @@ impl TrellisContract {
     /// The payee authorises this call.
     ///
     /// Pass `Some(uri)` to attach delivery proof, or `None` to advance the
-    /// milestone to `WorkSubmitted` without one.
+    /// milestone to `WorkSubmitted` without one. Empty-string proofs are
+    /// normalized to `None` to ensure semantic consistency — indexers pattern
+    /// match on `Some(uri)` and must never see an empty string.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -162,8 +204,7 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // proof_uri is stored verbatim — `None` is the sole representation of
-        // "no proof", so there is no sentinel value to normalise.
+        let proof_uri = proof_uri.filter(|s| !s.is_empty());
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
         agreement.milestones.set(milestone_id, milestone);
@@ -199,17 +240,17 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Transfer tokens from this contract → payee.
-        token::Client::new(&env, &agreement.token).transfer(
-            &env.current_contract_address(),
-            &agreement.payee,
-            &milestone.amount,
-        );
-
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Completed;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        // Transfer tokens from this contract → payee after state change.
+        token::Client::new(&env, &agreement.token).transfer(
+            &env.current_contract_address(),
+            &agreement.payee,
+            &amount,
+        );
 
         events::funds_released(&env, agreement_id, milestone_id, amount);
 
@@ -306,26 +347,31 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
+        let amount = milestone.amount;
         if refund_to_payer {
-            // Rule: payer wins — return locked funds to payer.
-            token::Client::new(&env, &agreement.token).transfer(
-                &env.current_contract_address(),
-                &agreement.payer,
-                &milestone.amount,
-            );
             milestone.status = EscrowStatus::Refunded;
         } else {
-            // Rule: payee wins — release locked funds to payee.
-            token::Client::new(&env, &agreement.token).transfer(
-                &env.current_contract_address(),
-                &agreement.payee,
-                &milestone.amount,
-            );
             milestone.status = EscrowStatus::Completed;
         }
 
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        if refund_to_payer {
+            // Rule: payer wins — return locked funds to payer.
+            token::Client::new(&env, &agreement.token).transfer(
+                &env.current_contract_address(),
+                &agreement.payer,
+                &amount,
+            );
+        } else {
+            // Rule: payee wins — release locked funds to payee.
+            token::Client::new(&env, &agreement.token).transfer(
+                &env.current_contract_address(),
+                &agreement.payee,
+                &amount,
+            );
+        }
 
         events::milestone_resolved(&env, agreement_id, milestone_id, refund_to_payer);
 
@@ -452,8 +498,6 @@ impl TrellisContract {
             }
 
             let amount = milestone.amount;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &amount);
-
             milestone.status = EscrowStatus::Funded;
             agreement.milestones.set(milestone_id, milestone);
 
@@ -462,6 +506,14 @@ impl TrellisContract {
         }
 
         storage::write_agreement(&env, &agreement_id, &agreement);
+
+        for milestone_id in milestone_ids.iter() {
+            let milestone = agreement
+                .milestones
+                .get(milestone_id)
+                .ok_or(TrellisError::InvalidMilestone)?;
+            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+        }
 
         Ok(funded)
     }
@@ -504,8 +556,11 @@ impl TrellisContract {
     pub fn extend_agreement_ttl(
         env: Env,
         agreement_id: BytesN<32>,
+        caller: Address,
     ) -> Result<(), TrellisError> {
-        storage::extend_agreement_ttl(&env, &agreement_id)
+        storage::extend_agreement_ttl(&env, &agreement_id)?;
+        events::ttl_extended(&env, agreement_id, caller);
+        Ok(())
     }
 }
 
@@ -523,13 +578,15 @@ impl TrellisContract {
 /// # Errors
 /// Returns [`TrellisError::InvalidMilestone`] on the first milestone whose
 /// `amount` is zero or negative.
+/// Returns [`TrellisError::TotalAmountOverflow`] if the sum of milestone
+/// amounts exceeds i128::MAX.
 fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError> {
     let mut total: i128 = 0;
     for m in milestones.iter() {
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total += m.amount;
+        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }

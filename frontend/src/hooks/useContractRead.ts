@@ -11,7 +11,10 @@ export type ReadStatus = 'idle' | 'loading' | 'success' | 'error'
 
 interface UseContractReadResult<T> {
   data: T | null
+  /** Granular status for consumers that need it. */
   status: ReadStatus
+  /** Convenience boolean derived from status — true while the RPC call is in-flight. */
+  loading: boolean
   error: string | null
   refetch: () => void
 }
@@ -19,6 +22,11 @@ interface UseContractReadResult<T> {
 /**
  * Hook to read data from a Soroban contract using RPC simulation.
  * Does not require wallet connection — read-only queries.
+ *
+ * An AbortController is created for every request and aborted on cleanup so
+ * that navigating away mid-flight cancels the in-flight request and prevents
+ * stale state updates on an unmounted component.  AbortErrors are swallowed
+ * silently — they are not user-facing errors.
  */
 export function useContractRead<T = unknown>(
   method: string,
@@ -37,7 +45,9 @@ export function useContractRead<T = unknown>(
   useEffect(() => {
     if (!enabled) return
 
+    // AbortController for this specific request — aborted on cleanup/unmount.
     const controller = new AbortController()
+    const { signal } = controller
 
     void (async () => {
       try {
@@ -55,9 +65,13 @@ export function useContractRead<T = unknown>(
           .setTimeout(30)
           .build()
 
+        // simulateTransaction does not natively accept an AbortSignal, but we
+        // guard every state update with signal.aborted checks below so that if
+        // the component unmounts while the call is in-flight, no stale state
+        // updates reach a dead component.
         const simulated = await server.simulateTransaction(tx)
 
-        if (controller.signal.aborted) return
+        if (signal.aborted) return
 
         if (rpc.Api.isSimulationError(simulated)) {
           throw new Error(simulated.error)
@@ -72,7 +86,10 @@ export function useContractRead<T = unknown>(
         setData(resultValue as T)
         setStatus('success')
       } catch (err) {
-        if (controller.signal.aborted) return
+        // Silently ignore abort errors — these are expected on unmount/navigate-away.
+        if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+          return
+        }
 
         const message = err instanceof Error ? err.message : 'Failed to read contract'
         console.error(`[useContractRead] ${method} failed:`, err)
@@ -81,8 +98,9 @@ export function useContractRead<T = unknown>(
       }
     })()
 
+    // Abort the in-flight request when the component unmounts or deps change.
     return () => controller.abort()
   }, [method, args, enabled, refetchTrigger])
 
-  return { data, status, error, refetch }
+  return { data, status, loading: status === 'loading', error, refetch }
 }

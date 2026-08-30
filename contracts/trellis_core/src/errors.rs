@@ -57,4 +57,14 @@ pub enum TrellisError {
     /// coincide with either party would let that party unilaterally decide
     /// its own disputes.
     ResolverCannotBeParty = 8,
+
+    /// Total milestone amount exceeds i128::MAX during summation.
+    /// A crafted agreement with sufficiently large milestones would cause
+    /// silent integer wraparound, corrupting the total_amount field.
+    TotalAmountOverflow = 9,
+
+    /// Token address is invalid or not a valid token contract.
+    /// The liveness probe (symbol() call) failed to verify the address
+    /// represents an active, functional token contract.
+    InvalidToken = 10,
 }

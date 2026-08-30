@@ -1,10 +1,20 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
-import { afterEach } from 'vitest'
+import { afterEach, beforeAll, afterAll } from 'vitest'
+import { server } from './mocks/server'
 
-// React Testing Library does not auto-clean when `globals` are enabled via
-// vite.config.ts rather than a test-runner preset, so unmount explicitly.
-// Without this, queries leak across tests and duplicate-element errors appear.
+// Start MSW server before all tests
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'warn' })
+})
+
+// Reset handlers after each test to ensure test isolation
 afterEach(() => {
+  server.resetHandlers()
   cleanup()
+})
+
+// Stop MSW server after all tests
+afterAll(() => {
+  server.close()
 })
