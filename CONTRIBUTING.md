@@ -94,7 +94,63 @@ Important files:
 - `src/commands/mod.rs` — command implementations.
 - `src/utils.rs` — small CLI utility helpers.
 
-## 4. Static Analysis with Semgrep
+## 4. Pre-commit Hooks
+
+Trellis ships pre-commit hooks in `.githooks/` that catch lint errors, formatting issues, and accidentally committed secrets before they reach CI.  The hooks are not installed automatically — run the setup command once after cloning:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+This is equivalent to:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+### What the hook checks
+
+| Check | Scope | Triggered when |
+|---|---|---|
+| `cargo fmt --check` | Rust workspace | Any `.rs` file is staged |
+| `cargo clippy -D warnings` | Rust workspace | Any `.rs` file is staged |
+| `npm run lint` (oxlint) | `frontend/` | Any `.ts`/`.tsx`/`.js`/`.jsx` file is staged |
+| `npm run typecheck` (tsc) | `frontend/` | Any `.ts`/`.tsx`/`.js`/`.jsx` file is staged |
+| Secret scan | All staged files | Every commit |
+
+The secret scan uses **gitleaks** if it is installed, otherwise falls back to a basic regex scan.  Install gitleaks for full coverage:
+
+```bash
+# macOS
+brew install gitleaks
+
+# Linux (replace VERSION with latest from https://github.com/gitleaks/gitleaks/releases)
+VERSION=8.27.2
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+  | tar -xz -C /usr/local/bin gitleaks
+```
+
+### Bypassing the hook
+
+Use bypass flags sparingly — CI will still catch the same issues:
+
+```bash
+# Skip all checks (emergency only)
+SKIP_HOOKS=1 git commit -m "..."
+
+# Skip individual checks
+SKIP_RUST_FMT=1   git commit ...   # skip cargo fmt
+SKIP_RUST_LINT=1  git commit ...   # skip cargo clippy
+SKIP_JS_LINT=1    git commit ...   # skip oxlint
+SKIP_TYPECHECK=1  git commit ...   # skip tsc
+SKIP_SECRETS=1    git commit ...   # skip secret scan
+```
+
+### Allowlisting gitleaks false positives
+
+If gitleaks flags a false positive, add a `# gitleaks:allow` comment on the triggering line, or add a per-rule allowance in `.gitleaks.toml` at the repository root with a justification comment.
+
+## 5. Static Analysis with Semgrep
 
 Before committing contract code, run Semgrep to detect common Soroban vulnerability patterns:
 
@@ -111,7 +167,7 @@ pip install semgrep    # Linux/Windows with Python
 
 Fix any warnings before opening a PR. The CI will automatically scan all pull requests.
 
-## 5. Running the Contract Tests
+## 6. Running the Contract Tests
 
 Run the contract test suite before changing contract code:
 
@@ -140,7 +196,7 @@ After running tests from inside `contracts/trellis_core`, return to the workspac
 cd ../..
 ```
 
-## 6. Building the CLI
+## 7. Building the CLI
 
 Build the CLI from its crate directory:
 
@@ -162,7 +218,7 @@ Return to the workspace root after the build:
 cd ../..
 ```
 
-## 7. Understanding the State Machine
+## 8. Understanding the State Machine
 
 Read this before touching contract code. Trellis models each milestone as a state machine:
 
@@ -199,7 +255,7 @@ Transitions and entrypoints:
 
 Never add a new transition or bypass an existing state without first discussing it in the linked issue.
 
-## 8. How to Claim an Issue
+## 9. How to Claim an Issue
 
 1. Browse open issues and look for `good first issue` or `help wanted` labels.
 2. Comment exactly: `I'd like to work on this`.
@@ -209,7 +265,7 @@ Never add a new transition or bypass an existing state without first discussing 
 
 This avoids duplicated effort and keeps maintainers from reviewing competing solutions for the same small task.
 
-## 9. Branch Naming
+## 10. Branch Naming
 
 Use short, scoped branch names:
 
@@ -227,7 +283,7 @@ git checkout -b docs/contributing-guide
 git checkout -b test/live-status-command
 ```
 
-## 10. PR Requirements
+## 11. PR Requirements
 
 All of the following must be true before requesting review:
 
@@ -263,7 +319,7 @@ cargo build --release
 cd ../..
 ```
 
-## 10. Test Snapshots
+## 12. Test Snapshots
 
 The Soroban test framework records ledger state at each test step into JSON files under `contracts/trellis_core/test_snapshots/`. These files are committed to the repository so reviewers can see exactly what state the contract produces for every test case.
 
@@ -309,7 +365,7 @@ If any snapshot file differs from what is committed, the build fails with an err
 - If you add a new test, its snapshot file will be created by `make test-snapshots-update` and must be committed.
 - If you delete a test, delete its snapshot file from the repository in the same PR.
 
-## 11. Code Style
+## 13. Code Style
 
 Follow the existing patterns in the file you edit. Do not introduce a new style in the same PR.
 
@@ -328,7 +384,7 @@ Before committing Rust changes, format them:
 cargo fmt
 ```
 
-## 12. Frontend Versioning
+## 14. Frontend Versioning
 
 The frontend (`frontend/package.json`) follows [Semantic Versioning](https://semver.org/):
 
@@ -345,7 +401,7 @@ npm version patch   # or minor / major
 
 This updates `package.json` and creates a matching git tag. The version is injected into the build via `vite.config.ts` (`__APP_VERSION__`, sourced from `npm_package_version`) and rendered in the app footer, so every deployed build is traceable to a version.
 
-## 13. Frontend Tests and Manual Testnet Verification
+## 15. Frontend Tests and Manual Testnet Verification
 
 Run the frontend checks before opening a PR that touches `frontend/`:
 
@@ -364,7 +420,7 @@ For changes that affect contract calls or wallet flows, also verify manually aga
 2. Run `npm run dev` and exercise the affected flow end to end (e.g. init, fund, submit, approve/dispute) using a Freighter Testnet account.
 3. Confirm the transaction succeeds in Freighter and the resulting state is reflected in the UI.
 
-## 14. Getting Help
+## 16. Getting Help
 
 Use the right channel for the question:
 

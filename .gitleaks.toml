@@ -1,0 +1,44 @@
+# gitleaks configuration for the Trellis monorepo.
+#
+# gitleaks uses its built-in ruleset by default.  This file only adds
+# project-specific allowances on top of the defaults.
+#
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+#
+# Adding a new allowance:
+#   1. Identify the gitleaks rule ID that triggered the false positive
+#      (visible in the gitleaks output as `RuleID`).
+#   2. Add an [[allowlist.rules]] entry below with the matching ID and a
+#      comment explaining why the match is safe.
+#   3. Keep the justification to one sentence — it must be reviewable.
+
+title = "Trellis gitleaks config"
+
+[extend]
+# Inherit the default gitleaks ruleset.
+useDefault = true
+
+[allowlist]
+description = "Project-level false-positive allowances"
+
+# Commits containing only these strings in their diff are ignored globally.
+# Prefer per-rule allowances below to avoid masking real findings.
+regexes = []
+
+# File paths that are always skipped (test fixtures, example configs, docs).
+paths = [
+    # Example env files — they contain only placeholder values.
+    '''contracts/trellis_core/\.env\.example''',
+    '''cli/trellis_cli/\.env\.example''',
+    '''frontend/\.env\.example''',
+    '''frontend/\.env\.test''',
+]
+
+# Per-rule stoplist entries.  Format:
+#   [[allowlist.rules]]
+#   id = "<gitleaks-rule-id>"
+#   regexes = ["<pattern-to-exclude>"]   # optional
+#   commits = ["<sha>"]                  # optional
+#   description = "<why this is safe>"
+#
+# None today — add entries here as false positives are confirmed.

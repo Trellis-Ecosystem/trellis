@@ -22,6 +22,39 @@ interface ValidationErrors {
   milestones?: string
 }
 
+/**
+ * Converts a user-supplied decimal amount string to a BigInt stroops value
+ * (7 decimal places) without floating-point arithmetic.
+ *
+ * Examples:
+ *   "100"         → 1000000000n
+ *   "100.5"       → 1005000000n
+ *   "0.0000001"   → 1n
+ *   "100.12345678" → throws (more than 7 decimal places)
+ *
+ * @throws {Error} if the amount is not a valid positive decimal number or has
+ *   more than 7 decimal places.
+ */
+export function amountToStroops(amount: string): bigint {
+  const trimmed = amount.trim()
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(`Invalid amount: "${trimmed}" is not a valid positive number.`)
+  }
+
+  const [intPart, fracPart = ''] = trimmed.split('.')
+  const DECIMALS = 7
+
+  if (fracPart.length > DECIMALS) {
+    throw new Error(
+      `Invalid amount: "${trimmed}" has more than ${DECIMALS} decimal places.`
+    )
+  }
+
+  // Pad fractional part to exactly 7 digits.
+  const paddedFrac = fracPart.padEnd(DECIMALS, '0')
+  return BigInt(intPart + paddedFrac)
+}
+
 function CreateAgreementPage() {
   const navigate = useNavigate()
   const wallet = useWallet()
@@ -69,11 +102,21 @@ function CreateAgreementPage() {
     if (milestones.length === 0) {
       newErrors.milestones = 'At least one milestone is required'
     } else {
-      const invalidMilestone = milestones.find(
-        (m) => !m.amount || parseFloat(m.amount) <= 0
-      )
+      const invalidMilestone = milestones.find((m) => {
+        if (!m.amount) return true
+        const trimmed = m.amount.trim()
+        // Must be a valid positive decimal with at most 7 decimal places.
+        if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) return true
+        // Must be greater than zero.
+        try {
+          return amountToStroops(trimmed) <= 0n
+        } catch {
+          return true
+        }
+      })
       if (invalidMilestone) {
-        newErrors.milestones = 'All milestones must have amounts greater than 0'
+        newErrors.milestones =
+          'All milestones must have valid positive amounts with at most 7 decimal places'
       }
     }
 
@@ -100,7 +143,7 @@ function CreateAgreementPage() {
       // Build milestone ScVals
       const milestoneScVals = milestones.map((m) =>
         nativeToScVal({
-          amount: BigInt(parseFloat(m.amount) * 1e7), // Convert to stroops (7 decimals)
+          amount: amountToStroops(m.amount), // Convert to stroops (7 decimals) without float imprecision
           description: m.description || '',
         })
       )
@@ -144,8 +187,8 @@ function CreateAgreementPage() {
 
   return (
     <main className="px-6 pt-16 pb-32 max-w-3xl mx-auto">
-      <h1 className="text-3xl font-bold text-white">Create Agreement</h1>
-      <p className="mt-3 text-gray-400">
+      <h1 className="text-3xl font-bold text-white dark:text-white light:text-gray-900">Create Agreement</h1>
+      <p className="mt-3 text-gray-400 dark:text-gray-400 light:text-gray-600">
         Define the payer, payee, resolver and milestones for a new escrow agreement.
       </p>
 
@@ -155,9 +198,9 @@ function CreateAgreementPage() {
       </div>
 
       {agreementId && (
-        <div className="mt-4 px-4 py-3 bg-navy-700/50 border border-navy-600 rounded-lg text-sm text-gray-400 flex items-center gap-2">
+        <div className="mt-4 px-4 py-3 bg-navy-700/50 dark:bg-navy-700/50 light:bg-gray-100 border border-navy-600 dark:border-navy-600 light:border-gray-300 rounded-lg text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 flex items-center gap-2">
           <svg
-            className="w-4 h-4 text-cyan-400 shrink-0"
+            className="w-4 h-4 text-cyan-400 dark:text-cyan-400 light:text-cyan-600 shrink-0"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -177,11 +220,11 @@ function CreateAgreementPage() {
 
       <form onSubmit={handleSubmit} className="mt-10 space-y-6">
         {/* Party Addresses */}
-        <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-white">Agreement Parties</h2>
+        <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6 space-y-4">
+          <h2 className="text-lg font-semibold text-white dark:text-white light:text-gray-900">Agreement Parties</h2>
 
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
               Payer Address <span className="text-red-400">*</span>
             </label>
             <input
@@ -189,15 +232,15 @@ function CreateAgreementPage() {
               value={formData.payer}
               onChange={(e) => handleInputChange('payer', e.target.value)}
               placeholder="G..."
-              className={`w-full px-4 py-2 bg-navy-700 border ${
+              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                 errors.payer ? 'border-red-500' : 'border-navy-600'
-              } text-white rounded-lg focus:outline-none focus:border-cyan-400`}
+              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
             />
             {errors.payer && <p className="mt-1 text-xs text-red-400">{errors.payer}</p>}
           </div>
 
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
               Payee Address <span className="text-red-400">*</span>
             </label>
             <input
@@ -205,15 +248,15 @@ function CreateAgreementPage() {
               value={formData.payee}
               onChange={(e) => handleInputChange('payee', e.target.value)}
               placeholder="G..."
-              className={`w-full px-4 py-2 bg-navy-700 border ${
+              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                 errors.payee ? 'border-red-500' : 'border-navy-600'
-              } text-white rounded-lg focus:outline-none focus:border-cyan-400`}
+              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
             />
             {errors.payee && <p className="mt-1 text-xs text-red-400">{errors.payee}</p>}
           </div>
 
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
               Dispute Resolver Address <span className="text-red-400">*</span>
             </label>
             <input
@@ -221,15 +264,15 @@ function CreateAgreementPage() {
               value={formData.resolver}
               onChange={(e) => handleInputChange('resolver', e.target.value)}
               placeholder="G..."
-              className={`w-full px-4 py-2 bg-navy-700 border ${
+              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                 errors.resolver ? 'border-red-500' : 'border-navy-600'
-              } text-white rounded-lg focus:outline-none focus:border-cyan-400`}
+              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
             />
             {errors.resolver && <p className="mt-1 text-xs text-red-400">{errors.resolver}</p>}
           </div>
 
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
               Token Contract Address <span className="text-red-400">*</span>
             </label>
             <input
@@ -237,17 +280,17 @@ function CreateAgreementPage() {
               value={formData.token}
               onChange={(e) => handleInputChange('token', e.target.value)}
               placeholder="C..."
-              className={`w-full px-4 py-2 bg-navy-700 border ${
+              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                 errors.token ? 'border-red-500' : 'border-navy-600'
-              } text-white rounded-lg focus:outline-none focus:border-cyan-400`}
+              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
             />
             {errors.token && <p className="mt-1 text-xs text-red-400">{errors.token}</p>}
-            <p className="mt-1 text-xs text-gray-500">Default: Testnet USDC</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-500 light:text-gray-600">Default: Testnet USDC</p>
           </div>
         </div>
 
         {/* Milestones */}
-        <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6">
+        <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
           <MilestoneBuilder milestones={milestones} onChange={setMilestones} />
           {errors.milestones && (
             <p className="mt-2 text-sm text-red-400">{errors.milestones}</p>
@@ -268,7 +311,7 @@ function CreateAgreementPage() {
             type="button"
             onClick={() => navigate('/')}
             disabled={isSubmitting}
-            className="px-6 py-3 border border-navy-700 text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-50"
+            className="px-6 py-3 border border-navy-700 dark:border-navy-700 light:border-gray-200 text-gray-400 dark:text-gray-400 light:text-gray-600 hover:text-white dark:hover:text-white light:hover:text-gray-900 rounded-lg transition-colors disabled:opacity-50"
           >
             Cancel
           </button>

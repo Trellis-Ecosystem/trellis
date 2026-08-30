@@ -9,6 +9,7 @@ import { CONTRACT_ID } from './lib/config'
 import { explorerBaseUrl, networkLabel } from './lib/explorer'
 import HomePage from './pages/HomePage'
 import StatusPage from './pages/StatusPage'
+import AgreementStatusPage from './pages/AgreementStatusPage'
 import CreateAgreementPage from './pages/CreateAgreementPage'
 import AgreementHistoryPage from './pages/AgreementHistoryPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -26,7 +27,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/status" element={<StatusPage />} />
-                <Route path="/agreement/:id" element={<StatusPage />} />
+                <Route path="/agreement/:id" element={<AgreementStatusPage />} />
                 <Route path="/create" element={<CreateAgreementPage />} />
                 <Route path="/history" element={<AgreementHistoryPage />} />
                 <Route path="*" element={<NotFoundPage />} />
@@ -38,7 +39,7 @@ function App() {
               </p>
             </div>
 
-            <footer className="border-t border-navy-700/60 px-6 py-8 text-center text-sm text-gray-500">
+            <footer className="border-t border-navy-700/60 dark:border-navy-700/60 light:border-gray-200 px-6 py-8 text-center text-sm text-gray-500">
               <p>
                 Every agreement, deposit, and dispute resolution is recorded on-chain. Verify any of
                 them yourself on{' '}

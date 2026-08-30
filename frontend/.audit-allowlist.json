@@ -1,0 +1,10 @@
+{
+  "_comment": "npm audit allowlist — reviewed false positives that do not apply to this project.",
+  "_format": "Each entry requires: id (GHSA or NPM advisory ID), reason, reviewed_by, reviewed_date, and recheck_after.",
+  "_instructions": [
+    "To suppress a new advisory: add an entry here AND add an 'overrides' field in package.json",
+    "pointing the affected package at a safe version (or the same version if no fix exists).",
+    "Every entry must be re-evaluated when soroban-sdk, vite, or react bumps a major version."
+  ],
+  "allowlist": []
+}

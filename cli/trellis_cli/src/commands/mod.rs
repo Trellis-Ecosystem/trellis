@@ -244,6 +244,41 @@ pub enum KeysSubcommand {
     List,
 }
 
+/// Prompts the caller to confirm a state-changing action before it runs.
+///
+/// Skipped entirely for `--dry-run`, since nothing is actually executed.
+/// Under `--quiet` there is no terminal to read a response from, so an
+/// unconfirmed action fails closed rather than silently proceeding.
+fn confirm_action(summary: &str, yes: bool, opts: &OutputOpts) -> Result<(), String> {
+    if yes || opts.dry_run {
+        return Ok(());
+    }
+
+    if opts.quiet {
+        return Err(
+            "Confirmation required: pass --yes to run this non-interactively.".to_string(),
+        );
+    }
+
+    use std::io::Write;
+
+    println!("{summary}");
+    print!("Continue? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to write prompt: {e}"))?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read confirmation: {e}"))?;
+
+    match input.trim().to_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err("Aborted: operation not confirmed.".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch — route each command to its handler
 // ---------------------------------------------------------------------------
@@ -406,17 +441,6 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate a Stellar address: must be bech32 encoded (ASCII-only).
-///
-/// Rejects null bytes, control characters, and non-ASCII characters.
-fn validate_address(addr: &str) -> Result<(), String> {
-    crate::sanitizer::sanitize_address(addr)?;
-    if addr.is_empty() {
-        return Err("address must not be empty".to_string());
-    }
-    Ok(())
-}
-
 /// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
 /// `resolver`, `caller`).
 ///
@@ -453,68 +477,13 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Return a validation error.
-fn fail_validation(msg: &str) -> Result<(), String> {
-    Err(format!("error: {msg}"))
-}
-
-/// Print a summary of a state-mutating operation and block on a y/N prompt,
-/// unless `skip` (the `-y`/`--yes` flag) is set.
+/// Print a validation error and terminate the process.
 ///
-/// Returns `Err` (without executing anything) if the user does not answer
-/// `y`/`yes`, so a fat-fingered command aborts instead of running.
-fn confirm_action(summary: &str, skip: bool) -> Result<(), String> {
-    if skip {
-        return Ok(());
-    }
-
-    use std::io::Write;
-
-    println!("{summary}");
-    print!("Continue? [y/N] ");
-    std::io::stdout()
-        .flush()
-        .map_err(|e| format!("Failed to write prompt: {e}"))?;
-
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| format!("Failed to read confirmation: {e}"))?;
-
-    match input.trim().to_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
-        _ => Err("Aborted: operation not confirmed.".to_string()),
-    }
-}
-
-/// Ask for confirmation before proceeding with an action.
-///
-/// Prints a warning message and asks for y/n confirmation. If `yes` is true,
-/// skips the confirmation prompt. Returns Ok(()) if confirmed, Err if denied or
-/// on EOF.
-fn confirm_action(msg: &str, yes: bool) -> Result<(), String> {
-    if yes {
-        return Ok(());
-    }
-
-    eprintln!("⚠️  {msg}");
-    eprint!("Continue? (y/N) ");
-    use std::io::{self, BufRead};
-
-    let stdin = io::stdin();
-    let mut line = String::new();
-    match stdin.lock().read_line(&mut line) {
-        Ok(0) => Err("EOF reached, aborting".to_string()),
-        Ok(_) => {
-            let response = line.trim().to_lowercase();
-            if response == "y" || response == "yes" {
-                Ok(())
-            } else {
-                Err("Aborted by user".to_string())
-            }
-        }
-        Err(e) => Err(format!("Failed to read input: {e}")),
-    }
+/// Returns `!` so it can be used both as a statement and as the fallback in
+/// `Result::unwrap_or_else` without a type mismatch.
+fn fail_validation(msg: &str) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -543,15 +512,24 @@ fn run_init(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address(&payer).unwrap_or_else(|e| fail_validation(&e));
-    validate_address(&payee).unwrap_or_else(|e| fail_validation(&e));
-    validate_address(&token).unwrap_or_else(|e| fail_validation(&e));
-    validate_address(&resolver).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("payer", &payer).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("payee", &payee).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("token", &token).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("resolver", &resolver).unwrap_or_else(|e| fail_validation(&e));
 
     let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
+
+    confirm_action(
+        &format!(
+            "This will create agreement {agreement_id} (payer={payer}, payee={payee}, \
+             token={token}, resolver={resolver}, milestones={milestones_csv})."
+        ),
+        yes,
+        opts,
+    )?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -587,6 +565,12 @@ fn run_lock_funds(
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
+    confirm_action(
+        &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -619,6 +603,12 @@ fn run_submit_work(
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
+    confirm_action(
+        &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
+
     let mut args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -629,7 +619,9 @@ fn run_submit_work(
     if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
         validate_proof_uri(&uri)?;
         args.push("--proof-uri".to_string());
-        args.push(uri);
+        // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
+        // JSON, so a bare string value fails to parse — it must be JSON-quoted.
+        args.push(serde_json::to_string(&uri).unwrap_or(uri));
     }
 
     execute(config, "submit_work", &args, opts)
@@ -650,6 +642,14 @@ fn run_approve_release(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
+    confirm_action(
+        &format!(
+            "This will approve milestone {milestone_id} of agreement {agreement_id} and release funds to the payee."
+        ),
+        yes,
+        opts,
+    )?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -681,7 +681,13 @@ fn run_raise_dispute(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address(&caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+
+    confirm_action(
+        &format!("This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -712,6 +718,19 @@ fn run_resolve_dispute(
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
 
+    let outcome = if refund_to_payer {
+        "refund locked funds to the payer"
+    } else {
+        "release funds to the payee"
+    };
+    confirm_action(
+        &format!(
+            "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} and {outcome}."
+        ),
+        yes,
+        opts,
+    )?;
+
     let args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -739,6 +758,12 @@ fn run_cancel_milestone(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
+    confirm_action(
+        &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
+        yes,
+        opts,
+    )?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -802,6 +827,22 @@ fn run_milestone_status(
 
 /// Convert a comma-separated amount string like `"1000,2000"` into the JSON
 /// array format the `stellar` CLI accepts for a `Vec<Milestone>` argument.
+///
+/// ## Accepted CSV format
+///
+/// - One or more amounts separated by a single `,`.
+/// - Surrounding whitespace around each amount is trimmed, so
+///   `" 100 , 200 "` and `"100,200"` are equivalent.
+/// - Every field between commas must be a non-empty, positive `i128`.
+///
+/// ## Rejected (whole command fails with a descriptive error)
+///
+/// - Empty / whitespace-only input.
+/// - A leading comma (`",1000"`), trailing comma (`"1000,"`), or doubled
+///   comma (`"1000,,2000"`) — each leaves an empty field. These are treated
+///   as user typos rather than silently dropped, so a mistyped list can never
+///   quietly create fewer milestones than intended (#238).
+/// - Any field that is not a valid integer, is zero, or is negative.
 ///
 /// Amounts are parsed as `i128` to match the contract's `Milestone.amount` type.
 /// Values that are not valid integers, are zero, or are negative are rejected
@@ -1172,6 +1213,66 @@ mod tests {
         let err = build_milestones_json("1000,,2000").unwrap_err();
         assert!(
             err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    // --- build_milestones_json: comma + whitespace edge cases (#248) ---
+
+    #[test]
+    fn test_build_milestones_json_trailing_comma_with_space_rejected() {
+        // A trailing ", " (comma then whitespace) still produces an empty field.
+        let err = build_milestones_json("1000,2000, ").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_leading_comma_with_space_rejected() {
+        let err = build_milestones_json(" ,1000,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_whitespace_only_field_rejected() {
+        // A field that is nothing but spaces/tabs between two commas.
+        let err = build_milestones_json("1000, \t ,2000").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 1"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_multiple_trailing_commas_rejected() {
+        let err = build_milestones_json("1000,2000,,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 2"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_mixed_tabs_and_newlines_trimmed() {
+        // Mixed whitespace (tabs, newlines, spaces) around otherwise valid
+        // amounts is tolerated and stripped.
+        let json = build_milestones_json("\t1000 ,\n 2000\t,  500\n").unwrap();
+        assert_eq!(
+            json,
+            r#"[{"id":0,"amount":"1000","status":{"Pending":null},"proof_uri":null},{"id":1,"amount":"2000","status":{"Pending":null},"proof_uri":null},{"id":2,"amount":"500","status":{"Pending":null},"proof_uri":null}]"#
+        );
+    }
+
+    #[test]
+    fn test_build_milestones_json_only_commas_rejected() {
+        let err = build_milestones_json(",,").unwrap_err();
+        assert!(
+            err.contains("empty milestone amount at index 0"),
             "got: {err}"
         );
     }

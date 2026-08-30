@@ -28,6 +28,18 @@
 //! 5. **Independent milestone states** — completing or cancelling one milestone
 //!    in a multi-milestone agreement never changes the state of any other
 //!    milestone.
+//!
+//! 6. **Balance conservation under random operation ordering** (#141) — same
+//!    invariant as #1, but instead of one fixed lock→submit→approve pass per
+//!    milestone, a random *sequence* of operations (lock/submit/approve/
+//!    dispute/resolve/cancel) is generated and applied across all of an
+//!    agreement's milestones in random order, skipping whichever operations
+//!    aren't a legal transition from that milestone's current state. This
+//!    exercises interleavings the other invariants never construct — e.g.
+//!    disputing milestone 2 while milestone 0 is mid-approval — which is
+//!    where race-condition-shaped bugs between milestones would show up.
+//!    Sequences run up to 60 ops long; raise the case count for a deeper
+//!    sweep with `PROPTEST_CASES=10000 cargo test test_properties`.
 
 use proptest::prelude::*;
 use soroban_sdk::{
@@ -413,5 +425,136 @@ proptest! {
             EscrowStatus::Pending,
             "milestone 1 must remain Pending after milestone 0 is cancelled"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Invariant 6 — balance conservation under randomly ordered operation sequences
+// ---------------------------------------------------------------------------
+
+/// One step of a randomly generated operation sequence. Which milestone it
+/// targets is chosen separately (see `prop_balance_conservation_random_op_sequence`).
+#[derive(Debug, Clone, Copy)]
+enum FuzzOp {
+    Lock,
+    Submit,
+    Approve,
+    Dispute,
+    ResolveRefund,
+    ResolveRelease,
+    Cancel,
+}
+
+fn fuzz_op_strategy() -> impl Strategy<Value = FuzzOp> {
+    prop_oneof![
+        Just(FuzzOp::Lock),
+        Just(FuzzOp::Submit),
+        Just(FuzzOp::Approve),
+        Just(FuzzOp::Dispute),
+        Just(FuzzOp::ResolveRefund),
+        Just(FuzzOp::ResolveRelease),
+        Just(FuzzOp::Cancel),
+    ]
+}
+
+proptest! {
+    /// Applies a random sequence of operations, targeting randomly chosen
+    /// milestones in a multi-milestone agreement, in random order — skipping
+    /// any operation that isn't a legal transition from that milestone's
+    /// current (locally tracked) state. After every operation that *is*
+    /// applied, the contract's token balance must equal the sum of amounts
+    /// this test believes are still locked (milestones currently Funded,
+    /// WorkSubmitted, or Disputed) — verifying balance conservation holds
+    /// under adversarial interleaving across milestones, not just the one
+    /// fixed per-milestone lock→submit→approve pass every other test uses.
+    #[test]
+    fn prop_balance_conservation_random_op_sequence(
+        amounts in prop::collection::vec(1i128..=10_000i128, 2..=4usize),
+        ops in prop::collection::vec((0usize..4, fuzz_op_strategy()), 20..=60usize),
+    ) {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let token_client = token::TokenClient::new(&env, &token_address);
+        let id = agreement_id(&env, 90);
+
+        let milestone_count = amounts.len();
+        let milestones = milestones_from_amounts(&env, &amounts);
+        client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+
+        // Local shadow model of each milestone's status, mirroring the
+        // contract's authorized state machine — not read back from the
+        // contract, so a divergence between this model and on-chain state
+        // shows up as a wrong `expected_balance` rather than being masked.
+        // `amounts` is generated with 2..=4 entries; a fixed-size array
+        // avoids needing an allocator in this `#![no_std]` crate.
+        let mut status = [
+            EscrowStatus::Pending,
+            EscrowStatus::Pending,
+            EscrowStatus::Pending,
+            EscrowStatus::Pending,
+        ];
+        let mut expected_balance: i128 = 0;
+
+        for (raw_index, op) in ops {
+            let i = raw_index % milestone_count;
+            let mid = i as u32;
+
+            let applies = matches!(
+                (status[i].clone(), op),
+                (EscrowStatus::Pending, FuzzOp::Lock)
+                    | (EscrowStatus::Pending, FuzzOp::Cancel)
+                    | (EscrowStatus::Funded, FuzzOp::Submit)
+                    | (EscrowStatus::Funded, FuzzOp::Dispute)
+                    | (EscrowStatus::WorkSubmitted, FuzzOp::Approve)
+                    | (EscrowStatus::WorkSubmitted, FuzzOp::Dispute)
+                    | (EscrowStatus::Disputed, FuzzOp::ResolveRefund)
+                    | (EscrowStatus::Disputed, FuzzOp::ResolveRelease)
+            );
+
+            if !applies {
+                continue;
+            }
+
+            match op {
+                FuzzOp::Lock => {
+                    client.lock_funds(&id, &mid);
+                    status[i] = EscrowStatus::Funded;
+                    expected_balance += amounts[i];
+                }
+                FuzzOp::Submit => {
+                    client.submit_work(&id, &mid, &None);
+                    status[i] = EscrowStatus::WorkSubmitted;
+                }
+                FuzzOp::Approve => {
+                    client.approve_and_release(&id, &mid);
+                    status[i] = EscrowStatus::Completed;
+                    expected_balance -= amounts[i];
+                }
+                FuzzOp::Dispute => {
+                    client.raise_dispute(&payer, &id, &mid);
+                    status[i] = EscrowStatus::Disputed;
+                }
+                FuzzOp::ResolveRefund => {
+                    client.resolve_dispute(&id, &mid, &true);
+                    status[i] = EscrowStatus::Refunded;
+                    expected_balance -= amounts[i];
+                }
+                FuzzOp::ResolveRelease => {
+                    client.resolve_dispute(&id, &mid, &false);
+                    status[i] = EscrowStatus::Completed;
+                    expected_balance -= amounts[i];
+                }
+                FuzzOp::Cancel => {
+                    client.cancel_unfunded_milestone(&id, &mid);
+                    status[i] = EscrowStatus::Refunded;
+                }
+            }
+
+            prop_assert_eq!(
+                token_client.balance(&client.address),
+                expected_balance,
+                "balance mismatch after applying {:?} to milestone {} (local status now {:?})",
+                op, i, status[i]
+            );
+        }
     }
 }
