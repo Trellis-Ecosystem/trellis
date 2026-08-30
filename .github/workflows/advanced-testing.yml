@@ -49,7 +49,7 @@ jobs:
           cat gas_costs.json
       
       - name: Upload gas costs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gas-costs
           path: contracts/trellis_core/gas_costs.json
@@ -89,7 +89,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload mutation results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-test-results
           path: contracts/trellis_core/mutants.json
