@@ -11,12 +11,19 @@ export interface Agreement {
 }
 
 export interface Milestone {
+  id?: number;
   amount: string;
   status: EscrowStatus;
   proof_uri: string | null;
 }
 
-export type EscrowStatus = 'Pending' | 'Funded' | 'WorkSubmitted' | 'Completed' | 'Disputed' | 'Refunded';
+export type EscrowStatus =
+  | 'Pending'
+  | 'Funded'
+  | 'WorkSubmitted'
+  | 'Completed'
+  | 'Disputed'
+  | 'Refunded';
 
 export interface SorobanEvent {
   type: string;

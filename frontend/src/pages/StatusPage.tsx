@@ -13,6 +13,7 @@ import MilestoneCard from '../components/MilestoneCard';
 import StatsBar from '../components/StatsBar';
 import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
+import { ExplorerLink } from '../components/ExplorerLink';
 
 export default function StatusPage() {
   const { id: urlId } = useParams<{ id: string }>();

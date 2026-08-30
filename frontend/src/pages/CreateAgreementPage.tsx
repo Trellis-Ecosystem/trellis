@@ -22,6 +22,39 @@ interface ValidationErrors {
   milestones?: string
 }
 
+/**
+ * Converts a user-supplied decimal amount string to a BigInt stroops value
+ * (7 decimal places) without floating-point arithmetic.
+ *
+ * Examples:
+ *   "100"         → 1000000000n
+ *   "100.5"       → 1005000000n
+ *   "0.0000001"   → 1n
+ *   "100.12345678" → throws (more than 7 decimal places)
+ *
+ * @throws {Error} if the amount is not a valid positive decimal number or has
+ *   more than 7 decimal places.
+ */
+export function amountToStroops(amount: string): bigint {
+  const trimmed = amount.trim()
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(`Invalid amount: "${trimmed}" is not a valid positive number.`)
+  }
+
+  const [intPart, fracPart = ''] = trimmed.split('.')
+  const DECIMALS = 7
+
+  if (fracPart.length > DECIMALS) {
+    throw new Error(
+      `Invalid amount: "${trimmed}" has more than ${DECIMALS} decimal places.`
+    )
+  }
+
+  // Pad fractional part to exactly 7 digits.
+  const paddedFrac = fracPart.padEnd(DECIMALS, '0')
+  return BigInt(intPart + paddedFrac)
+}
+
 function CreateAgreementPage() {
   const navigate = useNavigate()
   const wallet = useWallet()
@@ -69,11 +102,21 @@ function CreateAgreementPage() {
     if (milestones.length === 0) {
       newErrors.milestones = 'At least one milestone is required'
     } else {
-      const invalidMilestone = milestones.find(
-        (m) => !m.amount || parseFloat(m.amount) <= 0
-      )
+      const invalidMilestone = milestones.find((m) => {
+        if (!m.amount) return true
+        const trimmed = m.amount.trim()
+        // Must be a valid positive decimal with at most 7 decimal places.
+        if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) return true
+        // Must be greater than zero.
+        try {
+          return amountToStroops(trimmed) <= 0n
+        } catch {
+          return true
+        }
+      })
       if (invalidMilestone) {
-        newErrors.milestones = 'All milestones must have amounts greater than 0'
+        newErrors.milestones =
+          'All milestones must have valid positive amounts with at most 7 decimal places'
       }
     }
 
@@ -100,7 +143,7 @@ function CreateAgreementPage() {
       // Build milestone ScVals
       const milestoneScVals = milestones.map((m) =>
         nativeToScVal({
-          amount: BigInt(parseFloat(m.amount) * 1e7), // Convert to stroops (7 decimals)
+          amount: amountToStroops(m.amount), // Convert to stroops (7 decimals) without float imprecision
           description: m.description || '',
         })
       )
