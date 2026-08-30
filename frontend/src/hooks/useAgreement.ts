@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk'
 import { useContractRead } from './useContractRead'
 import { hexToBytes } from '../lib/format'
-import type { Agreement } from '../lib/soroban'
+import type { Agreement, RawAgreementResponse, RawMilestone } from '../lib/soroban'
+import { isValidAgreementResponse, parseEscrowStatus } from '../lib/soroban'
 
 const MAX_RETRIES = 3
 
@@ -73,15 +74,24 @@ export function useAgreement(agreementId: string | null) {
       // Parse the ScVal result into Agreement structure
       const native = scValToNative(data)
 
+      // Validate the response structure
+      if (!isValidAgreementResponse(native)) {
+        console.error('[useAgreement] Invalid agreement response structure:', native)
+        return null
+      }
+
+      const response = native as RawAgreementResponse
+      const milestonesArray = response.milestones || []
+
       return {
         agreement_id: agreementId!,
-        payer: native.payer || '',
-        payee: native.payee || '',
-        token: native.token || '',
-        dispute_resolver: native.dispute_resolver || '',
-        milestones: (native.milestones || []).map((m: any, index: number) => ({
+        payer: response.payer || '',
+        payee: response.payee || '',
+        token: response.token || '',
+        dispute_resolver: response.dispute_resolver || '',
+        milestones: milestonesArray.map((m: RawMilestone, index: number) => ({
           id: index,
-          amount: m.amount?.toString() || '0',
+          amount: typeof m.amount === 'string' ? m.amount : (m.amount?.toString() || '0'),
           status: parseEscrowStatus(m.status),
           proof_uri: m.proof_uri || '',
         })),
@@ -106,20 +116,4 @@ export function useAgreement(agreementId: string | null) {
     /** Manually re-fetch and reset the retry counter. */
     refetch,
   }
-}
-
-function parseEscrowStatus(statusValue: any): Agreement['milestones'][0]['status'] {
-  // Handle both string names and enum-like structures
-  if (typeof statusValue === 'string') {
-    return statusValue as any
-  }
-
-  if (typeof statusValue === 'object' && statusValue !== null) {
-    const keys = Object.keys(statusValue)
-    if (keys.length > 0) {
-      return keys[0] as any
-    }
-  }
-
-  return 'Pending'
 }

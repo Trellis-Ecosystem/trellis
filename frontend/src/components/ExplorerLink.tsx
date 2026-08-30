@@ -61,9 +61,12 @@ export function ExplorerLink({
       rel="noopener noreferrer"
       title={`View ${ENTITY_NOUN[type]} ${id} on Stellar Expert (${networkLabel(network)})`}
       data-testid="explorer-link"
-      className={`inline-flex items-center gap-1 font-mono text-cyan-400 underline decoration-cyan-400/40 underline-offset-2 transition-colors hover:text-cyan-300 hover:decoration-cyan-300 ${className}`}
+      className={`inline-flex items-center gap-1 min-w-0 font-mono text-cyan-400 underline decoration-cyan-400/40 underline-offset-2 transition-colors hover:text-cyan-300 hover:decoration-cyan-300 ${className}`}
     >
-      <span>{label ?? (full ? id : truncateId(id))}</span>
+      {/* break-all: `full` renders the raw 56-char identifier as one unbroken
+          token, which otherwise forces the flex item (and page) to overflow
+          horizontally on narrow viewports instead of wrapping (#120). */}
+      <span className="break-all">{label ?? (full ? id : truncateId(id))}</span>
       <ExternalLinkIcon />
     </a>
   )

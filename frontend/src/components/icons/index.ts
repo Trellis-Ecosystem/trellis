@@ -6,3 +6,5 @@
 export { LockIcon } from './LockIcon'
 export { CheckCircleIcon } from './CheckCircleIcon'
 export { ScaleIcon } from './ScaleIcon'
+export { NumberOneIcon } from './NumberOneIcon'
+export { NumberThreeIcon } from './NumberThreeIcon'

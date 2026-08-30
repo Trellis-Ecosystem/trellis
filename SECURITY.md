@@ -77,6 +77,23 @@ either form:
     parent process's environment.
   - The CLI prints a warning when it detects a raw seed.
 
+## Environment Files and Secrets
+
+Never commit `.env` files to version control.  The repository's `.gitignore`
+explicitly excludes:
+
+- `.env` (root, used by the CLI)
+- `contracts/trellis_core/.env` (contract deployment secrets)
+- `frontend/.env`, `frontend/.env.local`, `frontend/.env.*.local`
+  (contain `VITE_CONTRACT_ID`, `VITE_RPC_URL`, `VITE_NETWORK_PASSPHRASE`)
+
+Use the corresponding `.env.example` files as templates.  Copy them to `.env`
+and fill in real values locally — the `.env` file will be ignored by git.
+
+If you believe a secret has been accidentally committed, rotate the affected
+key immediately and report it through the vulnerability disclosure process
+above.
+
 ## Hall of Fame
 
 We're grateful to the following researchers for responsibly disclosing
