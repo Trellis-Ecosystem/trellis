@@ -1,3 +1,10 @@
+/**
+ * Shared domain types for the Trellis escrow contract.
+ *
+ * Runtime contract calls are performed via the hooks in `hooks/useContractRead.ts`
+ * and `hooks/useContractInvoke.ts`.  No stub servers or mock functions live here.
+ */
+
 export interface Agreement {
   agreement_id: string;
   payer: string;
@@ -8,12 +15,19 @@ export interface Agreement {
 }
 
 export interface Milestone {
+  id?: number;
   amount: string;
   status: EscrowStatus;
   proof_uri: string;
 }
 
-export type EscrowStatus = 'Pending' | 'Funded' | 'WorkSubmitted' | 'Completed' | 'Disputed' | 'Refunded';
+export type EscrowStatus =
+  | 'Pending'
+  | 'Funded'
+  | 'WorkSubmitted'
+  | 'Completed'
+  | 'Disputed'
+  | 'Refunded';
 
 export interface SorobanEvent {
   type: string;
@@ -21,20 +35,4 @@ export interface SorobanEvent {
   txHash: string;
   timestamp: number;
   data: Record<string, unknown>;
-}
-
-export const sorobanServer = {
-  getEvents: async (_options?: unknown) => {
-    return { events: [] };
-  },
-};
-
-export async function getAgreement(agreementId: string): Promise<Agreement> {
-  throw new Error(
-    `Agreement query not yet fully implemented. Agreement ID: ${agreementId}. Use CLI: trellis status --agreement-id ${agreementId}`
-  );
-}
-
-export async function getAgreementEvents(): Promise<SorobanEvent[]> {
-  return [];
 }

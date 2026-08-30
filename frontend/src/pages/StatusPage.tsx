@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Agreement, SorobanEvent } from '../lib/soroban';
-import { sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
-import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
 import { isValidHexAgreementId } from '../lib/agreementId';
 import MilestoneRow from '../components/MilestoneRow';
 import StatsBar from '../components/StatsBar';
 import { AgreementCardSkeleton } from '../components/skeletons';
+import { ExplorerLink } from '../components/ExplorerLink';
 
 export default function StatusPage() {
   const { id: urlId } = useParams<{ id: string }>();
@@ -212,30 +211,10 @@ async function queryAgreement(agreementId: string): Promise<Agreement> {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function queryEvents(): Promise<SorobanEvent[]> {
-  // Query events from Soroban RPC
-  // This is a simplified implementation
-  try {
-    const events = await sorobanServer.getEvents({
-      startLedger: 0,
-      limit: 100,
-      filters: [
-        {
-          type: 'contract',
-          contractIds: [CONTRACT_ID],
-        },
-      ],
-    });
-
-    return (events.events || []).map((event: any) => ({
-      type: 'event',
-      ledger: event.ledger,
-      txHash: event.txHash,
-      timestamp: Date.now(),
-      data: {},
-    }));
-  } catch (error) {
-    console.error('Failed to fetch events:', error);
-    return [];
-  }
+  // Real event querying is handled by the useAgreementEvents hook via useContractRead.
+  // This page (StatusPage) is the legacy search-only variant; live event feeds are
+  // available on AgreementStatusPage at /agreement/:id.
+  return [];
 }
