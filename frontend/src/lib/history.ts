@@ -8,6 +8,12 @@ export const MAX_ENTRY_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 export type AgreementRole = 'payer' | 'payee' | 'resolver' | 'observer'
 
+/** Check if a date string is valid and parseable. */
+function isValidDate(dateString: string): boolean {
+  const timestamp = new Date(dateString).getTime()
+  return !Number.isNaN(timestamp)
+}
+
 export interface HistoryEntry {
   agreementId: string
   /** User-defined nickname. */
@@ -41,7 +47,19 @@ function readStorage(): HistoryEntry[] {
 /** Remove entries whose lastViewed timestamp is older than MAX_ENTRY_AGE_MS. */
 function evictStaleEntries(entries: HistoryEntry[]): HistoryEntry[] {
   const cutoff = Date.now() - MAX_ENTRY_AGE_MS
-  const fresh = entries.filter((e) => new Date(e.lastViewed).getTime() > cutoff)
+  const fresh = entries.filter((e) => {
+    // Treat invalid dates as "recent" to preserve them instead of silently evicting.
+    // Log warning in dev mode for debugging.
+    if (!isValidDate(e.lastViewed)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(
+          `Invalid lastViewed date in history entry: "${e.lastViewed}" (agreementId: "${e.agreementId}"). Preserving entry.`,
+        )
+      }
+      return true // Keep the entry
+    }
+    return new Date(e.lastViewed).getTime() > cutoff
+  })
   // If entries were evicted, persist the cleaned list back to storage
   if (fresh.length !== entries.length) {
     writeStorageRaw(fresh)

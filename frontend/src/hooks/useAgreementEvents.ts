@@ -14,6 +14,11 @@ export interface AgreementEvent {
   milestoneId?: number
   amount?: string
   caller?: string
+  payer?: string
+  payee?: string
+  proofUri?: string
+  refundedToPayer?: boolean
+  cancelledBy?: string
 }
 
 const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
@@ -223,7 +228,9 @@ function parseEventType(event: RawEventResponse): string {
     if (topics.length > 0 && typeof topics[0] === 'string') {
       const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
       if (firstTopic.switch().name === 'scvSymbol') {
-        return firstTopic.sym().toString()
+        const symbol = firstTopic.sym().toString()
+        // Map abbreviated symbols to human-readable names
+        return EVENT_TYPE_MAP[symbol] || symbol
       }
     }
   } catch {
@@ -237,6 +244,20 @@ function parseEventData(event: RawEventResponse): Partial<AgreementEvent> {
     const value = event.value?.xdr
     if (!value || typeof value !== 'string') {
       return {}
+    }
+
+    // Get the event type from topics
+    const topics = event.topic || []
+    let eventTypeSymbol = 'unknown'
+    if (topics.length > 0) {
+      try {
+        const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
+        if (firstTopic.switch().name === 'scvSymbol') {
+          eventTypeSymbol = firstTopic.sym().toString()
+        }
+      } catch {
+        // Ignore
+      }
     }
 
     const scVal = xdr.ScVal.fromXDR(value, 'base64')

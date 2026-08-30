@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CheckCircleIcon, LockIcon, ScaleIcon } from './icons'
+import { CheckCircleIcon, LockIcon, ScaleIcon, NumberOneIcon, NumberThreeIcon } from './icons'
 
 interface Step {
   id: string
@@ -11,7 +11,7 @@ interface Step {
 const STEPS: Step[] = [
   {
     id: 'create-agreement',
-    icon: '1',
+    icon: <NumberOneIcon size={16} color="#0A0E17" />,
     title: 'Create Agreement',
     description:
       'Define milestones, amounts, and the people involved. The payer authorizes and pays fees.',
@@ -25,7 +25,7 @@ const STEPS: Step[] = [
   },
   {
     id: 'submit-work',
-    icon: '3',
+    icon: <NumberThreeIcon size={16} color="#0A0E17" />,
     title: 'Submit Work',
     description:
       'The payee completes the work and submits proof (GitHub link, file, etc.).',
@@ -61,9 +61,7 @@ export function HowItWorks() {
           <li key={step.id} className="flex gap-4">
             <div
               aria-hidden="true"
-              className={`flex-shrink-0 w-8 h-8 bg-cyan-400 rounded-full flex items-center justify-center text-navy-900 ${
-                typeof step.icon === 'string' ? 'font-bold text-sm' : ''
-              }`.trimEnd()}
+              className="flex-shrink-0 w-8 h-8 bg-cyan-400 rounded-full flex items-center justify-center text-navy-900"
             >
               {step.icon}
             </div>
