@@ -237,13 +237,16 @@ async function queryEvents(): Promise<SorobanEvent[]> {
       ],
     });
 
-    return (events.events || []).map((event: any) => ({
-      type: 'event',
-      ledger: event.ledger,
-      txHash: event.txHash,
-      timestamp: Date.now(),
-      data: {},
-    }));
+    const rawEvents: unknown[] = events.events || [];
+    return rawEvents
+      .filter(isValidEventResponse)
+      .map((event: RawEventResponse) => ({
+        type: 'event',
+        ledger: event.ledger || 0,
+        txHash: event.txHash || '',
+        timestamp: Date.now(),
+        data: {},
+      }));
   } catch (error) {
     console.error('Failed to fetch events:', error);
     return [];
