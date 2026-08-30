@@ -42,8 +42,7 @@ export function NetworkBackground() {
     let animationId: number
     let particles: Particle[] = []
     let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null
-    let lastResizeTime = 0
-    const RESIZE_THROTTLE_MS = 100
+    const RESIZE_DEBOUNCE_MS = 200
 
     const layerBuckets: LayerBuckets = [[], [], []]
 
@@ -247,7 +246,14 @@ export function NetworkBackground() {
     }
 
     const performResize = () => {
-      lastResizeTime = Date.now()
+      const dpr = window.devicePixelRatio || 1
+      const nextWidth = Math.round(window.innerWidth * dpr)
+      const nextHeight = Math.round(window.innerHeight * dpr)
+      // Skip the expensive resize + particle recalibration entirely when the
+      // physical canvas size hasn't actually changed (e.g. devtools repaint,
+      // toolbar show/hide firing a resize event with identical dimensions).
+      if (nextWidth === canvas!.width && nextHeight === canvas!.height) return
+
       const oldWidth = canvas!.width
       const oldHeight = canvas!.height
       resize()
@@ -255,14 +261,8 @@ export function NetworkBackground() {
     }
 
     const handleResize = () => {
-      const now = Date.now()
-      const elapsed = now - lastResizeTime
-      if (elapsed >= RESIZE_THROTTLE_MS) {
-        performResize()
-        return
-      }
       if (resizeTimeoutId !== null) clearTimeout(resizeTimeoutId)
-      resizeTimeoutId = setTimeout(performResize, RESIZE_THROTTLE_MS - elapsed)
+      resizeTimeoutId = setTimeout(performResize, RESIZE_DEBOUNCE_MS)
     }
 
     const handleVisibilityChange = () => {

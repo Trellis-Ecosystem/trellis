@@ -1,6 +1,7 @@
 use soroban_sdk::{
+    symbol_short,
     testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
-    token, vec, Address, BytesN, Env, String, Vec,
+    token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
 };
 
 use crate::{
@@ -91,7 +92,7 @@ fn test_happy_path() {
     let amount: i128 = 1_000;
 
     // ── init ───────────────────────────────────────────────────────────────
-    env.mock_all_auths(); // init requires auth from all parties
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -138,10 +139,39 @@ fn test_happy_path() {
     );
 
     // ── event assertions ───────────────────────────────────────────────────
+    // env.events().all() also carries the SAC's own mint/transfer events, so
+    // only the Trellis contract's own events (matched by contract address)
+    // are checked here, in the order they must have fired: created, locked,
+    // submitted, released.
+    let expected_topics = [
+        symbol_short!("trlls_crte"),
+        symbol_short!("trlls_lckd"),
+        symbol_short!("trlls_sbmt"),
+        symbol_short!("trlls_rlsd"),
+    ];
     let all_events = env.events().all();
-    assert!(
-        all_events.is_empty() || all_events.len() >= 4,
-        "expected Trellis events if recorded"
+    let mut matched = 0usize;
+    for i in 0..all_events.len() {
+        let (contract_id, topics, _data) = all_events.get_unchecked(i);
+        if contract_id != client.address {
+            continue;
+        }
+        let topic0 = Symbol::try_from_val(&env, &topics.get_unchecked(0))
+            .expect("event topic 0 must decode as a Symbol");
+        assert!(
+            matched < expected_topics.len(),
+            "more Trellis contract events fired than expected"
+        );
+        assert_eq!(
+            topic0, expected_topics[matched],
+            "event {matched} name mismatch"
+        );
+        matched += 1;
+    }
+    assert_eq!(
+        matched,
+        expected_topics.len(),
+        "expected created → locked → submitted → released events, in order"
     );
 }
 
@@ -152,7 +182,7 @@ fn test_double_init_fails() {
     let id = agreement_id(&env, 2);
 
     // First init — must succeed.
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -163,7 +193,7 @@ fn test_double_init_fails() {
     );
 
     // Second init — must fail with AlreadyInitialized.
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     let result = client.try_init(
         &id,
         &payer,
@@ -187,7 +217,7 @@ fn test_dispute_and_refund_to_payer() {
     let id = agreement_id(&env, 3);
     let amount: i128 = 2_000;
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -227,7 +257,7 @@ fn test_cancel_unfunded_milestone() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 4);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -252,14 +282,14 @@ fn test_cancel_unfunded_milestone() {
 }
 
 /// Cancelling a milestone that has already been funded must be rejected with
-/// InvalidStateTransition, not NoFundsToRefund — the milestone genuinely has
-/// funds locked, so the error must reflect the state machine violation.
+/// InvalidStateTransition — the milestone genuinely has funds locked, so the
+/// error must reflect the state machine violation, not an economic one.
 #[test]
 fn test_cancel_funded_milestone_fails_with_invalid_state_transition() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 6);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -302,7 +332,7 @@ fn test_multi_milestone_transitions() {
         },
     ];
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -343,7 +373,7 @@ fn test_batch_lock_funds() {
         Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
 
     let milestone_ids = vec![&env, 0u32, 1u32];
@@ -375,7 +405,7 @@ fn test_batch_lock_funds_partial_failure() {
         Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
 
     auth_as(&env, &payer);
@@ -400,7 +430,7 @@ fn test_get_agreement() {
     let id = agreement_id(&env, 5);
 
     // Init with one milestone so there is something to read back.
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -452,7 +482,7 @@ fn test_get_milestone_returns_correct_milestone() {
         Milestone { amount: 200, status: EscrowStatus::Pending, proof_uri: None },
     ];
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
 
     let m = client.get_milestone(&id, &1u32);
@@ -468,7 +498,7 @@ fn test_get_milestone_invalid_id_returns_none() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 21);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -493,7 +523,7 @@ fn test_lock_funds_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 30);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -515,7 +545,7 @@ fn test_submit_work_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 31);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -541,7 +571,7 @@ fn test_approve_release_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 32);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -570,7 +600,7 @@ fn test_resolve_dispute_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 33);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -598,7 +628,7 @@ fn test_raise_dispute_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 34);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -624,7 +654,7 @@ fn test_cancel_unfunded_wrong_role_fails() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 35);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -667,7 +697,7 @@ fn test_get_total_amount_matches_sum() {
         },
     ];
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -687,7 +717,7 @@ fn test_extend_ttl_success() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 41);
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
@@ -697,7 +727,8 @@ fn test_extend_ttl_success() {
         &dispute_resolver,
     );
 
-    env.mock_all_auths();
+    // extend_agreement_ttl has no require_auth() gate — it's a permissionless
+    // keeper entrypoint — so no auth mock is needed here.
     let result = client.extend_agreement_ttl(&id);
     assert!(result.is_ok(), "extend_agreement_ttl should succeed on existing agreement");
 }
@@ -708,7 +739,7 @@ fn test_extend_ttl_nonexistent_agreement() {
     let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
     let id = agreement_id(&env, 99);
 
-    env.mock_all_auths();
+    // No auth mock needed — see comment above test_extend_ttl_success.
     let result = client.try_extend_agreement_ttl(&id);
     assert_eq!(
         result,
@@ -724,7 +755,7 @@ fn test_dispute_raised_by_payer() {
     let id = agreement_id(&env, 42);
     let amount: i128 = 2_000;
 
-    env.mock_all_auths();
+    auth_as(&env, &payer); // init only requires the payer's auth
     client.init(
         &id,
         &payer,
