@@ -8,7 +8,9 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
     </ErrorBoundary>
   </StrictMode>,
 )
