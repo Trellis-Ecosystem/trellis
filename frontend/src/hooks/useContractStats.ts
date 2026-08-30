@@ -123,15 +123,21 @@ export function useContractStats(): UseContractStatsResult {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
   const statsRef = useRef<ContractStats | null>(null)
+  // Bumped on every fetch kickoff so a request superseded by a newer one
+  // (e.g. the immediate refetch on tab-visible) can recognize it's stale
+  // and skip applying its result, even if it resolves after the newer one.
+  const requestIdRef = useRef(0)
 
   const fetchStats = useCallback(async (signal: AbortSignal) => {
+    const requestId = ++requestIdRef.current
+
     try {
       const [agreements, milestonesLocked] = await Promise.all([
         fetchEventCount('created', signal),
         fetchEventCount('locked', signal),
       ])
 
-      if (signal.aborted) return
+      if (signal.aborted || requestId !== requestIdRef.current) return
 
       const next: ContractStats = { agreements, milestonesLocked }
       statsRef.current = next
@@ -139,7 +145,7 @@ export function useContractStats(): UseContractStatsResult {
       setStatus('ok')
       setLastUpdated(new Date().toISOString())
     } catch (err) {
-      if (signal.aborted) return
+      if (signal.aborted || requestId !== requestIdRef.current) return
 
       console.error('[useContractStats] Fetch failed:', err)
 
@@ -160,16 +166,36 @@ export function useContractStats(): UseContractStatsResult {
     warnIfPlaceholder('RPC_URL', RPC_URL)
 
     const controller = new AbortController()
+    let interval: ReturnType<typeof setInterval> | null = null
+
+    const startInterval = () => {
+      if (interval !== null) return
+      interval = setInterval(() => fetchStats(controller.signal), POLL_INTERVAL_MS)
+    }
+
+    const stopInterval = () => {
+      if (interval === null) return
+      clearInterval(interval)
+      interval = null
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopInterval()
+      } else {
+        fetchStats(controller.signal)
+        startInterval()
+      }
+    }
 
     fetchStats(controller.signal)
-
-    const interval = setInterval(() => {
-      fetchStats(controller.signal)
-    }, POLL_INTERVAL_MS)
+    startInterval()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       controller.abort()
-      clearInterval(interval)
+      stopInterval()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [fetchStats])
 

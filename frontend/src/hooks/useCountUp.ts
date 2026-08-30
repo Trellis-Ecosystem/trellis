@@ -52,6 +52,7 @@ export function useCountUp(
     return () => {
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
       }
     }
   }, [targetValue, duration, minThreshold])
