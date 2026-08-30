@@ -1,0 +1,97 @@
+# Scans frontend npm dependencies for known CVEs using `npm audit`.
+#
+# Runs on every push/PR that touches frontend/ and on a weekly schedule so
+# newly published advisories are caught even when the dependency tree has not
+# changed.  The audit level is set to `high` so only high/critical findings
+# fail the build; moderate and low findings are reported but not blocking.
+#
+# Allowlist: advisories that have been reviewed and deliberately tolerated are
+# listed in .npmrc (audit-level) and suppressed via `npm audit --omit` or via
+# the `overrides` section in package.json.  Known false-positive IDs are
+# documented in frontend/.audit-allowlist.json.
+
+name: npm audit
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/npm-audit.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/npm-audit.yml'
+  schedule:
+    # Every Monday at 07:00 UTC — offset from cargo-audit (Mon 06:00) so the
+    # two supply-chain scans do not race for the same runner pool.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: npm-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: frontend
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: Frontend dependency vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Install deps so the lockfile is fully resolved before auditing.
+      # `npm ci` is used (not `npm install`) to guarantee the lockfile governs
+      # exactly which versions are present.
+      - name: Install dependencies
+        run: npm ci
+
+      # Fail the build on high or critical advisories.
+      # The `--json` flag writes structured output so the subsequent step can
+      # surface a human-readable summary in the Actions log.
+      - name: Run npm audit (high/critical)
+        id: audit
+        run: |
+          npm audit --audit-level=high --json > audit-report.json || true
+          npm audit --audit-level=high
+
+      # Always upload the raw JSON report so it is inspectable from the
+      # Actions UI even when the build passes.
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: frontend/audit-report.json
+          retention-days: 30
+
+      - name: Report findings on failure
+        if: failure()
+        run: |
+          echo "::error::npm audit found high or critical vulnerabilities."
+          echo "Run 'npm audit' locally to review the findings."
+          echo "If a finding is a confirmed false positive, document it in"
+          echo "frontend/.audit-allowlist.json and add an 'overrides' entry"
+          echo "in frontend/package.json with a justification comment."
+          cat audit-report.json | node -e "
+            const r = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            const vulns = r.vulnerabilities || {};
+            const high = Object.values(vulns).filter(v => ['high','critical'].includes(v.severity));
+            console.log('High/critical findings:', high.length);
+            high.forEach(v => console.log(' -', v.name, v.severity, v.via?.map?.(x=>typeof x==='string'?x:x.title).join(', ')));
+          " 2>/dev/null || true

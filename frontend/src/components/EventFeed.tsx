@@ -20,15 +20,15 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
 
   if (isLoading && events.length === 0) {
     return (
-      <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">Event Timeline</h2>
+      <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+        <h2 className="text-xl font-semibold text-white dark:text-white light:text-gray-900 mb-4">Event Timeline</h2>
         <div className="animate-pulse space-y-4">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-navy-700" />
+              <div className="w-8 h-8 rounded-full bg-navy-700 dark:bg-navy-700 light:bg-gray-100" />
               <div className="flex-1 space-y-2">
-                <div className="h-4 bg-navy-700 rounded w-3/4" />
-                <div className="h-3 bg-navy-700 rounded w-1/2" />
+                <div className="h-4 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded w-3/4" />
+                <div className="h-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded w-1/2" />
               </div>
             </div>
           ))}
@@ -39,11 +39,11 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">Event Timeline</h2>
+      <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+        <h2 className="text-xl font-semibold text-white dark:text-white light:text-gray-900 mb-4">Event Timeline</h2>
         <div className="text-center py-8">
           <p className="text-red-400 mb-2">Failed to load events</p>
-          <p className="text-sm text-gray-500">{error}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-500 light:text-gray-600">{error}</p>
         </div>
       </div>
     )
@@ -51,18 +51,18 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
 
   if (events.length === 0) {
     return (
-      <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">Event Timeline</h2>
+      <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+        <h2 className="text-xl font-semibold text-white dark:text-white light:text-gray-900 mb-4">Event Timeline</h2>
         <div className="text-center py-8">
-          <p className="text-gray-400">No events found for this agreement</p>
+          <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">No events found for this agreement</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="rounded-xl border border-navy-700 bg-navy-800/60 p-6">
-      <h2 className="text-xl font-semibold text-white mb-6">Event Timeline</h2>
+    <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+      <h2 className="text-xl font-semibold text-white dark:text-white light:text-gray-900 mb-6">Event Timeline</h2>
 
       <div className="space-y-6">
         {eventDescriptions.map((event, index) => (
@@ -74,9 +74,9 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
 
             {/* Content */}
             <div className="flex-1 min-w-0">
-              <p className="text-white font-medium">{event.description}</p>
+              <p className="text-white dark:text-white light:text-gray-900 font-medium">{event.description}</p>
               
-              <div className="mt-1 flex items-center gap-4 text-xs text-gray-400">
+              <div className="mt-1 flex items-center gap-4 text-xs text-gray-400 dark:text-gray-400 light:text-gray-600">
                 <span>{new Date(event.timestamp).toLocaleString()}</span>
                 {event.milestoneId !== undefined && (
                   <span className="font-mono">Milestone #{event.milestoneId}</span>
@@ -88,7 +88,7 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
 
               {event.caller && (
                 <div className="mt-2 text-xs">
-                  <span className="text-gray-400">By: </span>
+                  <span className="text-gray-400 dark:text-gray-400 light:text-gray-600">By: </span>
                   <ExplorerLink type="account" value={event.caller} />
                 </div>
               )}

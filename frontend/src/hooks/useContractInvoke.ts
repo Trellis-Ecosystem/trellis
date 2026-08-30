@@ -1,15 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Contract,
-  SorobanRpc,
   Transaction,
   TransactionBuilder,
+  rpc,
   xdr,
 } from '@stellar/stellar-sdk'
 import { signTransaction } from '../lib/wallet'
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 
 export type InvokeStatus = 'idle' | 'building' | 'signing' | 'submitting' | 'success' | 'error'
+
+/**
+ * Build a user-facing message for a failed `sendTransaction` call.
+ *
+ * `errorResult.toXDR()` can itself return `undefined` (or throw, if the
+ * result is malformed) even when `errorResult` is present, which previously
+ * surfaced as the confusing "Transaction failed: undefined". This falls back
+ * to the transaction result's error code (e.g. "txFAILED"), and finally to a
+ * generic message, so the user always sees something meaningful.
+ */
+export function formatSendTransactionError(errorResult: xdr.TransactionResult | undefined): string {
+  let code: string | undefined
+  try {
+    code = errorResult?.result().switch().name
+  } catch {
+    code = undefined
+  }
+
+  let base64: string | undefined
+  try {
+    base64 = errorResult?.toXDR('base64') || undefined
+  } catch {
+    base64 = undefined
+  }
+
+  if (base64) {
+    return code ? `Transaction failed: ${code} (${base64})` : `Transaction failed: ${base64}`
+  }
+  return code ? `Transaction failed: ${code}` : 'Transaction failed: unknown error'
+}
 
 interface UseContractInvokeResult {
   invoke: (method: string, args: xdr.ScVal[], publicKey: string, fee?: string) => Promise<string>
@@ -67,7 +97,7 @@ export function useContractInvoke(): UseContractInvokeResult {
           setTxHash(null)
         }
 
-        const server = new SorobanRpc.Server(RPC_URL)
+        const server = new rpc.Server(RPC_URL, { allowHttp: RPC_URL.startsWith('http://') })
         const contract = new Contract(CONTRACT_ID)
 
         // Fetch account to get correct sequence number
@@ -87,12 +117,12 @@ export function useContractInvoke(): UseContractInvokeResult {
         const simulated = await server.simulateTransaction(builtTx)
         if (signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
-        if (SorobanRpc.Api.isSimulationError(simulated)) {
+        if (rpc.Api.isSimulationError(simulated)) {
           throw new Error(`Simulation failed: ${simulated.error}`)
         }
 
         // Prepare transaction with simulation results
-        const preparedTx = SorobanRpc.assembleTransaction(builtTx, simulated).build()
+        const preparedTx = rpc.assembleTransaction(builtTx, simulated).build()
 
         // Sign with Freighter
         if (!unmountedRef.current) setStatus('signing')
@@ -117,7 +147,7 @@ export function useContractInvoke(): UseContractInvokeResult {
         if (signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
         if (sendResult.status === 'ERROR') {
-          throw new Error(`Transaction failed: ${sendResult.errorResult?.toXDR('base64')}`)
+          throw new Error(formatSendTransactionError(sendResult.errorResult))
         }
 
         // Poll for transaction result
@@ -126,7 +156,7 @@ export function useContractInvoke(): UseContractInvokeResult {
         const maxAttempts = 30
 
         while (
-          getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+          getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
           attempts < maxAttempts
         ) {
           if (signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
@@ -135,11 +165,11 @@ export function useContractInvoke(): UseContractInvokeResult {
           attempts++
         }
 
-        if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        if (getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND) {
           throw new Error('Transaction not found after polling')
         }
 
-        if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        if (getResult.status === rpc.Api.GetTransactionStatus.FAILED) {
           throw new Error('Transaction failed')
         }
 

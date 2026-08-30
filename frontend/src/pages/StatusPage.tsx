@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Agreement, SorobanEvent } from '../lib/soroban';
-import { sorobanServer } from '../lib/soroban';
+import { getAgreement, sorobanServer } from '../lib/soroban';
 import { useWallet } from '../lib/useWallet';
-import { CONTRACT_ID } from '../lib/config';
 import { addToHistory } from '../lib/history';
 import { isValidHexAgreementId } from '../lib/agreementId';
+import { useAgreement } from '../hooks/useAgreement';
+import { useAgreementEvents } from '../hooks/useAgreementEvents';
+import { ExplorerLink } from '../components/ExplorerLink';
 import MilestoneRow from '../components/MilestoneRow';
+import MilestoneCard from '../components/MilestoneCard';
 import StatsBar from '../components/StatsBar';
+import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
 
 export default function StatusPage() {
@@ -20,33 +24,45 @@ export default function StatusPage() {
   const initialId = urlId || queryId || '';
 
   const [agreementId, setAgreementId] = useState(initialId);
-  const [agreement, setAgreement] = useState<Agreement | null>(null);
-  const [events, setEvents] = useState<SorobanEvent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The id currently being fetched. `null` until a valid id is submitted, which
+  // keeps the data hooks idle on first render.
+  const [queriedId, setQueriedId] = useState<string | null>(
+    initialId && isValidHexAgreementId(initialId.trim()) ? initialId.trim() : null,
+  );
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const handleQuery = useCallback(async (id: string) => {
-    if (!id.trim()) {
-      setError('Please enter an agreement ID');
-      return;
-    }
+  // Real on-chain reads — the previous local `queryAgreement` stub always threw,
+  // so the page could never display an agreement (issue #251).
+  const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId);
+  const {
+    events,
+    isLoading: eventsLoading,
+    error: eventsError,
+  } = useAgreementEvents(queriedId);
 
-    if (!isValidHexAgreementId(id.trim())) {
-      setError('Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).');
-      return;
-    }
+  const runQuery = useCallback(
+    (rawId: string) => {
+      const id = rawId.trim();
 
-    setLoading(true);
-    setError(null);
-    setAgreement(null);
-    setEvents([]);
+      if (!id) {
+        setValidationError('Please enter an agreement ID');
+        return;
+      }
 
-    try {
+      if (!isValidHexAgreementId(id)) {
+        setValidationError(
+          'Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).',
+        );
+        return;
+      }
+
+      setValidationError(null);
+      setQueriedId(id);
       navigate(`/agreement/${id}`);
 
       // Query agreement using contract read call
-      const agreement = await queryAgreement(id);
+      const agreement = await getAgreement(id);
       setAgreement(agreement);
 
       // Query events
@@ -64,21 +80,32 @@ export default function StatusPage() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    handleQuery(agreementId);
+    runQuery(agreementId);
   };
 
   useEffect(() => {
     if (initialId) {
       setAgreementId(initialId);
-      handleQuery(initialId);
+      runQuery(initialId);
     }
-  }, [initialId, handleQuery]);
+  }, [initialId, runQuery]);
+
+  // Stamp the refresh time whenever a fresh agreement payload lands.
+  useEffect(() => {
+    if (agreement) setLastUpdated(new Date());
+  }, [agreement]);
 
   // Record successful agreement views in local history
   useEffect(() => {
-    if (!agreement || !agreementId) return
-    addToHistory({ agreementId: agreement.agreement_id, lastViewed: new Date().toISOString() })
-  }, [agreement, agreementId])
+    if (!agreement) return;
+    addToHistory({
+      agreementId: agreement.agreement_id,
+      lastViewed: new Date().toISOString(),
+    });
+  }, [agreement]);
+
+  const displayError =
+    validationError ?? (isError ? error ?? 'Failed to query agreement' : null);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-navy-900 via-navy-800 to-navy-900 dark:from-navy-900 dark:via-navy-800 dark:to-navy-900 light:from-white light:via-gray-50 light:to-white px-6 py-12">
@@ -93,20 +120,32 @@ export default function StatusPage() {
               placeholder="Enter Agreement ID (hex format)"
               value={agreementId}
               onChange={(e) => setAgreementId(e.target.value)}
-              className="flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
+              className="min-w-0 flex-1 px-4 py-3 rounded-lg bg-navy-700 dark:bg-navy-700 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 placeholder-gray-500 dark:placeholder-gray-500 light:placeholder-gray-400 focus:outline-none focus:border-cyan-400"
             />
             <button
               type="submit"
-              disabled={loading}
+              disabled={isLoading}
               className="px-6 py-3 bg-cyan-400 text-navy-900 font-semibold rounded-lg hover:bg-cyan-300 transition-colors disabled:opacity-50"
             >
-              {loading ? 'Loading...' : 'Search'}
+              {isLoading ? 'Loading...' : 'Search'}
             </button>
           </div>
-          {error && <p className="mt-2 text-red-400 text-sm">{error}</p>}
+          {displayError && <p className="mt-2 text-red-400 text-sm">{displayError}</p>}
         </form>
 
-        {loading && !agreement && <AgreementCardSkeleton />}
+        {isLoading && !agreement && <AgreementCardSkeleton />}
+
+        {!queriedId && !isLoading && !displayError && (
+          <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">
+            Enter an agreement ID above to view its on-chain status.
+          </p>
+        )}
+
+        {queriedId && !isLoading && !agreement && !displayError && (
+          <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">
+            No agreement found for this ID.
+          </p>
+        )}
 
         {agreement && (
           <>
@@ -153,7 +192,9 @@ export default function StatusPage() {
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
               <h2 className="text-xl font-semibold text-cyan-400 mb-6">Milestones</h2>
 
-              <div className="overflow-x-auto">
+              {/* Desktop: full table. Mobile: single-column cards (#120) — a
+                  scrollable table is hard to read and hard to tap on a phone. */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200">
@@ -165,17 +206,29 @@ export default function StatusPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {agreement.milestones.map((milestone) => (
+                    {agreement.milestones.map((milestone, idx) => (
                       <MilestoneRow
-                        key={milestone.id}
+                        key={idx}
                         milestone={milestone}
                         agreement={agreement}
                         wallet={wallet}
-                        onUpdate={() => handleQuery(agreementId)}
+                        onUpdate={refetch}
                       />
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="md:hidden space-y-3">
+                {agreement.milestones.map((milestone) => (
+                  <MilestoneCard
+                    key={milestone.id}
+                    milestone={milestone}
+                    agreement={agreement}
+                    wallet={wallet}
+                    onUpdate={() => handleQuery(agreementId)}
+                  />
+                ))}
               </div>
             </div>
 
@@ -183,7 +236,11 @@ export default function StatusPage() {
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6">
               <h2 className="text-xl font-semibold text-cyan-400 mb-6">Event History</h2>
 
-              {events.length === 0 ? (
+              {eventsError ? (
+                <p className="text-red-400 text-sm">{eventsError}</p>
+              ) : eventsLoading && events.length === 0 ? (
+                <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">Loading events…</p>
+              ) : events.length === 0 ? (
                 <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">No events yet</p>
               ) : (
                 <div className="space-y-4">
@@ -206,12 +263,6 @@ export default function StatusPage() {
   );
 }
 
-async function queryAgreement(agreementId: string): Promise<Agreement> {
-  throw new Error(
-    `Agreement query not yet fully implemented for ID: ${agreementId}. Use CLI: trellis status --agreement-id ${agreementId}`
-  );
-}
-
 async function queryEvents(): Promise<SorobanEvent[]> {
   // Query events from Soroban RPC
   // This is a simplified implementation
@@ -227,13 +278,16 @@ async function queryEvents(): Promise<SorobanEvent[]> {
       ],
     });
 
-    return (events.events || []).map((event: any) => ({
-      type: 'event',
-      ledger: event.ledger,
-      txHash: event.txHash,
-      timestamp: Date.now(),
-      data: {},
-    }));
+    const rawEvents: unknown[] = events.events || [];
+    return rawEvents
+      .filter(isValidEventResponse)
+      .map((event: RawEventResponse) => ({
+        type: 'event',
+        ledger: event.ledger || 0,
+        txHash: event.txHash || '',
+        timestamp: Date.now(),
+        data: {},
+      }));
   } catch (error) {
     console.error('Failed to fetch events:', error);
     return [];

@@ -177,7 +177,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   }
 
   if (actions.length === 0) {
-    return <span className="text-gray-500 text-sm">—</span>
+    return <span className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-sm">—</span>
   }
 
   return (
@@ -188,7 +188,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
             key={action.label}
             onClick={action.action}
             disabled={isLoading || !wallet.connected}
-            className={`px-3 py-1 ${action.color} text-white font-semibold text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
+            className={`px-3 py-1 ${action.color} text-white dark:text-white light:text-gray-900 font-semibold text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {action.label}
           </button>
@@ -206,19 +206,19 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
       {/* Proof URI Input */}
       {showProofInput && (
-        <div className="space-y-2 p-3 bg-navy-700 rounded">
+        <div className="space-y-2 p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded">
           <input
             type="text"
             placeholder="Proof URI (e.g., GitHub PR, IPFS link)"
             value={proofUri}
             onChange={(e) => setProofUri(e.target.value)}
-            className="w-full px-3 py-2 bg-navy-800 border border-navy-600 text-white text-sm rounded focus:outline-none focus:border-cyan-400"
+            className="w-full px-3 py-2 bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 text-sm rounded focus:outline-none focus:border-cyan-400"
           />
           <div className="flex gap-2">
             <button
               onClick={handleSubmitWork}
               disabled={!proofUri.trim() || isLoading}
-              className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-white text-xs rounded disabled:opacity-50"
+              className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >
               {isLoading ? 'Submitting...' : 'Submit'}
             </button>
@@ -227,7 +227,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
                 setShowProofInput(false)
                 setProofUri('')
               }}
-              className="px-3 py-1 bg-navy-600 hover:bg-navy-500 text-white text-xs rounded"
+              className="px-3 py-1 bg-navy-600 dark:bg-navy-600 light:bg-gray-200 hover:bg-navy-500 dark:hover:bg-navy-500 light:hover:bg-gray-300 text-white dark:text-white light:text-gray-900 text-xs rounded"
             >
               Cancel
             </button>
@@ -237,8 +237,8 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
 
       {/* Confirmation Modal */}
       {showConfirm && (
-        <div className="p-3 bg-navy-700 rounded border border-yellow-500/50">
-          <p className="text-sm text-gray-300 mb-2">
+        <div className="p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded border border-yellow-500/50">
+          <p className="text-sm text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
             {showConfirm === 'lock' && `Lock ${milestone.amount} tokens for milestone ${milestone.id}?`}
             {showConfirm === 'approve' && `Approve and release ${milestone.amount} tokens to payee?`}
             {showConfirm === 'dispute' && 'Raise a dispute for this milestone?'}
@@ -251,14 +251,14 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
                 else if (showConfirm === 'dispute') handleRaiseDispute()
               }}
               disabled={isLoading}
-              className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded disabled:opacity-50"
+              className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >
               {isLoading ? 'Processing...' : 'Confirm'}
             </button>
             <button
               onClick={() => setShowConfirm(null)}
               disabled={isLoading}
-              className="px-3 py-1 bg-navy-600 hover:bg-navy-500 text-white text-xs rounded disabled:opacity-50"
+              className="px-3 py-1 bg-navy-600 dark:bg-navy-600 light:bg-gray-200 hover:bg-navy-500 dark:hover:bg-navy-500 light:hover:bg-gray-300 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >
               Cancel
             </button>

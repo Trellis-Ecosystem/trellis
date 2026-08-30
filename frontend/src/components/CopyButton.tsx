@@ -31,7 +31,7 @@ export function CopyButton({ text, label, className = '' }: CopyButtonProps) {
           ? 'text-green-400 bg-green-400/10'
           : copyFailed
             ? 'text-red-400 bg-red-400/10'
-            : 'text-gray-400 hover:text-cyan-400 hover:bg-navy-700'
+            : 'text-gray-400 dark:text-gray-400 light:text-gray-600 hover:text-cyan-400 dark:hover:text-cyan-400 light:hover:text-cyan-600 hover:bg-navy-700 dark:hover:bg-navy-700 light:hover:bg-gray-100'
       } ${className}`}
       title={buttonTitle}
       aria-label={buttonTitle}

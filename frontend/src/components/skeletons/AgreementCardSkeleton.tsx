@@ -8,7 +8,7 @@ function AgreementCardSkeleton() {
     <div
       role="status"
       aria-label="Loading agreement"
-      className="rounded-xl border border-navy-700 bg-navy-800/60 p-6"
+      className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6"
     >
       {/* Agreement ID */}
       <SkeletonBox width="70%" height="1.5rem" />
