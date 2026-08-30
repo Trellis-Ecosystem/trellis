@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { RPC_URL } from '../lib/config'
+import { createAbortSignalWithTimeout } from '../lib/abort'
 
 type NetworkStatus = 'online' | 'degraded' | 'offline' | 'checking'
 
@@ -28,7 +29,7 @@ export function useStellarStatus(intervalMs = 60000): StellarStatus {
           method: 'getHealth',
           params: [],
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: createAbortSignalWithTimeout(5000),
       })
 
       const latency = Date.now() - start

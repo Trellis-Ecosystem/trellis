@@ -49,8 +49,11 @@ export function useAgreementEvents(agreementId: string | null) {
     async (signal: AbortSignal): Promise<boolean> => {
       if (!agreementId) return true // treat no-id as "success" (no-op)
 
-      setIsLoading(true)
-      setError(null)
+      // Guard state updates for unmounted components
+      if (!unmountedRef.current) {
+        setIsLoading(true)
+        setError(null)
+      }
 
       // Combine the caller's signal with a per-request timeout signal.
       const timeoutId = setTimeout(() => {
