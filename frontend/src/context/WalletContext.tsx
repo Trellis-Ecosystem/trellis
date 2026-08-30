@@ -31,17 +31,10 @@ interface WalletContextValue {
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 const STORAGE_KEY = 'trellis_wallet_connected';
-
-// Poll cadence per phase: fast while connected (catch account/network
-// switches quickly), slow while disconnected (just watching for the
-// extension to appear), and none at all while unavailable/detecting/
-// connecting — there is nothing useful to poll for in those phases.
-const POLL_INTERVAL_MS: Partial<Record<WalletStatus, number>> = {
-  connected: 5_000,
-  disconnected: 30_000,
-};
-const BACKOFF_MULTIPLIER = 2;
-const MAX_POLL_INTERVAL_MS = 120_000;
+const ACCOUNT_POLL_INTERVAL_MS = 3_000;
+const PASSPHRASE_RETRY_ATTEMPTS = 3;
+const PASSPHRASE_RETRY_DELAY_MS = 500;
+const PASSPHRASE_FETCH_TIMEOUT_MS = 5_000;
 
 function readIntent(): boolean {
   try {
@@ -58,6 +51,49 @@ function writeIntent(value: boolean): void {
   } catch {
     /* non-fatal */
   }
+}
+
+async function fetchNetworkPassphraseWithRetry(
+  signal?: AbortSignal,
+  attempts = PASSPHRASE_RETRY_ATTEMPTS,
+  delay = PASSPHRASE_RETRY_DELAY_MS
+): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    if (signal?.aborted) return null;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PASSPHRASE_FETCH_TIMEOUT_MS);
+
+      const passphrase = await Promise.race([
+        getNetworkPassphrase(),
+        new Promise<string | null>((_, reject) =>
+          controller.signal.addEventListener('abort', () => reject(new Error('Timeout')))
+        ),
+      ]);
+
+      clearTimeout(timeoutId);
+
+      if (passphrase && passphrase.length > 0) {
+        return passphrase;
+      }
+
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    } catch (error) {
+      if (i === attempts - 1) {
+        console.warn('Failed to fetch network passphrase after retries:', error);
+        return null;
+      }
+
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  return null;
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
@@ -79,8 +115,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             ? 'disconnected'
             : 'unavailable';
 
-  const refreshNetwork = useCallback(async () => {
-    const passphrase = await getNetworkPassphrase();
+  const refreshNetwork = useCallback(async (signal?: AbortSignal) => {
+    const passphrase = await fetchNetworkPassphraseWithRetry(signal);
+    if (signal?.aborted) return;
     setNetworkPassphrase(passphrase);
   }, []);
 
@@ -133,7 +170,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           setPublicKey(address);
           setPhase('connected');
         });
-        await refreshNetwork();
+        await refreshNetwork(signal);
       } catch {
         apply(() => {
           setInstalled((prev) => (prev === null ? false : prev));
@@ -159,10 +196,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let failureCount = 0;
     let intervalId: ReturnType<typeof setInterval>;
 
-    const reschedule = (delayMs: number) => {
-      clearInterval(intervalId);
-      intervalId = setInterval(runPoll, delayMs);
-    };
+    const intervalId = setInterval(() => {
+      void (async () => {
+        const [address, passphrase] = await Promise.all([
+          getPublicKey(),
+          fetchNetworkPassphraseWithRetry(),
+        ]);
 
     async function runPoll() {
       try {
@@ -250,6 +289,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     phase === 'connected' &&
     !!NETWORK_PASSPHRASE &&
     networkPassphrase !== null &&
+    networkPassphrase.trim() !== '' &&
     networkPassphrase !== NETWORK_PASSPHRASE;
 
   const value = useMemo<WalletContextValue>(

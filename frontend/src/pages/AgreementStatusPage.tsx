@@ -71,7 +71,7 @@ function AgreementStatusPage() {
 
       {/* Loading State */}
       {isLoading && (
-        <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 p-8">
+        <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8">
           <div className="animate-pulse space-y-4">
             <div className="h-6 bg-navy-700 rounded w-1/3" />
             <div className="h-4 bg-navy-700 rounded w-2/3" />
@@ -82,7 +82,7 @@ function AgreementStatusPage() {
 
       {/* Error State */}
       {isError && (
-        <div className="mt-10 rounded-xl border border-red-500/50 bg-navy-800/60 p-8">
+        <div className="mt-10 rounded-xl border border-red-500/50 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8">
           <p className="text-red-400 font-semibold mb-2">Agreement not found</p>
           <p className="text-sm text-gray-400">{error || 'The agreement ID may be invalid or the agreement does not exist.'}</p>
         </div>
@@ -98,7 +98,7 @@ function AgreementStatusPage() {
 
       {/* Empty State */}
       {!queriedId && !isLoading && (
-        <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 p-8 text-center">
+        <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8 text-center">
           <p className="text-gray-400">Enter an agreement ID above to view its details</p>
         </div>
       )}

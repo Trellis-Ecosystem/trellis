@@ -9,8 +9,8 @@ export default function WalletConnect() {
 
   if (status === 'detecting') {
     return (
-      <span className="text-gray-400 text-sm px-5 py-2 inline-flex items-center gap-2">
-        <span className="h-3 w-3 rounded-full border-2 border-navy-700 border-t-cyan-400 animate-spin" />
+      <span className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm px-5 py-2 inline-flex items-center gap-2">
+        <span className="h-3 w-3 rounded-full border-2 border-navy-700 dark:border-navy-700 light:border-gray-200 border-t-cyan-400 animate-spin" />
         Checking wallet…
       </span>
     );
@@ -32,7 +32,7 @@ export default function WalletConnect() {
         </a>
         <button
           onClick={recheckInstall}
-          className="text-gray-400 text-xs underline underline-offset-2 hover:text-gray-200 transition-colors"
+          className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-xs underline underline-offset-2 hover:text-gray-200 dark:hover:text-gray-200 light:hover:text-gray-700 transition-colors"
         >
           Already installed?
         </button>
@@ -69,14 +69,14 @@ export default function WalletConnect() {
       )}
       {publicKey ? (
         <>
-          <span className="text-gray-300 text-sm font-mono bg-navy-800 px-3 py-1.5 rounded-md border border-navy-600">
+          <span className="text-gray-300 dark:text-gray-300 light:text-gray-700 text-sm font-mono bg-navy-800 dark:bg-navy-800 light:bg-white px-3 py-1.5 rounded-md border border-navy-600 dark:border-navy-600 light:border-gray-300">
             {truncateAddress(publicKey)}
           </span>
           <button
             onClick={disconnect}
             aria-pressed={true}
             aria-label={`Disconnect wallet ${truncateAddress(publicKey)}`}
-            className="text-gray-500 text-xs hover:text-gray-300 transition-colors"
+            className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-xs hover:text-gray-300 dark:hover:text-gray-300 light:hover:text-gray-700 transition-colors"
           >
             Disconnect
           </button>
@@ -89,7 +89,7 @@ export default function WalletConnect() {
             onClick={disconnect}
             aria-pressed={true}
             aria-label="Disconnect wallet"
-            className="text-gray-500 text-xs hover:text-gray-300 transition-colors"
+            className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-xs hover:text-gray-300 dark:hover:text-gray-300 light:hover:text-gray-700 transition-colors"
           >
             Disconnect
           </button>

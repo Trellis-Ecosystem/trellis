@@ -43,16 +43,16 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
     <div
       role={toast.type === 'error' ? 'alert' : 'status'}
       aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
-      className={`toast-enter pointer-events-auto flex w-full max-w-sm gap-3 rounded-lg border ${border} bg-navy-800 p-4 shadow-lg shadow-black/40`}
+      className={`toast-enter pointer-events-auto flex w-full max-w-sm gap-3 rounded-lg border ${border} bg-navy-800 dark:bg-navy-800 light:bg-white p-4 shadow-lg shadow-black/40`}
     >
       <span className={`mt-0.5 shrink-0 ${accent}`}>
         <ToastIcon type={toast.type} />
       </span>
 
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-white">{toast.title}</p>
+        <p className="text-sm font-semibold text-white dark:text-white light:text-gray-900">{toast.title}</p>
         {toast.message && (
-          <p className="mt-1 break-words text-sm text-gray-400">{toast.message}</p>
+          <p className="mt-1 break-words text-sm text-gray-400 dark:text-gray-400 light:text-gray-600">{toast.message}</p>
         )}
         {toast.link && (
           <a
@@ -70,7 +70,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
         type="button"
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss notification"
-        className="-mt-1 -mr-1 h-6 w-6 shrink-0 rounded text-gray-500 transition-colors hover:text-gray-200"
+        className="-mt-1 -mr-1 h-6 w-6 shrink-0 rounded text-gray-500 dark:text-gray-500 light:text-gray-600 transition-colors hover:text-gray-200 dark:hover:text-gray-200 light:hover:text-gray-700"
       >
         <svg className="h-4 w-4 mx-auto" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />

@@ -5,6 +5,7 @@ import { ExplorerLink } from './ExplorerLink'
 import { STELLAR_EXPERT_ORIGIN, truncateId } from '../lib/explorer'
 
 const CONTRACT = 'CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q'
+const ACCOUNT = 'GAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q'
 const TX_HASH = 'b'.repeat(64)
 
 describe('<ExplorerLink />', () => {
@@ -14,6 +15,15 @@ describe('<ExplorerLink />', () => {
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       `${STELLAR_EXPERT_ORIGIN}/explorer/testnet/contract/${CONTRACT}`,
+    )
+  })
+
+  it('links to the Stellar Expert record for an account address', () => {
+    render(<ExplorerLink type="account" value={ACCOUNT} network="testnet" />)
+
+    expect(screen.getByRole('link')).toHaveAttribute(
+      'href',
+      `${STELLAR_EXPERT_ORIGIN}/explorer/testnet/account/${ACCOUNT}`,
     )
   })
 
