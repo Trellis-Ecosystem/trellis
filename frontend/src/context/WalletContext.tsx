@@ -32,6 +32,9 @@ const WalletContext = createContext<WalletContextValue | null>(null);
 
 const STORAGE_KEY = 'trellis_wallet_connected';
 const ACCOUNT_POLL_INTERVAL_MS = 3_000;
+const PASSPHRASE_RETRY_ATTEMPTS = 3;
+const PASSPHRASE_RETRY_DELAY_MS = 500;
+const PASSPHRASE_FETCH_TIMEOUT_MS = 5_000;
 
 function readIntent(): boolean {
   try {
@@ -48,6 +51,49 @@ function writeIntent(value: boolean): void {
   } catch {
     /* non-fatal */
   }
+}
+
+async function fetchNetworkPassphraseWithRetry(
+  signal?: AbortSignal,
+  attempts = PASSPHRASE_RETRY_ATTEMPTS,
+  delay = PASSPHRASE_RETRY_DELAY_MS
+): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    if (signal?.aborted) return null;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PASSPHRASE_FETCH_TIMEOUT_MS);
+
+      const passphrase = await Promise.race([
+        getNetworkPassphrase(),
+        new Promise<string | null>((_, reject) =>
+          controller.signal.addEventListener('abort', () => reject(new Error('Timeout')))
+        ),
+      ]);
+
+      clearTimeout(timeoutId);
+
+      if (passphrase && passphrase.length > 0) {
+        return passphrase;
+      }
+
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    } catch (error) {
+      if (i === attempts - 1) {
+        console.warn('Failed to fetch network passphrase after retries:', error);
+        return null;
+      }
+
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  return null;
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
@@ -69,8 +115,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             ? 'disconnected'
             : 'unavailable';
 
-  const refreshNetwork = useCallback(async () => {
-    const passphrase = await getNetworkPassphrase();
+  const refreshNetwork = useCallback(async (signal?: AbortSignal) => {
+    const passphrase = await fetchNetworkPassphraseWithRetry(signal);
+    if (signal?.aborted) return;
     setNetworkPassphrase(passphrase);
   }, []);
 
@@ -123,7 +170,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           setPublicKey(address);
           setPhase('connected');
         });
-        await refreshNetwork();
+        await refreshNetwork(signal);
       } catch {
         apply(() => {
           setInstalled((prev) => (prev === null ? false : prev));
@@ -138,35 +185,69 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // While connected, poll for the active Freighter account and network so
   // switching accounts or networks in the extension (which fires no event
   // Freighter exposes) is reflected here instead of silently going stale.
+  // While disconnected, poll much less aggressively just to notice the
+  // extension becoming available. Nothing is polled while unavailable,
+  // detecting, or connecting — those phases resolve on their own.
   useEffect(() => {
-    if (phase !== 'connected') return;
+    const baseInterval = POLL_INTERVAL_MS[status];
+    if (!baseInterval) return;
 
     let mounted = true;
+    let failureCount = 0;
+    let intervalId: ReturnType<typeof setInterval>;
 
     const intervalId = setInterval(() => {
       void (async () => {
-        const [address, passphrase] = await Promise.all([getPublicKey(), getNetworkPassphrase()]);
+        const [address, passphrase] = await Promise.all([
+          getPublicKey(),
+          fetchNetworkPassphraseWithRetry(),
+        ]);
 
-        if (!mounted) return;
+    async function runPoll() {
+      try {
+        if (status === 'connected') {
+          const [address, passphrase] = await Promise.all([getPublicKey(), getNetworkPassphrase()]);
 
-        if (!address) {
-          writeIntent(false);
-          setPublicKey(null);
-          setNetworkPassphrase(null);
-          setPhase('idle');
-          return;
+          if (!mounted) return;
+
+          if (!address) {
+            writeIntent(false);
+            setPublicKey(null);
+            setNetworkPassphrase(null);
+            setPhase('idle');
+            return;
+          }
+
+          setPublicKey((prev) => (prev !== address ? address : prev));
+          setNetworkPassphrase((prev) => (prev !== passphrase ? passphrase : prev));
+        } else {
+          const found = await isFreighterInstalled();
+          if (!mounted) return;
+          setInstalled(found);
         }
 
-        setPublicKey((prev) => (prev !== address ? address : prev));
-        setNetworkPassphrase((prev) => (prev !== passphrase ? passphrase : prev));
-      })();
-    }, ACCOUNT_POLL_INTERVAL_MS);
+        if (failureCount > 0) {
+          failureCount = 0;
+          reschedule(baseInterval);
+        }
+      } catch {
+        if (!mounted) return;
+        failureCount += 1;
+        const backoffMs = Math.min(
+          baseInterval * BACKOFF_MULTIPLIER ** failureCount,
+          MAX_POLL_INTERVAL_MS,
+        );
+        reschedule(backoffMs);
+      }
+    }
+
+    intervalId = setInterval(runPoll, baseInterval);
 
     return () => {
       mounted = false;
       clearInterval(intervalId);
     };
-  }, [phase]);
+  }, [status]);
 
   const connect = useCallback(async () => {
     setError(null);
@@ -208,6 +289,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     phase === 'connected' &&
     !!NETWORK_PASSPHRASE &&
     networkPassphrase !== null &&
+    networkPassphrase.trim() !== '' &&
     networkPassphrase !== NETWORK_PASSPHRASE;
 
   const value = useMemo<WalletContextValue>(

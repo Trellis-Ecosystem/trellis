@@ -9,10 +9,16 @@ interface AgreementIdGeneratorProps {
   onGenerate?: (id: string) => void
 }
 
+/** Detects canvas element support (unavailable during SSR or in very old browsers). */
+function isCanvasSupported(): boolean {
+  return typeof document !== 'undefined' && typeof HTMLCanvasElement !== 'undefined'
+}
+
 export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) {
   const toast = useToast()
   const [agreementId, setAgreementId] = useState<string>('')
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
+  const [qrUnavailable, setQrUnavailable] = useState(false)
   const [showQR, setShowQR] = useState(false)
   const [copied, setCopied] = useState(false)
   const [shared, setShared] = useState(false)
@@ -22,20 +28,27 @@ export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) 
     setIsGenerating(true)
     const newId = generateAgreementId()
     setAgreementId(newId)
+    setQrDataUrl('')
+    setQrUnavailable(false)
 
-    // Generate QR code locally via the qrcode library
-    try {
-      const url = await QRCode.toDataURL(newId, {
-        width: 400,
-        margin: 2,
-        color: {
-          dark: '#1a2332',
-          light: '#ffffff',
-        },
-      })
-      setQrDataUrl(url)
-    } catch {
-      // Local QR generation failed; QR display will be skipped
+    // Generate QR code locally via the qrcode library, when canvas is available
+    if (isCanvasSupported()) {
+      try {
+        const url = await QRCode.toDataURL(newId, {
+          width: 400,
+          margin: 2,
+          color: {
+            dark: '#1a2332',
+            light: '#ffffff',
+          },
+        })
+        setQrDataUrl(url)
+      } catch {
+        // Local QR generation failed; fall back to the text-only display
+        setQrUnavailable(true)
+      }
+    } else {
+      setQrUnavailable(true)
     }
 
     setShowQR(true)
@@ -162,6 +175,18 @@ export function AgreementIdGenerator({ onGenerate }: AgreementIdGeneratorProps) 
                 alt="Agreement ID QR Code"
                 className="w-48 h-48"
               />
+            </div>
+          )}
+
+          {/* Text-only fallback when the QR code cannot be rendered (no canvas support) */}
+          {showQR && qrUnavailable && (
+            <div className="p-4 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded-lg border border-navy-600 dark:border-navy-600 light:border-gray-300 text-center space-y-2 transition-all duration-300">
+              <p className="text-xs text-gray-400 dark:text-gray-400 light:text-gray-600">
+                QR code isn't available in this browser. Use the ID below instead.
+              </p>
+              <p className="font-mono text-sm text-cyan-300 break-all leading-relaxed">
+                {agreementId.match(/.{1,8}/g)?.join(' ') ?? agreementId}
+              </p>
             </div>
           )}
 

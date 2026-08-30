@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useTypingAnimation } from '../hooks/useTypingAnimation'
 import { HowItWorks } from '../components/HowItWorks'
 import { useToastActions } from '../hooks/useToast'
@@ -97,9 +97,8 @@ export default function HomePage() {
 
           {/* Features Section */}
           <div className="mt-20 max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-8">
-            <button
-              type="button"
-              onClick={() => handleCheckStatus()}
+            <Link
+              to="/status"
               className="
                 cursor-pointer text-left
                 bg-navy-800/50 dark:bg-navy-800/50 light:bg-gray-50 border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6
@@ -115,11 +114,10 @@ export default function HomePage() {
                 Paste an Agreement ID to view its current on-chain state — no wallet
                 connection needed.
               </p>
-            </button>
+            </Link>
 
-            <button
-              type="button"
-              onClick={() => handleCreateAgreement()}
+            <Link
+              to="/create"
               className="
                 cursor-pointer text-left
                 bg-navy-800/50 dark:bg-navy-800/50 light:bg-gray-50 border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6
@@ -135,7 +133,7 @@ export default function HomePage() {
                 Create escrow agreements with multiple milestones and fund them directly
                 from the browser.
               </p>
-            </button>
+            </Link>
 
             <button
               type="button"

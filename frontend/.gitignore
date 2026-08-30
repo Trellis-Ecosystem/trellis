@@ -25,3 +25,8 @@ dist
 
 # Test coverage output
 coverage
+
+# Playwright E2E output (#143)
+test-results
+playwright-report
+playwright/.cache

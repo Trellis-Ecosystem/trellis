@@ -60,16 +60,16 @@ export default function TransactionStatus({ status, txHash, error, onRetry, meth
 
   if (status === 'error') {
     return (
-      <div className="space-y-2 p-3 bg-navy-700 rounded border border-red-500/50">
+      <div className="space-y-2 p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded border border-red-500/50">
         <div className="flex items-center gap-2 text-sm text-red-400">
           <span className="font-semibold">Failed</span>
-          <span className="text-gray-400">— {error || 'Transaction failed'}</span>
+          <span className="text-gray-400 dark:text-gray-400 light:text-gray-600">— {error || 'Transaction failed'}</span>
         </div>
         {txHash && <ExplorerLink type="tx" value={txHash} label="View failed transaction" />}
         <button
           onClick={onRetry}
           disabled={retrying}
-          className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-white dark:text-white light:text-gray-900 text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {retrying ? 'Retrying…' : 'Retry with adjusted gas'}
         </button>
@@ -81,7 +81,7 @@ export default function TransactionStatus({ status, txHash, error, onRetry, meth
   const label = PHASE_LABELS[status]
 
   return (
-    <div className="space-y-2 p-3 bg-navy-700 rounded border border-cyan-500/30">
+    <div className="space-y-2 p-3 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 rounded border border-cyan-500/30">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
           {PHASE_ORDER.map((phase, i) => (
