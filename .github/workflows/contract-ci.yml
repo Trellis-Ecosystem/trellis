@@ -8,6 +8,8 @@ on:
       - 'cli/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
+      - '.cargo/audit.toml'
       - '.github/workflows/contract-ci.yml'
   pull_request:
     branches: [master, main]
@@ -16,7 +18,13 @@ on:
       - 'cli/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
+      - '.cargo/audit.toml'
       - '.github/workflows/contract-ci.yml'
+  schedule:
+    # Weekly supply-chain scan — every Monday at 06:00 UTC.
+    # Runs even when no code changes to catch newly published advisories.
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -42,6 +50,47 @@ jobs:
         uses: returntocorp/semgrep-action@v1
         with:
           config: .semgrep/soroban-rules.yaml
+
+  supply-chain:
+    name: Dependency vulnerability scan (cargo audit + cargo deny)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      # cargo-audit checks the dependency graph against the RustSec advisory
+      # database.  The ignore list in .cargo/audit.toml mirrors deny.toml so
+      # both tools agree on which transitive unmaintained-crate notices are
+      # accepted.
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --config .cargo/audit.toml
+
+      # cargo-deny enforces the full supply-chain policy: advisories (RustSec),
+      # licence allowlist, duplicate-version warnings, wildcard bans, and
+      # source registry restrictions.  Policy lives in deny.toml.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+
+      - name: Run cargo deny check
+        run: cargo deny check
+
+      - name: Report findings on failure
+        if: failure()
+        run: |
+          echo "::error::Supply-chain check failed."
+          echo "Run 'cargo audit' and 'cargo deny check' locally to review the findings."
+          echo "If a finding is a known false positive, add it to .cargo/audit.toml"
+          echo "and deny.toml with a justification comment."
 
   verify:
     name: Build, test, clippy & fmt
