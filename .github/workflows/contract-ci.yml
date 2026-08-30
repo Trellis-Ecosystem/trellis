@@ -100,12 +100,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
-
+      # rust-toolchain.toml at the repo root pins the exact compiler version,
+      # wasm32-unknown-unknown target, rustfmt, and clippy.  rustup reads the
+      # file automatically, so no separate toolchain-install step is needed.
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 

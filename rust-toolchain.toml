@@ -1,0 +1,15 @@
+# Pinned Rust toolchain for reproducible builds.
+#
+# Every developer machine and CI runner resolves the exact same compiler
+# version.  To upgrade, change `channel` to the desired stable release
+# (e.g. "1.87.0") and open a PR — Dependabot will keep this up to date
+# via the `cargo` ecosystem entry in .github/dependabot.yml.
+#
+# Refs:
+#   https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file
+#   https://doc.rust-lang.org/cargo/reference/toolchain-file.html
+
+[toolchain]
+channel  = "1.86.0"
+targets  = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]

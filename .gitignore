@@ -4,6 +4,16 @@
 contracts/trellis_core/.env
 *.log
 
+# Frontend build output — never commit generated artifacts.
+frontend/dist/
+
+# Frontend environment files — these may contain CONTRACT_ID, RPC_URL, and
+# NETWORK_PASSPHRASE.  The frontend/.gitignore already covers these, but the
+# root-level rules provide a safety net if git resolves ignore rules differently.
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
 # Cargo.lock is tracked for the CLI binary crate to ensure reproducible builds.
 # Unlike libraries, binary crates should commit their lockfile so that every
 # developer and CI runner resolves identical dependency versions.
