@@ -5,6 +5,9 @@
 #   make build         — build everything (contract WASM + frontend)
 #   make test          — run all tests (contract + frontend)
 #   make lint          — run all linters (clippy + oxlint)
+#   make fmt           — run cargo fmt on the workspace
+#   make typecheck-frontend — run tsc typecheck on the frontend
+#   make setup         — install prerequisites (rustup target + npm deps)
 #   make deploy        — deploy contract to testnet (see DEPLOYMENT.md)
 #   make clean         — remove all build artifacts
 #   make build-contract — build only the contract WASM
@@ -16,10 +19,10 @@
 #   make lint-contract — run only clippy on contract and CLI
 #   make lint-frontend — run only oxlint on frontend
 
-.PHONY: help build test lint deploy clean
+.PHONY: help build test lint fmt deploy clean setup
 .PHONY: build-contract build-cli build-frontend
 .PHONY: test-contract test-snapshots-update test-frontend
-.PHONY: lint-contract lint-frontend
+.PHONY: lint-contract lint-frontend typecheck-frontend
 
 help:
 	@echo "Trellis Protocol — Build Targets"
@@ -34,38 +37,46 @@ help:
 build: build-contract build-cli build-frontend
 
 build-contract:
-	cargo build --manifest-path contracts/trellis_core/Cargo.toml --target wasm32-unknown-unknown --release
+	cargo build --frozen --manifest-path contracts/trellis_core/Cargo.toml --target wasm32-unknown-unknown --release
 
 build-cli:
-	cargo build --manifest-path cli/trellis_cli/Cargo.toml --release
+	cargo build --frozen --manifest-path cli/trellis_cli/Cargo.toml --release
 
 build-frontend:
-	cd frontend && npm install && npm run build
+	# npm ci (not npm install) installs exact versions from package-lock.json
+	# for reproducible builds.
+	cd frontend && npm ci && npm run build
 
 # ── Test ───────────────────────────────────────────────────────────────────
 
 test: test-contract test-frontend
 
 test-contract:
-	cargo test --manifest-path contracts/trellis_core/Cargo.toml
+	cargo test --frozen --manifest-path contracts/trellis_core/Cargo.toml
 
 test-snapshots-update:
 	SOROBAN_TEST_SNAPSHOT_FILE=overwrite cargo test --manifest-path contracts/trellis_core/Cargo.toml
 	@echo "Snapshots regenerated. Review the diff with: git diff contracts/trellis_core/test_snapshots/"
 
 test-frontend:
-	cd frontend && npm install && npm test
+	cd frontend && npm ci && npm test
 
 # ── Lint ───────────────────────────────────────────────────────────────────
 
 lint: lint-contract lint-frontend
 
 lint-contract:
-	cargo clippy --manifest-path contracts/trellis_core/Cargo.toml -- -D warnings
-	cargo clippy --manifest-path cli/trellis_cli/Cargo.toml -- -D warnings
+	cargo clippy --frozen --manifest-path contracts/trellis_core/Cargo.toml -- -D warnings
+	cargo clippy --frozen --manifest-path cli/trellis_cli/Cargo.toml -- -D warnings
 
 lint-frontend:
-	cd frontend && npm install && npm run lint
+	cd frontend && npm ci && npm run lint
+
+fmt:
+	cargo fmt --all
+
+typecheck-frontend:
+	cd frontend && npm run typecheck
 
 # ── Deploy ─────────────────────────────────────────────────────────────────
 
@@ -87,3 +98,9 @@ clean:
 	cargo clean
 	cd frontend && rm -rf dist node_modules
 	rm -rf target
+
+# ── Setup ──────────────────────────────────────────────────────────────────
+
+setup:
+	rustup target add wasm32-unknown-unknown
+	cd frontend && npm ci

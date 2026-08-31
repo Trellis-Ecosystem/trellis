@@ -110,16 +110,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --frozen --workspace --all-targets -- -D warnings
 
       - name: Build (native)
-        run: cargo build --workspace
+        run: cargo build --frozen --workspace
 
       - name: Build contract (wasm32)
-        run: cargo build --package trellis_core --target wasm32-unknown-unknown --release
+        run: cargo build --frozen --package trellis_core --target wasm32-unknown-unknown --release
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --frozen --workspace
 
       - name: Validate test snapshots are up to date
         run: |
