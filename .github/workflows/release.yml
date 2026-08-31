@@ -43,8 +43,39 @@ jobs:
           name: changelog
           path: CHANGELOG.md
 
+  verify-version:
+    name: Verify tag matches Cargo.toml/package.json versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Compare tag version with Cargo.toml/package.json
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CLI_VERSION=$(grep -m1 '^version' cli/trellis_cli/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          CONTRACT_VERSION=$(grep -m1 '^version' contracts/trellis_core/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          FRONTEND_VERSION=$(node -p "require('./frontend/package.json').version")
+
+          echo "Tag version:      $TAG_VERSION"
+          echo "CLI version:      $CLI_VERSION"
+          echo "Contract version: $CONTRACT_VERSION"
+          echo "Frontend version: $FRONTEND_VERSION"
+
+          MISMATCH=0
+          [ "$TAG_VERSION" = "$CLI_VERSION" ] || { echo "::error::Tag version ($TAG_VERSION) does not match cli/trellis_cli/Cargo.toml version ($CLI_VERSION)"; MISMATCH=1; }
+          [ "$TAG_VERSION" = "$CONTRACT_VERSION" ] || { echo "::error::Tag version ($TAG_VERSION) does not match contracts/trellis_core/Cargo.toml version ($CONTRACT_VERSION)"; MISMATCH=1; }
+          [ "$TAG_VERSION" = "$FRONTEND_VERSION" ] || { echo "::error::Tag version ($TAG_VERSION) does not match frontend/package.json version ($FRONTEND_VERSION)"; MISMATCH=1; }
+
+          if [ "$MISMATCH" -eq 1 ]; then
+            echo "::error::Version mismatch between git tag and Cargo.toml/package.json. Bump the versions before tagging."
+            exit 1
+          fi
+
   build-contract:
     name: Build contract WASM
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -60,6 +91,7 @@ jobs:
         # build` (wasm32v1-none) — see DEPLOYMENT.md for why.
         run: |
           cargo rustc \
+            --frozen \
             --manifest-path=contracts/trellis_core/Cargo.toml \
             --crate-type=cdylib \
             --target=wasm32-unknown-unknown \
@@ -73,6 +105,7 @@ jobs:
 
   build-cli:
     name: Build CLI (${{ matrix.target }})
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -97,7 +130,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build trellis CLI
-        run: cargo build --release --manifest-path=cli/trellis_cli/Cargo.toml --target=${{ matrix.target }}
+        run: cargo build --frozen --release --manifest-path=cli/trellis_cli/Cargo.toml --target=${{ matrix.target }}
 
       - name: Package binary
         shell: bash
