@@ -25,6 +25,24 @@
 
 ---
 
+## Verifying Release Artifacts
+
+Each GitHub Release publishes a `.sha256` checksum and a `.asc` GPG detached
+signature alongside every WASM/CLI binary artifact.
+
+1. Download the artifact, its `.sha256` file, and its `.asc` file from the
+   [Releases page](https://github.com/Trellis-Ecosystem/trellis/releases).
+2. Verify the checksum:
+   ```bash
+   sha256sum -c trellis-x86_64-unknown-linux-gnu.sha256
+   ```
+3. Verify the GPG signature (import the maintainers' public key first):
+   ```bash
+   gpg --verify trellis-x86_64-unknown-linux-gnu.asc trellis-x86_64-unknown-linux-gnu
+   ```
+
+---
+
 ## Deploying Your Own Instance
 
 ### Prerequisites
