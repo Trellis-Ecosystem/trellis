@@ -89,7 +89,7 @@ jobs:
       # CodeQL analysis
       # -----------------------------------------------------------------------
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -105,7 +105,7 @@ jobs:
           # graph, but we do not need a separate step — autobuild handles it.
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
           # Upload SARIF to GitHub Advanced Security results panel.
