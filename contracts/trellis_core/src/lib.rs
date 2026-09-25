@@ -3,7 +3,7 @@
 mod errors;
 mod events;
 mod storage;
-mod types;
+pub mod types;
 
 #[cfg(test)]
 mod test;
@@ -94,7 +94,7 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
-        if milestones.len() > MAX_MILESTONES as usize {
+        if milestones.len() > MAX_MILESTONES {
             return Err(TrellisError::MilestoneCountExceeded);
         }
 
@@ -106,7 +106,10 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+        token::Client::new(&env, &token)
+            .try_symbol()
+            .map_err(|_| TrellisError::InvalidToken)?
+            .map_err(|_| TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 
@@ -389,6 +392,10 @@ impl TrellisContract {
     /// event used by [`Self::resolve_dispute`]. No tokens move here, so
     /// off-chain consumers must not treat a cancellation as a dispute ruling.
     ///
+    /// The milestone transitions to [`EscrowStatus::Cancelled`] — never
+    /// [`EscrowStatus::Refunded`], which is reserved for dispute rulings
+    /// (`resolve_dispute`) where real funds were locked and then returned.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
@@ -414,8 +421,11 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Mark the milestone closed with no token movement required.
-        milestone.status = EscrowStatus::Refunded;
+        // Mark the milestone cancelled — no token movement required.
+        // `Cancelled` (not `Refunded`) records that no funds were ever
+        // locked here; `Refunded` is reserved for dispute rulings that
+        // return real tokens to the payer.
+        milestone.status = EscrowStatus::Cancelled;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
 
@@ -512,7 +522,11 @@ impl TrellisContract {
                 .milestones
                 .get(milestone_id)
                 .ok_or(TrellisError::InvalidMilestone)?;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+            token.transfer(
+                &agreement.payer,
+                &env.current_contract_address(),
+                &milestone.amount,
+            );
         }
 
         Ok(funded)
@@ -586,7 +600,9 @@ fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
+        total = total
+            .checked_add(m.amount)
+            .ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }

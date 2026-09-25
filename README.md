@@ -480,7 +480,7 @@ Trellis is a monorepo with three layers:
 | `approve_and_release` | Payer | Approves submitted work, releases funds to payee |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
-| `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded |
+| `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded — status becomes `Cancelled`, never `Refunded` (reserved for dispute refunds) |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
