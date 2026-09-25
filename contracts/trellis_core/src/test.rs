@@ -35,7 +35,7 @@ fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
 /// Replaces blanket `env.mock_all_auths()` with granular per-caller auth.
 fn auth_as(env: &Env, address: &Address) {
     env.mock_auths(&[MockAuth {
-        address: address,
+        address,
         invoke: &MockAuthInvoke {
             contract: address,
             fn_name: "",
