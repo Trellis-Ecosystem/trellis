@@ -6,7 +6,7 @@
 // Output is machine-parseable JSON for CI comparison.
 
 use soroban_sdk::{
-    testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
+    testutils::Address as _,
     token, vec, Address, BytesN, Env, String as SorobanString, Vec as SorobanVec,
 };
 use trellis_core::{types::{EscrowStatus, Milestone}, TrellisContract, TrellisContractClient};
@@ -78,7 +78,7 @@ fn bench_init_1_milestone() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 1);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.init(
         &id,
@@ -89,8 +89,8 @@ fn bench_init_1_milestone() {
         &dispute_resolver,
     );
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"init_1_milestone","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -102,7 +102,7 @@ fn bench_init_10_milestones() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 2);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.init(
         &id,
@@ -113,8 +113,8 @@ fn bench_init_10_milestones() {
         &dispute_resolver,
     );
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"init_10_milestones","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -135,12 +135,12 @@ fn bench_lock_funds() {
         &dispute_resolver,
     );
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.lock_funds(&id, &0u32);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"lock_funds","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -162,13 +162,13 @@ fn bench_submit_work() {
     );
     client.lock_funds(&id, &0u32);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     let proof = Some(SorobanString::from_str(&env, "ipfs://test"));
     client.submit_work(&id, &0u32, &proof);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"submit_work","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -191,12 +191,12 @@ fn bench_approve_and_release() {
     client.lock_funds(&id, &0u32);
     client.submit_work(&id, &0u32, &None);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.approve_and_release(&id, &0u32);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"approve_and_release","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -218,12 +218,12 @@ fn bench_raise_dispute() {
     );
     client.lock_funds(&id, &0u32);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.raise_dispute(&payer, &id, &0u32);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"raise_dispute","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -246,12 +246,12 @@ fn bench_resolve_dispute() {
     client.lock_funds(&id, &0u32);
     client.raise_dispute(&payer, &id, &0u32);
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.resolve_dispute(&id, &0u32, &true);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"resolve_dispute","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -272,13 +272,13 @@ fn bench_batch_lock_funds() {
         &dispute_resolver,
     );
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     let milestone_ids = vec![&env, 0u32, 1u32, 2u32, 3u32, 4u32];
     client.batch_lock_funds(&id, &milestone_ids);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"batch_lock_funds_5","cpu_instructions":{},"memory_bytes":{}}}"#,
@@ -299,12 +299,12 @@ fn bench_get_agreement() {
         &dispute_resolver,
     );
     
-    env.budget().reset_default();
+    env.cost_estimate().budget().reset_default();
     
     client.get_agreement(&id);
     
-    let cpu = env.budget().cpu_instruction_cost();
-    let mem = env.budget().memory_bytes_cost();
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
     
     println!(
         r#"{{"benchmark":"get_agreement","cpu_instructions":{},"memory_bytes":{}}}"#,

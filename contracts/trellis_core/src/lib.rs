@@ -3,7 +3,10 @@
 mod errors;
 mod events;
 mod storage;
-mod types;
+// `pub` so the in-crate `contract_bench` target can `use trellis_core::types::…`
+// exactly like an external consumer (and so `Milestone`/`EscrowStatus` are
+// re-exportable to SDK users building against the rlib).
+pub mod types;
 
 #[cfg(test)]
 mod test;
