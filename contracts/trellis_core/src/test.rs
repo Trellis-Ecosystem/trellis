@@ -1,82 +1,14 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
-    token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
+    testutils::{Address as _, Events},
+    token, vec, Address, String, Symbol, TryFromVal,
 };
 
 use crate::{
     errors::TrellisError,
+    test_utils::{agreement_id, auth_as, one_milestone, setup},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient,
 };
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-/// Build a 32-byte agreement ID from a seed byte.
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
-
-/// Create a single Milestone at index 0 with the given amount.
-fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
-    vec![
-        env,
-        Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        },
-    ]
-}
-
-/// Helper to authenticate a specific address for testing.
-/// Replaces blanket `env.mock_all_auths()` with granular per-caller auth.
-fn auth_as(env: &Env, address: &Address) {
-    env.mock_auths(&[MockAuth {
-        address: address,
-        invoke: &MockAuthInvoke {
-            contract: address,
-            fn_name: "",
-            args: vec![env],
-            sub_invokes: &[],
-        },
-    }]);
-}
-
-/// Common test fixture.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-/// **Note**: auth is NOT mocked by default — tests must call `auth_as` explicitly.
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&payer, &10_000);
-
-    // Register the Trellis contract.
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
-}
 
 // ---------------------------------------------------------------------------
 // Tests

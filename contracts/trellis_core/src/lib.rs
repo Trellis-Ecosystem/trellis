@@ -17,6 +17,9 @@ mod test_properties;
 #[cfg(test)]
 mod test_panic_boundaries;
 
+#[cfg(test)]
+mod test_utils;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, String, Vec};
 
 use errors::TrellisError;
