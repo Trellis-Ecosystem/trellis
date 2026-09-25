@@ -45,7 +45,6 @@ pub enum TrellisError {
     // on a milestone that has left `Pending` is a state machine violation
     // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
     // one. Left vacant rather than reused, per the append-only rule above.
-
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.

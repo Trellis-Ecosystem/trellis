@@ -344,11 +344,11 @@ fn test_multi_milestone_transitions() {
 
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
-    
+
     let proof = Some(String::from_str(&env, "ipfs://multi-milestone"));
     auth_as(&env, &payee);
     client.submit_work(&id, &0u32, &proof);
-    
+
     auth_as(&env, &payer);
     client.approve_and_release(&id, &0u32);
 
@@ -369,12 +369,27 @@ fn test_batch_lock_funds() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     let milestone_ids = vec![&env, 0u32, 1u32];
     auth_as(&env, &payer);
@@ -401,12 +416,27 @@ fn test_batch_lock_funds_partial_failure() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
@@ -478,12 +508,27 @@ fn test_get_milestone_returns_correct_milestone() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 100, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 200, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 100,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 200,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     let m = client.get_milestone(&id, &1u32);
     assert!(m.is_some(), "milestone 1 must be found");
@@ -509,7 +554,10 @@ fn test_get_milestone_invalid_id_returns_none() {
     );
 
     let result = client.get_milestone(&id, &99u32);
-    assert!(result.is_none(), "out-of-range milestone_id must return None");
+    assert!(
+        result.is_none(),
+        "out-of-range milestone_id must return None"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -705,7 +753,10 @@ fn test_get_total_amount_matches_sum() {
     );
 
     let total = client.get_total_amount(&id);
-    assert_eq!(total, 5_000, "get_total_amount should return sum of all milestones");
+    assert_eq!(
+        total, 5_000,
+        "get_total_amount should return sum of all milestones"
+    );
 }
 
 /// Test extend_agreement_ttl on an existing agreement.

@@ -17,6 +17,9 @@ mod test_properties;
 #[cfg(test)]
 mod test_panic_boundaries;
 
+#[cfg(test)]
+mod test_storage;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, String, Vec};
 
 use errors::TrellisError;
@@ -44,10 +47,12 @@ pub struct TrellisContract;
 // unexpected trap can leave callers reasoning about inconsistent state. Every
 // entrypoint below is therefore panic-free by construction:
 //
-//   * milestone lookups use `Vec::get(id).ok_or(TrellisError::InvalidMilestone)?`
-//     — never `Vec::get(id).unwrap()` or index syntax;
-//   * agreement reads go through `storage::read_agreement`, which maps a
-//     missing entry to `TrellisError::AgreementNotFound` via `Option::ok_or`;
+//   * milestone lookups go through `storage::read_milestone`, which maps a
+//     missing/out-of-range index to `TrellisError::InvalidMilestone` via
+//     `Option::ok_or` — never `Vec::get(id).unwrap()` or index syntax;
+//   * agreement reads go through `storage::read_header` / `read_agreement`,
+//     which map a missing entry to `TrellisError::AgreementNotFound` via
+//     `Option::ok_or`;
 //   * every fallible entrypoint returns `Result<_, TrellisError>` so failures
 //     propagate as typed on-chain errors, not panics.
 //
@@ -130,7 +135,7 @@ impl TrellisContract {
             total_amount,
         };
 
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_agreement(&env, &agreement_id, &agreement)?;
         events::agreement_created(&env, agreement_id, payer, payee);
 
         Ok(())
@@ -150,30 +155,29 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_id: u32,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
-        agreement.payer.require_auth();
+        // #401: the header and the one milestone being transitioned are read
+        // separately, so this call is O(1) in ledger reads and writes no matter
+        // how many milestones the agreement has.
+        let header = storage::read_header(&env, &agreement_id)?;
+        header.payer.require_auth();
 
         // Read the milestone value, mutate it, and write it back to the same
         // slot without cloning the original entry.
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         if milestone.status != EscrowStatus::Pending {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Mutate the milestone value and persist it back to the agreement
-        // before any external calls (checks-effects-interactions pattern).
+        // Mutate the milestone value and persist it back to storage before any
+        // external calls (checks-effects-interactions pattern).
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Funded;
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Transfer tokens from payer → this contract.
-        token::Client::new(&env, &agreement.token).transfer(
-            &agreement.payer,
+        token::Client::new(&env, &header.token).transfer(
+            &header.payer,
             &env.current_contract_address(),
             &amount,
         );
@@ -202,13 +206,11 @@ impl TrellisContract {
         milestone_id: u32,
         proof_uri: Option<String>,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
-        agreement.payee.require_auth();
+        // #401: header + single milestone only — O(1) reads and one write.
+        let header = storage::read_header(&env, &agreement_id)?;
+        header.payee.require_auth();
 
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         if milestone.status != EscrowStatus::Funded {
             return Err(TrellisError::InvalidStateTransition);
@@ -217,8 +219,7 @@ impl TrellisContract {
         let proof_uri = proof_uri.filter(|s| !s.is_empty());
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         events::work_submitted(&env, agreement_id, milestone_id, proof_uri);
 
@@ -238,13 +239,11 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_id: u32,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
-        agreement.payer.require_auth();
+        // #401: header + single milestone only — O(1) reads and one write.
+        let header = storage::read_header(&env, &agreement_id)?;
+        header.payer.require_auth();
 
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         if milestone.status != EscrowStatus::WorkSubmitted {
             return Err(TrellisError::InvalidStateTransition);
@@ -252,13 +251,12 @@ impl TrellisContract {
 
         let amount = milestone.amount;
         milestone.status = EscrowStatus::Completed;
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Transfer tokens from this contract → payee after state change.
-        token::Client::new(&env, &agreement.token).transfer(
+        token::Client::new(&env, &header.token).transfer(
             &env.current_contract_address(),
-            &agreement.payee,
+            &header.payee,
             &amount,
         );
 
@@ -287,19 +285,17 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_id: u32,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
+        let header = storage::read_header(&env, &agreement_id)?;
 
         // Check the caller is an authorised party before requiring their sig.
-        if caller != agreement.payer && caller != agreement.payee {
+        if caller != header.payer && caller != header.payee {
             return Err(TrellisError::Unauthorized);
         }
         // Require the on-chain signature of whichever party is calling.
         caller.require_auth();
 
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        // #401: header + single milestone only — O(1) reads and one write.
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         // Only milestones with funds at stake can be disputed.
         if milestone.status != EscrowStatus::Funded
@@ -309,8 +305,7 @@ impl TrellisContract {
         }
 
         milestone.status = EscrowStatus::Disputed;
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         events::dispute_raised(&env, agreement_id, milestone_id, caller);
 
@@ -341,17 +336,14 @@ impl TrellisContract {
         milestone_id: u32,
         refund_to_payer: bool,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
+        let header = storage::read_header(&env, &agreement_id)?;
 
         // `require_auth` is the enforcement gate — the host traps if the
         // invoker is not the resolver, so a resolver-mismatch error variant
         // would be unreachable and is deliberately absent from TrellisError.
-        agreement.dispute_resolver.require_auth();
+        header.dispute_resolver.require_auth();
 
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         if milestone.status != EscrowStatus::Disputed {
             return Err(TrellisError::InvalidStateTransition);
@@ -364,21 +356,20 @@ impl TrellisContract {
             milestone.status = EscrowStatus::Completed;
         }
 
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         if refund_to_payer {
             // Rule: payer wins — return locked funds to payer.
-            token::Client::new(&env, &agreement.token).transfer(
+            token::Client::new(&env, &header.token).transfer(
                 &env.current_contract_address(),
-                &agreement.payer,
+                &header.payer,
                 &amount,
             );
         } else {
             // Rule: payee wins — release locked funds to payee.
-            token::Client::new(&env, &agreement.token).transfer(
+            token::Client::new(&env, &header.token).transfer(
                 &env.current_contract_address(),
-                &agreement.payee,
+                &header.payee,
                 &amount,
             );
         }
@@ -411,13 +402,11 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_id: u32,
     ) -> Result<(), TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
-        agreement.payer.require_auth();
+        // #401: header + single milestone only — O(1) reads and one write.
+        let header = storage::read_header(&env, &agreement_id)?;
+        header.payer.require_auth();
 
-        let mut milestone = agreement
-            .milestones
-            .get(milestone_id)
-            .ok_or(TrellisError::InvalidMilestone)?;
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
         if milestone.status != EscrowStatus::Pending {
             // Funds exist or milestone already resolved — use dispute flow.
@@ -426,8 +415,7 @@ impl TrellisContract {
 
         // Mark the milestone closed with no token movement required.
         milestone.status = EscrowStatus::Refunded;
-        agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Emit the dedicated cancellation event rather than milestone_resolved:
         // no arbitration happened and no tokens moved, so indexers must be able
@@ -436,8 +424,8 @@ impl TrellisContract {
             &env,
             agreement_id,
             milestone_id,
-            agreement.payer.clone(),
-            agreement.payer,
+            header.payer.clone(),
+            header.payer,
         );
 
         Ok(())
@@ -461,13 +449,14 @@ impl TrellisContract {
     ///
     /// Equivalent to summing `amount` over every milestone in
     /// [`Self::get_agreement`], but avoids the O(n) iteration for callers who
-    /// only need the total — see [`Agreement::total_amount`].
+    /// only need the total — see [`Agreement::total_amount`]. The pre-computed
+    /// total lives in the agreement header, so this is a single ledger read.
     ///
     /// # Errors
     /// Returns [`TrellisError::AgreementNotFound`] if no agreement exists for
     /// the given `agreement_id`.
     pub fn get_total_amount(env: Env, agreement_id: BytesN<32>) -> Result<i128, TrellisError> {
-        storage::read_agreement(&env, &agreement_id).map(|agreement| agreement.total_amount)
+        storage::read_header(&env, &agreement_id).map(|header| header.total_amount)
     }
 
     /// Fund multiple milestones in a single transaction.
@@ -491,17 +480,17 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_ids: Vec<u32>,
     ) -> Result<u32, TrellisError> {
-        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
-        agreement.payer.require_auth();
+        // #401: a batch costs one write per *requested* milestone, not one
+        // write of the whole agreement — the header is read once and never
+        // rewritten, and milestones outside `milestone_ids` are untouched.
+        let header = storage::read_header(&env, &agreement_id)?;
+        header.payer.require_auth();
 
-        let token = token::Client::new(&env, &agreement.token);
+        let token = token::Client::new(&env, &header.token);
         let mut funded: u32 = 0;
 
         for milestone_id in milestone_ids.iter() {
-            let mut milestone = agreement
-                .milestones
-                .get(milestone_id)
-                .ok_or(TrellisError::InvalidMilestone)?;
+            let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
 
             if milestone.status != EscrowStatus::Pending {
                 return Err(TrellisError::InvalidStateTransition);
@@ -509,20 +498,19 @@ impl TrellisContract {
 
             let amount = milestone.amount;
             milestone.status = EscrowStatus::Funded;
-            agreement.milestones.set(milestone_id, milestone);
+            storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
             events::funds_locked(&env, agreement_id.clone(), milestone_id, amount);
             funded += 1;
         }
 
-        storage::write_agreement(&env, &agreement_id, &agreement);
-
         for milestone_id in milestone_ids.iter() {
-            let milestone = agreement
-                .milestones
-                .get(milestone_id)
-                .ok_or(TrellisError::InvalidMilestone)?;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+            let milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
+            token.transfer(
+                &header.payer,
+                &env.current_contract_address(),
+                &milestone.amount,
+            );
         }
 
         Ok(funded)
@@ -533,7 +521,8 @@ impl TrellisContract {
     /// This is a read-only view — no auth required, no state modified.  It lets
     /// callers query one milestone's current status without deserializing the
     /// full [`Agreement`] struct, which reduces ledger read cost for agreements
-    /// with many milestones.
+    /// with many milestones. #401 made that literal: the milestone is now its
+    /// own ledger entry, so this is a single read.
     ///
     /// Returns `None` if the agreement does not exist or `milestone_id` is out
     /// of range — both map to the same observable absence from the caller's
@@ -543,9 +532,7 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         milestone_id: u32,
     ) -> Option<Milestone> {
-        storage::read_agreement(&env, &agreement_id)
-            .ok()
-            .and_then(|agreement| agreement.milestones.get(milestone_id))
+        storage::read_milestone(&env, &agreement_id, milestone_id).ok()
     }
 
     /// Renew the ledger TTL of an agreement without changing its state.
@@ -596,7 +583,9 @@ fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
+        total = total
+            .checked_add(m.amount)
+            .ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }
