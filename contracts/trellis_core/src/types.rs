@@ -79,3 +79,46 @@ pub struct Agreement {
     /// `init`, so it never needs recomputation.
     pub total_amount: i128,
 }
+
+// ---------------------------------------------------------------------------
+// AgreementHeader — the on-chain form of an Agreement, minus its milestones
+// ---------------------------------------------------------------------------
+
+/// Ledger form of an [`Agreement`] with the milestone vector factored out.
+///
+/// #401: `DataKey::Agreement` used to store the whole `Agreement`, so every
+/// `lock_funds` / `submit_work` / `approve_and_release` / `raise_dispute` /
+/// `resolve_dispute` / `cancel_unfunded_milestone` call re-serialised *every*
+/// milestone back to storage even though only one had changed — per-transaction
+/// write cost, and therefore the fee paid, grew linearly with the agreement's
+/// milestone count.
+///
+/// The header now holds everything except `milestones`; each milestone lives
+/// under its own `DataKey::Milestone(agreement_id, index)` entry, so a
+/// single-milestone transition writes exactly one ledger entry.
+///
+/// This type is deliberately *not* part of the contract's public ABI:
+/// `get_agreement` still returns the full [`Agreement`], reassembled by
+/// `storage::read_agreement`, so no CLI/frontend caller changes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AgreementHeader {
+    /// Globally unique identifier for this agreement (32-byte hash).
+    pub agreement_id: BytesN<32>,
+    /// The party funding the escrow (client / buyer).
+    pub payer: Address,
+    /// The party delivering work and receiving funds (contractor / seller).
+    pub payee: Address,
+    /// SAC or custom token contract used for payments.
+    pub token: Address,
+    /// Trusted third-party address authorised to resolve disputes.
+    pub dispute_resolver: Address,
+    /// Sum of every milestone's `amount`. See [`Agreement::total_amount`].
+    pub total_amount: i128,
+    /// How many per-milestone entries this agreement owns.
+    ///
+    /// Fixed at `init` (nothing can resize the milestone list afterwards) and
+    /// what `storage::read_agreement` uses to know how many
+    /// `DataKey::Milestone` entries to read back.
+    pub milestone_count: u32,
+}
