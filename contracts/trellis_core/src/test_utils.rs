@@ -108,7 +108,10 @@ pub fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
 /// amount.
 ///
 /// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-fn deploy(env: Env, mint_amount: i128) -> (
+fn deploy(
+    env: Env,
+    mint_amount: i128,
+) -> (
     Env,
     Address,
     Address,
