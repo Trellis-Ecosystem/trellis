@@ -532,17 +532,22 @@ impl TrellisContract {
     /// full [`Agreement`] struct, which reduces ledger read cost for agreements
     /// with many milestones.
     ///
-    /// Returns `None` if the agreement does not exist or `milestone_id` is out
-    /// of range — both map to the same observable absence from the caller's
-    /// perspective.
+    /// Returns `Ok(None)` when `milestone_id` is out of range, following the
+    /// same `Result<_, TrellisError>` convention as [`Self::get_agreement`] and
+    /// [`Self::get_total_amount`], so callers can tell "this agreement does not
+    /// exist" apart from "this agreement has no milestone at that index".
+    ///
+    /// # Errors
+    /// Returns [`TrellisError::AgreementNotFound`] if no agreement exists for
+    /// the given `agreement_id`.
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,
         milestone_id: u32,
-    ) -> Option<Milestone> {
-        storage::read_agreement(&env, &agreement_id)
-            .ok()
-            .and_then(|agreement| agreement.milestones.get(milestone_id))
+    ) -> Result<Option<Milestone>, TrellisError> {
+        let agreement = storage::read_agreement(&env, &agreement_id)?;
+
+        Ok(agreement.milestones.get(milestone_id))
     }
 
     /// Renew the ledger TTL of an agreement without changing its state.

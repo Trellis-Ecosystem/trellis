@@ -578,7 +578,8 @@ fn test_get_milestone_returns_correct_milestone() {
     assert_eq!(m.status, EscrowStatus::Pending, "status must be Pending");
 }
 
-/// get_milestone returns None for an out-of-range milestone_id.
+/// get_milestone returns Ok(None) for an out-of-range milestone_id on an
+/// agreement that does exist.
 #[test]
 fn test_get_milestone_invalid_id_returns_none() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
@@ -598,6 +599,39 @@ fn test_get_milestone_invalid_id_returns_none() {
     assert!(
         result.is_none(),
         "out-of-range milestone_id must return None"
+    );
+}
+
+/// get_milestone returns AgreementNotFound for an unknown agreement ID —
+/// distinct from the Ok(None) an out-of-range milestone_id produces.
+#[test]
+fn test_get_milestone_unknown_agreement_returns_error() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 22);
+
+    auth_as(&env, &payer); // init only requires the payer's auth
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 100),
+        &dispute_resolver,
+    );
+
+    let fake_id = agreement_id(&env, 98); // never initialized
+    let result = client.try_get_milestone(&fake_id, &0u32);
+    assert!(
+        matches!(result, Err(Ok(TrellisError::AgreementNotFound))),
+        "unknown agreement ID must return AgreementNotFound, not Ok(None)"
+    );
+
+    // The same entrypoint still reports a missing milestone on a real
+    // agreement as Ok(None).
+    let result = client.try_get_milestone(&id, &7u32);
+    assert!(
+        matches!(result, Ok(Ok(None))),
+        "out-of-range milestone_id on an existing agreement must return Ok(None)"
     );
 }
 

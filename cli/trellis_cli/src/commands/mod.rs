@@ -803,6 +803,11 @@ fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Resul
 ///
 /// Queries a single milestone by index without fetching the full Agreement,
 /// reducing deserialization cost for agreements with many milestones.
+///
+/// The contract returns `Result<Option<Milestone>, TrellisError>`: an unknown
+/// agreement surfaces as the on-chain `AgreementNotFound` error (non-zero exit
+/// status with the decoded error code), while an out-of-range milestone id
+/// prints `null`.
 fn run_milestone_status(
     config: &Config,
     agreement_id: String,
