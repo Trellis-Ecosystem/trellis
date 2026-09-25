@@ -10,6 +10,9 @@
 #   https://doc.rust-lang.org/cargo/reference/toolchain-file.html
 
 [toolchain]
-channel  = "1.86.0"
+# 1.88 is the minimum toolchain supported by the locked dependency graph:
+# `serde_with` 3.21 and `darling` 0.23 declare `rust-version = 1.88`, so cargo
+# refuses to resolve the workspace with anything older.
+channel  = "1.88.0"
 targets  = ["wasm32-unknown-unknown"]
 components = ["rustfmt", "clippy"]

@@ -45,7 +45,6 @@ pub enum TrellisError {
     // on a milestone that has left `Pending` is a state machine violation
     // ([`TrellisError::InvalidStateTransition`]), not a distinct economic
     // one. Left vacant rather than reused, per the append-only rule above.
-
     /// `init` was called with an empty `milestones` vector. An agreement with
     /// no milestones can never transition through any state, permanently
     /// wasting the storage it occupies.
@@ -66,4 +65,24 @@ pub enum TrellisError {
     /// The liveness probe (symbol() call) failed to verify the address
     /// represents an active, functional token contract.
     InvalidToken = 10,
+
+    /// `init` was called with the same address as both `payer` and `payee`.
+    /// A self-dealing agreement has no escrow semantics — nothing is ever at
+    /// stake between two copies of one party — and it makes the counterparty
+    /// pair useless as an indexer key.
+    ///
+    /// NOTE: this variant was previously added with discriminant `9` and was
+    /// lost in a merge that kept its `init` call site but dropped the
+    /// definition. It is re-added here with the next free discriminant so the
+    /// append-only numbering rule above is not violated.
+    PayerEqualsPayee = 11,
+
+    /// `init` was called with more milestones than [`crate::MAX_MILESTONES`].
+    /// The cap keeps the worst-case storage footprint and gas cost of an
+    /// agreement bounded, so a caller cannot create one that is too expensive
+    /// to ever transition.
+    ///
+    /// NOTE: like [`TrellisError::PayerEqualsPayee`], this variant was lost in
+    /// a merge and is re-added with the next free discriminant.
+    MilestoneCountExceeded = 12,
 }
