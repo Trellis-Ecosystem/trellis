@@ -574,7 +574,7 @@
                                 "val": {
                                   "vec": [
                                     {
-                                      "symbol": "Refunded"
+                                      "symbol": "Cancelled"
                                     }
                                   ]
                                 }
@@ -607,7 +607,7 @@
                                 "val": {
                                   "vec": [
                                     {
-                                      "symbol": "Refunded"
+                                      "symbol": "Cancelled"
                                     }
                                   ]
                                 }
@@ -640,7 +640,7 @@
                                 "val": {
                                   "vec": [
                                     {
-                                      "symbol": "Refunded"
+                                      "symbol": "Cancelled"
                                     }
                                   ]
                                 }

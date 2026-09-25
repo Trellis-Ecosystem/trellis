@@ -392,6 +392,10 @@ impl TrellisContract {
     /// event used by [`Self::resolve_dispute`]. No tokens move here, so
     /// off-chain consumers must not treat a cancellation as a dispute ruling.
     ///
+    /// The milestone transitions to [`EscrowStatus::Cancelled`] — never
+    /// [`EscrowStatus::Refunded`], which is reserved for dispute rulings
+    /// (`resolve_dispute`) where real funds were locked and then returned.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
@@ -417,8 +421,11 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        // Mark the milestone closed with no token movement required.
-        milestone.status = EscrowStatus::Refunded;
+        // Mark the milestone cancelled — no token movement required.
+        // `Cancelled` (not `Refunded`) records that no funds were ever
+        // locked here; `Refunded` is reserved for dispute rulings that
+        // return real tokens to the payer.
+        milestone.status = EscrowStatus::Cancelled;
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
 

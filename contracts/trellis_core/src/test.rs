@@ -290,6 +290,17 @@ fn test_dispute_and_refund_to_payer() {
         0,
         "contract balance should be zero after resolution"
     );
+
+    // Adjacent regression guard: a dispute refund must still persist
+    // `Refunded` — only the never-funded cancellation path moved to
+    // `Cancelled`, so the two histories remain distinguishable.
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Refunded,
+        "dispute refund must still persist Refunded"
+    );
 }
 
 /// Cancel a milestone that was never funded, then verify a second cancel fails.
@@ -312,13 +323,24 @@ fn test_cancel_unfunded_milestone() {
     auth_as(&env, &payer);
     client.cancel_unfunded_milestone(&id, &0u32);
 
-    // Second cancel — must fail (milestone is now Refunded, not Pending).
+    // The stored status must be `Cancelled`, not `Refunded` — a reader of
+    // get_agreement/get_milestone must be able to distinguish a never-funded
+    // cancellation from a dispute refund without replaying the event log.
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Cancelled,
+        "cancellation must persist Cancelled, not Refunded"
+    );
+
+    // Second cancel — must fail (milestone is now Cancelled, not Pending).
     auth_as(&env, &payer);
     let result = client.try_cancel_unfunded_milestone(&id, &0u32);
     assert_eq!(
         result,
         Err(Ok(TrellisError::InvalidStateTransition)),
-        "second cancel on an already-Refunded milestone must return InvalidStateTransition"
+        "second cancel on an already-Cancelled milestone must return InvalidStateTransition"
     );
 }
 
