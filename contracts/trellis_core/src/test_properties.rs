@@ -96,9 +96,8 @@ fn setup() -> (
 /// Build a `Vec<Milestone>` from a slice of amounts. All statuses are Pending.
 fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for (i, &amount) in amounts.iter().enumerate() {
+    for &amount in amounts.iter() {
         v.push_back(Milestone {
-            id: i as u32,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,

@@ -94,7 +94,7 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
-        if milestones.len() > MAX_MILESTONES as usize {
+        if milestones.len() > MAX_MILESTONES {
             return Err(TrellisError::MilestoneCountExceeded);
         }
 
@@ -106,7 +106,14 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+        // Liveness probe: `try_symbol()` surfaces a host/invoke error for a bad
+        // address and a conversion error for a non-symbol return value. Both
+        // mean "this is not a usable token contract", so both map to
+        // `InvalidToken` instead of reaching an `unwrap`.
+        let _ = token::Client::new(&env, &token)
+            .try_symbol()
+            .map_err(|_| TrellisError::InvalidToken)?
+            .map_err(|_| TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 

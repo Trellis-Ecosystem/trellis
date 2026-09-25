@@ -66,4 +66,19 @@ pub enum TrellisError {
     /// The liveness probe (symbol() call) failed to verify the address
     /// represents an active, functional token contract.
     InvalidToken = 10,
+
+    /// `init` was called with `payer` equal to `payee`. An agreement where the
+    /// same address sends and receives funds is economically nonsensical and
+    /// can interfere with agreement IDs and indexers.
+    ///
+    /// Appended at `11` per the append-only rule above: this invariant was
+    /// introduced alongside `ResolverCannotBeParty`, but its variant was lost
+    /// while the error enum was being compacted. Re-adding it at the end keeps
+    /// every already-published discriminant stable.
+    PayerEqualsPayee = 11,
+
+    /// `init` was called with a milestone count exceeding `MAX_MILESTONES`.
+    /// Unbounded milestone counts create oversized on-chain vectors that inflate
+    /// gas costs and storage bloat.
+    MilestoneCountExceeded = 12,
 }

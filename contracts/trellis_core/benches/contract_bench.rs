@@ -23,7 +23,6 @@ fn one_milestone(env: &Env, amount: i128) -> SorobanVec<Milestone> {
     vec![
         env,
         Milestone {
-            id: 0,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -33,9 +32,8 @@ fn one_milestone(env: &Env, amount: i128) -> SorobanVec<Milestone> {
 
 fn n_milestones(env: &Env, count: u32, amount: i128) -> SorobanVec<Milestone> {
     let mut v: SorobanVec<Milestone> = SorobanVec::new(env);
-    for i in 0..count {
+    for _ in 0..count {
         v.push_back(Milestone {
-            id: i,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,

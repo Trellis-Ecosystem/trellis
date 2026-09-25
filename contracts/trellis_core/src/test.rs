@@ -144,10 +144,10 @@ fn test_happy_path() {
     // are checked here, in the order they must have fired: created, locked,
     // submitted, released.
     let expected_topics = [
-        symbol_short!("trlls_crte"),
-        symbol_short!("trlls_lckd"),
-        symbol_short!("trlls_sbmt"),
-        symbol_short!("trlls_rlsd"),
+        symbol_short!("trls_crte"),
+        symbol_short!("trls_lckd"),
+        symbol_short!("trls_sbmt"),
+        symbol_short!("trls_rlsd"),
     ];
     let all_events = env.events().all();
     let mut matched = 0usize;
@@ -678,19 +678,16 @@ fn test_get_total_amount_matches_sum() {
     let milestones = vec![
         &env,
         Milestone {
-            id: 0,
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
         },
         Milestone {
-            id: 1,
             amount: 2_500,
             status: EscrowStatus::Pending,
             proof_uri: None,
         },
         Milestone {
-            id: 2,
             amount: 1_500,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -707,7 +704,7 @@ fn test_get_total_amount_matches_sum() {
         &dispute_resolver,
     );
 
-    let total = client.get_total_amount(&id).unwrap();
+    let total = client.get_total_amount(&id);
     assert_eq!(total, 5_000, "get_total_amount should return sum of all milestones");
 }
 
@@ -728,19 +725,21 @@ fn test_extend_ttl_success() {
     );
 
     // extend_agreement_ttl has no require_auth() gate — it's a permissionless
-    // keeper entrypoint — so no auth mock is needed here.
-    let result = client.extend_agreement_ttl(&id);
-    assert!(result.is_ok(), "extend_agreement_ttl should succeed on existing agreement");
+    // keeper entrypoint — so no auth mock is needed here. `payer` is recorded
+    // in the emitted `ttl_extended` event for the keeper audit trail. The
+    // generated client panics on a contract error, so reaching the next line
+    // is the success assertion.
+    client.extend_agreement_ttl(&id, &payer);
 }
 
 /// Test extend_agreement_ttl on non-existent agreement fails gracefully.
 #[test]
 fn test_extend_ttl_nonexistent_agreement() {
-    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+    let (env, payer, _payee, _dispute_resolver, _token_address, client) = setup();
     let id = agreement_id(&env, 99);
 
     // No auth mock needed — see comment above test_extend_ttl_success.
-    let result = client.try_extend_agreement_ttl(&id);
+    let result = client.try_extend_agreement_ttl(&id, &payer);
     assert_eq!(
         result,
         Err(Ok(TrellisError::AgreementNotFound)),
@@ -773,9 +772,9 @@ fn test_dispute_raised_by_payer() {
     client.raise_dispute(&payer, &id, &0u32);
 
     // Verify milestone status transitioned to Disputed
-    let status = client.get_milestone_status(&id, &0u32).unwrap();
+    let milestone = client.get_milestone(&id, &0u32).unwrap();
     assert_eq!(
-        status,
+        milestone.status,
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
     );
