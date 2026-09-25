@@ -438,7 +438,19 @@ impl TrellisContract {
 
     /// Return the full [`Agreement`] struct for the given ID.
     ///
-    /// This is a read-only view — no auth is required and no state is modified.
+    /// This is a view call — no auth is required and no agreement data is
+    /// modified, but it is **not** free of side effects: the read goes through
+    /// `storage::read_agreement`, which renews the entry's ledger TTL whenever
+    /// the remaining lifetime has dropped below the renewal threshold, and the
+    /// caller pays the rent for that extension.  An agreement that is merely
+    /// being watched — a long dispute window, a milestone awaiting delivery —
+    /// is still in active use and must not be archived out from under its
+    /// parties, which is why the renewal happens on read rather than only on
+    /// write.  A bump-free variant was considered for callers that want a
+    /// strictly side-effect-free probe, but it would make a single careless
+    /// read (for example from an indexer polling every block) silently
+    /// responsible for the agreement's lifetime.
+    ///
     /// It exists primarily so the CLI `status` command can display the current
     /// agreement state (including per-milestone statuses) via
     /// `stellar contract invoke … -- get_agreement --agreement-id <hex>`.
@@ -527,10 +539,13 @@ impl TrellisContract {
 
     /// Return a single [`Milestone`] by its index within the agreement.
     ///
-    /// This is a read-only view — no auth required, no state modified.  It lets
-    /// callers query one milestone's current status without deserializing the
-    /// full [`Agreement`] struct, which reduces ledger read cost for agreements
-    /// with many milestones.
+    /// This is a view call — no auth is required and no agreement data is
+    /// modified, but, as with [`Self::get_agreement`], the read renews the
+    /// entry's ledger TTL when the remaining lifetime is below the renewal
+    /// threshold (see [`storage::read_agreement`]).  It lets callers query one
+    /// milestone's current status without deserializing the full [`Agreement`]
+    /// struct, which reduces ledger read cost for agreements with many
+    /// milestones.
     ///
     /// Returns `None` if the agreement does not exist or `milestone_id` is out
     /// of range — both map to the same observable absence from the caller's

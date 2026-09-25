@@ -1,6 +1,6 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    testutils::{storage::Persistent, Address as _, MockAuth, MockAuthInvoke},
     token, vec, xdr, Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, TryIntoVal, Val,
     Vec,
 };
@@ -538,6 +538,53 @@ fn test_get_agreement() {
         result.err().unwrap(),
         Ok(TrellisError::AgreementNotFound),
         "error must be AgreementNotFound"
+    );
+}
+
+/// The `get_agreement` / `get_milestone` views go through
+/// `storage::read_agreement`, which renews the entry's TTL once the remaining
+/// lifetime drops below the renewal threshold — so a read is not strictly free
+/// of side effects. Above that threshold the renewal is a no-op, and this test
+/// locks that in: a read must leave the entry's TTL exactly where `init` put it.
+///
+/// The renew-on-read path itself cannot be driven from the test environment:
+/// advancing the ledger far enough to push the entry below the threshold also
+/// archives the contract instance, which the test host then rejects.
+#[test]
+fn test_view_calls_leave_ttl_untouched_above_threshold() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 25);
+
+    auth_as(&env, &payer); // init only requires the payer's auth
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 100),
+        &dispute_resolver,
+    );
+
+    let key = crate::storage::DataKey::Agreement(id.clone());
+    let contract_id = client.address.clone();
+    // Persistent storage can only be inspected from inside a contract context.
+    let ttl =
+        |env: &Env| env.as_contract(&contract_id, || env.storage().persistent().get_ttl(&key));
+
+    let ttl_after_init = ttl(&env);
+    assert_eq!(
+        ttl_after_init,
+        crate::storage::LEDGER_BUMP,
+        "init must leave the entry with the full ~30-day TTL"
+    );
+
+    client.get_agreement(&id);
+    client.get_milestone(&id, &0u32);
+
+    assert_eq!(
+        ttl(&env),
+        ttl_after_init,
+        "reads above the renewal threshold must not change the entry's TTL"
     );
 }
 
