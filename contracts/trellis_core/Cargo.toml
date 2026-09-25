@@ -6,7 +6,10 @@ license = "MIT"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` is the deployable WASM artifact; `lib` is additionally required so
+# in-package targets (benches) can `use trellis_core::…` as a normal Rust
+# dependency. Without `lib` the bench target fails to link.
+crate-type = ["cdylib", "lib"]
 
 # soroban-sdk 22.x only — the on-chain ABI (env interface version) is tied to
 # the major version, and each minor/patch is expected to stay

@@ -3,7 +3,9 @@
 mod errors;
 mod events;
 mod storage;
-mod types;
+// `types` is public so out-of-crate targets in this package (the gas
+// benchmarks) can build `Agreement`/`Milestone`/`EscrowStatus` values.
+pub mod types;
 
 #[cfg(test)]
 mod test;
@@ -68,13 +70,31 @@ impl TrellisContract {
     /// `milestones` must be non-empty and `dispute_resolver` must be distinct
     /// from both `payer` and `payee` — see the `Errors` below.
     ///
+    /// # Atomicity
+    /// `init` is all-or-nothing. Every validation below runs *before* the
+    /// agreement is written, so a rejected call leaves no trace in storage:
+    /// `AgreementNotFound` is returned by any later read of `agreement_id`,
+    /// and the ID stays free for a subsequent corrected `init` (it is *not*
+    /// consumed by the failed attempt). Callers can therefore retry after
+    /// fixing the input instead of having to pick a new agreement ID.
+    ///
     /// # Errors
     /// - [`TrellisError::AlreadyInitialized`] if an agreement with this ID
     ///   already exists in storage.
     /// - [`TrellisError::EmptyMilestoneSet`] if `milestones` is empty — such
     ///   an agreement could never transition through any state.
+    /// - [`TrellisError::MilestoneCountExceeded`] if `milestones` holds more
+    ///   than [`MAX_MILESTONES`] entries.
+    /// - [`TrellisError::PayerEqualsPayee`] if `payer` and `payee` are the
+    ///   same address — a self-dealing agreement has nothing at stake.
     /// - [`TrellisError::ResolverCannotBeParty`] if `dispute_resolver` equals
     ///   `payer` or `payee` — the resolver must be a neutral third party.
+    /// - [`TrellisError::InvalidToken`] if `token` is not a live token
+    ///   contract (its liveness probe fails).
+    /// - [`TrellisError::InvalidMilestone`] if any milestone has a
+    ///   non-positive `amount`.
+    /// - [`TrellisError::TotalAmountOverflow`] if the milestone amounts sum
+    ///   to more than `i128::MAX`.
     pub fn init(
         env: Env,
         agreement_id: BytesN<32>,
@@ -94,7 +114,7 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
-        if milestones.len() > MAX_MILESTONES as usize {
+        if milestones.len() > MAX_MILESTONES {
             return Err(TrellisError::MilestoneCountExceeded);
         }
 
@@ -106,7 +126,15 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+        // Liveness probe: a real token contract answers `symbol()`. The SDK
+        // exposes the fallible variant as a nested result — the outer one
+        // covers invocation failures (no contract at this address / trap), the
+        // inner one covers a malformed return value. Both mean "not a usable
+        // token", so both map to InvalidToken.
+        token::Client::new(&env, &token)
+            .try_symbol()
+            .map_err(|_| TrellisError::InvalidToken)?
+            .map_err(|_| TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 
@@ -512,7 +540,11 @@ impl TrellisContract {
                 .milestones
                 .get(milestone_id)
                 .ok_or(TrellisError::InvalidMilestone)?;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+            token.transfer(
+                &agreement.payer,
+                &env.current_contract_address(),
+                &milestone.amount,
+            );
         }
 
         Ok(funded)
@@ -586,7 +618,9 @@ fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
+        total = total
+            .checked_add(m.amount)
+            .ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }
