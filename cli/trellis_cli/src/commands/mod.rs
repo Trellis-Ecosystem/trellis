@@ -255,9 +255,7 @@ fn confirm_action(summary: &str, yes: bool, opts: &OutputOpts) -> Result<(), Str
     }
 
     if opts.quiet {
-        return Err(
-            "Confirmation required: pass --yes to run this non-interactively.".to_string(),
-        );
+        return Err("Confirmation required: pass --yes to run this non-interactively.".to_string());
     }
 
     use std::io::Write;
@@ -684,7 +682,9 @@ fn run_raise_dispute(
     validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
 
     confirm_action(
-        &format!("This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."),
+        &format!(
+            "This will raise a dispute on milestone {milestone_id} of agreement {agreement_id}."
+        ),
         yes,
         opts,
     )?;
@@ -803,6 +803,11 @@ fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Resul
 ///
 /// Queries a single milestone by index without fetching the full Agreement,
 /// reducing deserialization cost for agreements with many milestones.
+///
+/// The contract returns `Result<Option<Milestone>, TrellisError>`: an unknown
+/// agreement surfaces as the on-chain `AgreementNotFound` error (non-zero exit
+/// status with the decoded error code), while an out-of-range milestone id
+/// prints `null`.
 fn run_milestone_status(
     config: &Config,
     agreement_id: String,
@@ -1018,7 +1023,10 @@ fn render_human(out: &InvokeOutput) -> Result<(), String> {
         match serde_json::from_str::<serde_json::Value>(trimmed) {
             Ok(serde_json::Value::Object(map)) if !map.is_empty() => {
                 for (key, value) in map {
-                    println!("  {ANSI_BOLD}{key}{ANSI_RESET}: {}", format_json_value(&value));
+                    println!(
+                        "  {ANSI_BOLD}{key}{ANSI_RESET}: {}",
+                        format_json_value(&value)
+                    );
                 }
             }
             Ok(other) if !trimmed.is_empty() => println!("  {}", format_json_value(&other)),
@@ -1081,7 +1089,9 @@ fn extract_with_prefix(text: &str) -> Option<String> {
                 let start = pos + pattern.len() + prefix.len();
                 if start < text.len() {
                     let rest = &text[start..];
-                    for token in rest.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}') {
+                    for token in
+                        rest.split(|c: char| c.is_whitespace() || c == '"' || c == ',' || c == '}')
+                    {
                         if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
                             return Some(token.to_lowercase());
                         }
@@ -1450,7 +1460,11 @@ mod tests {
     fn extract_tx_hash_ignores_standalone_hex() {
         let hash = "a".repeat(64);
         let text = format!("some milestone amount {hash} in response");
-        assert_eq!(extract_tx_hash(&text, ""), None, "should not match arbitrary 64-char hex");
+        assert_eq!(
+            extract_tx_hash(&text, ""),
+            None,
+            "should not match arbitrary 64-char hex"
+        );
     }
 
     #[test]
@@ -1462,13 +1476,21 @@ mod tests {
     fn extract_tx_hash_false_positive_contract_response() {
         let hex_amount = "b".repeat(64);
         let json = format!(r#"{{"milestone_amount": "{hex_amount}", "status": "pending"}}"#);
-        assert_eq!(extract_tx_hash(&json, ""), None, "should not match hex in JSON fields");
+        assert_eq!(
+            extract_tx_hash(&json, ""),
+            None,
+            "should not match hex in JSON fields"
+        );
     }
 
     #[test]
     fn extract_tx_hash_false_positive_random_hex() {
         let random_hex = "c".repeat(64);
-        assert_eq!(extract_tx_hash(&random_hex, ""), None, "should not match standalone hex");
+        assert_eq!(
+            extract_tx_hash(&random_hex, ""),
+            None,
+            "should not match standalone hex"
+        );
     }
 
     #[test]

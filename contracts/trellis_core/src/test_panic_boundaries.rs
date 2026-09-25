@@ -24,6 +24,21 @@
 //! reaches it.
 
 use proptest::prelude::*;
+
+/// Deterministic proptest configuration.
+///
+/// The CI snapshot-validation step re-runs the suite and diffs the regenerated
+/// `test_snapshots/` tree, so the generated values must be identical on every
+/// run.  proptest otherwise seeds its RNG from a random source, which would
+/// make every regeneration produce a spurious diff.
+fn deterministic_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: 256,
+        rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x5454_5454),
+        ..ProptestConfig::default()
+    }
+}
 use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::{
@@ -72,9 +87,8 @@ fn setup() -> (
 /// Build a `Vec<Milestone>` of `n` Pending milestones worth 1_000 each.
 fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for i in 0..n {
+    for _ in 0..n {
         v.push_back(Milestone {
-            id: i,
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -87,9 +101,8 @@ fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
 /// cases that need zero / negative values).
 fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
     let mut v: Vec<Milestone> = Vec::new(env);
-    for (i, &amount) in amounts.iter().enumerate() {
+    for &amount in amounts.iter() {
         v.push_back(Milestone {
-            id: i as u32,
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -127,7 +140,7 @@ fn init_agreement(
 
 #[test]
 fn unknown_agreement_id_never_panics() {
-    let (env, _payer, payee, _resolver, _token, client) = setup();
+    let (env, payer, payee, _resolver, _token, client) = setup();
     let missing = agreement_id(&env, 200);
 
     // Every entrypoint that reads an agreement must surface AgreementNotFound.
@@ -156,7 +169,7 @@ fn unknown_agreement_id_never_panics() {
         Err(Ok(TrellisError::AgreementNotFound))
     );
     assert_eq!(
-        client.try_extend_agreement_ttl(&missing),
+        client.try_extend_agreement_ttl(&missing, &payer),
         Err(Ok(TrellisError::AgreementNotFound))
     );
     // Non-`()` success types can't derive PartialEq, so match instead of eq.
@@ -164,10 +177,10 @@ fn unknown_agreement_id_never_panics() {
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
     ));
-    // Option-returning view: absence, not a trap.
+    // A missing agreement is a typed error here, not a silent `None`.
     assert!(matches!(
         client.try_get_milestone(&missing, &0),
-        Ok(Ok(None))
+        Err(Ok(TrellisError::AgreementNotFound))
     ));
 }
 
@@ -203,6 +216,7 @@ fn out_of_range_milestone_index_never_panics() {
         client.try_cancel_unfunded_milestone(&id, &oob),
         Err(Ok(TrellisError::InvalidMilestone))
     );
+    // Existing agreement, out-of-range index: `Ok(None)`, not a trap.
     assert!(matches!(client.try_get_milestone(&id, &oob), Ok(Ok(None))));
 }
 
@@ -342,7 +356,7 @@ macro_rules! assert_no_trap {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(deterministic_config())]
 
     /// For an agreement with 1..=4 milestones, calling every milestone-indexed
     /// entrypoint with an arbitrary `u32` index must never trap — regardless of
@@ -372,7 +386,7 @@ proptest! {
         seed in any::<u8>(),
         milestone_id in any::<u32>(),
     ) {
-        let (env, _payer, payee, _resolver, _token, client) = setup();
+        let (env, payer, payee, _resolver, _token, client) = setup();
         let id = agreement_id(&env, seed);
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
@@ -383,7 +397,7 @@ proptest! {
         assert_no_trap!(client.try_cancel_unfunded_milestone(&id, &milestone_id), "cancel");
         assert_no_trap!(client.try_get_agreement(&id), "get_agreement");
         assert_no_trap!(client.try_get_milestone(&id, &milestone_id), "get_milestone");
-        assert_no_trap!(client.try_extend_agreement_ttl(&id), "extend_agreement_ttl");
+        assert_no_trap!(client.try_extend_agreement_ttl(&id, &payer), "extend_agreement_ttl");
     }
 
     /// A random proof URI of arbitrary length / content must not trap
