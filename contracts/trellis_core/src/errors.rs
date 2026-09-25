@@ -76,4 +76,10 @@ pub enum TrellisError {
     /// sides of the escrow into a single address — there would be no real
     /// counterparty to release or dispute funds.
     PayerEqualsPayee = 12,
+
+    /// `submit_work` was called with a `proof_uri` longer than the contract's
+    /// `MAX_PROOF_URI_LEN` (512 bytes). Proof URIs are stored verbatim in the
+    /// agreement's persistent entry, so an unbounded length would let a payee
+    /// permanently inflate the agreement's storage footprint and rent.
+    ProofUriTooLong = 13,
 }

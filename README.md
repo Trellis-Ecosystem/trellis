@@ -476,7 +476,7 @@ Trellis is a monorepo with three layers:
 |---|---|---|
 | `init` | Payer | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
 | `lock_funds` | Payer | Deposits funds for a milestone into the contract |
-| `submit_work` | Payee | Submits proof of completed work for a funded milestone |
+| `submit_work` | Payee | Submits proof of completed work for a funded milestone (`proof_uri` capped at 512 bytes) |
 | `approve_and_release` | Payer | Approves submitted work, releases funds to payee |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |

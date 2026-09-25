@@ -429,9 +429,12 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
     }
-    if uri.len() > 2048 {
+    // Mirrors the contract's MAX_PROOF_URI_LEN: the contract rejects longer
+    // proofs, so catching it here avoids paying for a doomed transaction.
+    if uri.len() > crate::input::MAX_PROOF_URI_LEN {
         return Err(format!(
-            "proof_uri must not exceed 2048 characters, got {}",
+            "proof_uri must not exceed {} characters, got {}",
+            crate::input::MAX_PROOF_URI_LEN,
             uri.len()
         ));
     }

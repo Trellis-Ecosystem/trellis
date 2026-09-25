@@ -541,6 +541,69 @@ fn test_get_agreement() {
     );
 }
 
+/// submit_work caps `proof_uri` at MAX_PROOF_URI_LEN: an over-limit proof is
+/// rejected without changing state, and one at exactly the limit is accepted.
+#[test]
+fn test_submit_work_proof_uri_length_bounds() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 23);
+
+    auth_as(&env, &payer); // init only requires the payer's auth
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    auth_as(&env, &payer);
+    client.lock_funds(&id, &0u32);
+
+    // Exploit path: an over-limit proof must be rejected, leaving the
+    // milestone funded and no proof stored.
+    let oversized = Some(String::from_str(&env, &"x".repeat(513)));
+    auth_as(&env, &payee);
+    let result = client.try_submit_work(&id, &0u32, &oversized);
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ProofUriTooLong)),
+        "a proof_uri over the 512-byte cap must be rejected"
+    );
+
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Funded,
+        "a rejected submission must not advance the milestone"
+    );
+    assert_eq!(
+        m0.proof_uri, None,
+        "a rejected submission must not store a proof"
+    );
+
+    // Adjacent happy path: a proof of exactly MAX_PROOF_URI_LEN is accepted
+    // and stored verbatim.
+    let at_limit = Some(String::from_str(&env, &"x".repeat(512)));
+    auth_as(&env, &payee);
+    client.submit_work(&id, &0u32, &at_limit);
+
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::WorkSubmitted,
+        "a proof of exactly 512 bytes must be accepted"
+    );
+    assert_eq!(
+        m0.proof_uri,
+        at_limit,
+        "the proof of exactly 512 bytes must be stored"
+    );
+}
+
 /// get_milestone returns the correct milestone for a valid index.
 #[test]
 fn test_get_milestone_returns_correct_milestone() {

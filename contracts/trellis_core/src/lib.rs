@@ -25,6 +25,15 @@ use types::{Agreement, EscrowStatus, Milestone};
 
 const MAX_MILESTONES: u32 = 50;
 
+/// Maximum length, in bytes, of the `proof_uri` accepted by `submit_work`.
+///
+/// A milestone lives in persistent storage for the lifetime of its agreement,
+/// so an unbounded proof URI would let a payee permanently inflate the
+/// agreement's storage footprint (and rent) with no real cost beyond the
+/// transaction fee. 512 bytes comfortably fits an `ipfs://` CID or a long
+/// HTTPS URL, and the CLI enforces the same cap client-side.
+pub const MAX_PROOF_URI_LEN: u32 = 512;
+
 // ---------------------------------------------------------------------------
 // Contract struct
 // ---------------------------------------------------------------------------
@@ -185,10 +194,16 @@ impl TrellisContract {
     /// normalized to `None` to ensure semantic consistency — indexers pattern
     /// match on `Some(uri)` and must never see an empty string.
     ///
+    /// `proof_uri` is stored verbatim in the agreement's persistent entry, so
+    /// it is capped at [`MAX_PROOF_URI_LEN`] (512 bytes) to bound the storage
+    /// and rent a single submission can lock in for the agreement's lifetime.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
     /// - [`TrellisError::InvalidStateTransition`] – milestone not `Funded`.
+    /// - [`TrellisError::ProofUriTooLong`] – `proof_uri` exceeds
+    ///   [`MAX_PROOF_URI_LEN`] bytes.
     pub fn submit_work(
         env: Env,
         agreement_id: BytesN<32>,
@@ -208,6 +223,16 @@ impl TrellisContract {
         }
 
         let proof_uri = proof_uri.filter(|s| !s.is_empty());
+
+        // Reject oversized proofs before touching storage: the URI is written
+        // verbatim and kept for the agreement's lifetime, so an unbounded
+        // length would be a permanent storage/rent cost imposed by the payee.
+        if let Some(uri) = &proof_uri {
+            if uri.len() > MAX_PROOF_URI_LEN {
+                return Err(TrellisError::ProofUriTooLong);
+            }
+        }
+
         milestone.status = EscrowStatus::WorkSubmitted;
         milestone.proof_uri = proof_uri.clone();
         agreement.milestones.set(milestone_id, milestone);
