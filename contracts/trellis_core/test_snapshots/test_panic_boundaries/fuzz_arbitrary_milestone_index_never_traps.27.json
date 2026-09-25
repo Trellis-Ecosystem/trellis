@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf"
+                  "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -338,7 +338,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf"
+                  "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
                 }
               ]
             },
@@ -358,7 +358,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf"
+                      "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
                     }
                   ]
                 },
@@ -370,7 +370,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf"
+                        "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
                       }
                     },
                     {

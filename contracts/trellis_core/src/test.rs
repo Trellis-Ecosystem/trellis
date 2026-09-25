@@ -47,7 +47,7 @@ fn auth_as(env: &Env, _address: &Address) {
 /// prove that an entrypoint rejects callers who were never entitled to act.
 fn auth_as_only(env: &Env, address: &Address) {
     env.mock_auths(&[MockAuth {
-        address: address,
+        address,
         invoke: &MockAuthInvoke {
             contract: address,
             fn_name: "",
