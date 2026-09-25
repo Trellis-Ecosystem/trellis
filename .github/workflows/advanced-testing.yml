@@ -34,7 +34,7 @@ jobs:
     name: Property-Based Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -51,7 +51,7 @@ jobs:
     name: Gas Cost Benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -88,7 +88,7 @@ jobs:
     # requested via the `run_mutation_tests` input (the suite is slow).
     if: github.event_name == 'schedule' || inputs.run_mutation_tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -135,7 +135,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -156,7 +156,7 @@ jobs:
     name: Test Coverage Report
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
