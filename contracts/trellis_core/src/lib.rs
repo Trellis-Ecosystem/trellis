@@ -3,7 +3,10 @@
 mod errors;
 mod events;
 mod storage;
-mod types;
+// `pub` so the in-crate `contract_bench` target can `use trellis_core::types::…`
+// exactly like an external consumer (and so `Milestone`/`EscrowStatus` are
+// re-exportable to SDK users building against the rlib).
+pub mod types;
 
 #[cfg(test)]
 mod test;
@@ -94,7 +97,7 @@ impl TrellisContract {
             return Err(TrellisError::EmptyMilestoneSet);
         }
 
-        if milestones.len() > MAX_MILESTONES as usize {
+        if milestones.len() > MAX_MILESTONES {
             return Err(TrellisError::MilestoneCountExceeded);
         }
 
@@ -106,7 +109,14 @@ impl TrellisContract {
             return Err(TrellisError::ResolverCannotBeParty);
         }
 
-        token::Client::new(&env, &token).try_symbol().ok_or(TrellisError::InvalidToken)?;
+        // Liveness probe: `try_symbol()` surfaces a host/invoke error for a bad
+        // address and a conversion error for a non-symbol return value. Both
+        // mean "this is not a usable token contract", so both map to
+        // `InvalidToken` instead of reaching an `unwrap`.
+        let _ = token::Client::new(&env, &token)
+            .try_symbol()
+            .map_err(|_| TrellisError::InvalidToken)?
+            .map_err(|_| TrellisError::InvalidToken)?;
 
         let total_amount = validate_milestones(&milestones)?;
 
@@ -512,7 +522,11 @@ impl TrellisContract {
                 .milestones
                 .get(milestone_id)
                 .ok_or(TrellisError::InvalidMilestone)?;
-            token.transfer(&agreement.payer, &env.current_contract_address(), &milestone.amount);
+            token.transfer(
+                &agreement.payer,
+                &env.current_contract_address(),
+                &milestone.amount,
+            );
         }
 
         Ok(funded)
@@ -586,7 +600,9 @@ fn validate_milestones(milestones: &Vec<Milestone>) -> Result<i128, TrellisError
         if m.amount <= 0 {
             return Err(TrellisError::InvalidMilestone);
         }
-        total = total.checked_add(m.amount).ok_or(TrellisError::TotalAmountOverflow)?;
+        total = total
+            .checked_add(m.amount)
+            .ok_or(TrellisError::TotalAmountOverflow)?;
     }
     Ok(total)
 }
