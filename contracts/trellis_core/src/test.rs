@@ -1,82 +1,14 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
-    token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
+    testutils::{Address as _, Events},
+    token, vec, Address, String, Symbol, TryFromVal,
 };
 
 use crate::{
     errors::TrellisError,
+    test_utils::{agreement_id, auth_as, one_milestone, setup},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient,
 };
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-/// Build a 32-byte agreement ID from a seed byte.
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
-
-/// Create a single Milestone at index 0 with the given amount.
-fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
-    vec![
-        env,
-        Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        },
-    ]
-}
-
-/// Helper to authenticate a specific address for testing.
-/// Replaces blanket `env.mock_all_auths()` with granular per-caller auth.
-fn auth_as(env: &Env, address: &Address) {
-    env.mock_auths(&[MockAuth {
-        address: address,
-        invoke: &MockAuthInvoke {
-            contract: address,
-            fn_name: "",
-            args: vec![env],
-            sub_invokes: &[],
-        },
-    }]);
-}
-
-/// Common test fixture.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-/// **Note**: auth is NOT mocked by default — tests must call `auth_as` explicitly.
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&payer, &10_000);
-
-    // Register the Trellis contract.
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -144,10 +76,10 @@ fn test_happy_path() {
     // are checked here, in the order they must have fired: created, locked,
     // submitted, released.
     let expected_topics = [
-        symbol_short!("trlls_crte"),
-        symbol_short!("trlls_lckd"),
-        symbol_short!("trlls_sbmt"),
-        symbol_short!("trlls_rlsd"),
+        symbol_short!("trls_crte"),
+        symbol_short!("trls_lckd"),
+        symbol_short!("trls_sbmt"),
+        symbol_short!("trls_rlsd"),
     ];
     let all_events = env.events().all();
     let mut matched = 0usize;
@@ -344,11 +276,11 @@ fn test_multi_milestone_transitions() {
 
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
-    
+
     let proof = Some(String::from_str(&env, "ipfs://multi-milestone"));
     auth_as(&env, &payee);
     client.submit_work(&id, &0u32, &proof);
-    
+
     auth_as(&env, &payer);
     client.approve_and_release(&id, &0u32);
 
@@ -369,12 +301,27 @@ fn test_batch_lock_funds() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     let milestone_ids = vec![&env, 0u32, 1u32];
     auth_as(&env, &payer);
@@ -401,12 +348,27 @@ fn test_batch_lock_funds_partial_failure() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 500, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     auth_as(&env, &payer);
     client.lock_funds(&id, &0u32);
@@ -478,12 +440,27 @@ fn test_get_milestone_returns_correct_milestone() {
 
     let milestones = vec![
         &env,
-        Milestone { amount: 100, status: EscrowStatus::Pending, proof_uri: None },
-        Milestone { amount: 200, status: EscrowStatus::Pending, proof_uri: None },
+        Milestone {
+            amount: 100,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 200,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
     ];
 
     auth_as(&env, &payer); // init only requires the payer's auth
-    client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
 
     let m = client.get_milestone(&id, &1u32);
     assert!(m.is_some(), "milestone 1 must be found");
@@ -509,7 +486,10 @@ fn test_get_milestone_invalid_id_returns_none() {
     );
 
     let result = client.get_milestone(&id, &99u32);
-    assert!(result.is_none(), "out-of-range milestone_id must return None");
+    assert!(
+        result.is_none(),
+        "out-of-range milestone_id must return None"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -678,19 +658,16 @@ fn test_get_total_amount_matches_sum() {
     let milestones = vec![
         &env,
         Milestone {
-            id: 0,
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
         },
         Milestone {
-            id: 1,
             amount: 2_500,
             status: EscrowStatus::Pending,
             proof_uri: None,
         },
         Milestone {
-            id: 2,
             amount: 1_500,
             status: EscrowStatus::Pending,
             proof_uri: None,
@@ -707,8 +684,11 @@ fn test_get_total_amount_matches_sum() {
         &dispute_resolver,
     );
 
-    let total = client.get_total_amount(&id).unwrap();
-    assert_eq!(total, 5_000, "get_total_amount should return sum of all milestones");
+    let total = client.get_total_amount(&id);
+    assert_eq!(
+        total, 5_000,
+        "get_total_amount should return sum of all milestones"
+    );
 }
 
 /// Test extend_agreement_ttl on an existing agreement.
@@ -728,19 +708,21 @@ fn test_extend_ttl_success() {
     );
 
     // extend_agreement_ttl has no require_auth() gate — it's a permissionless
-    // keeper entrypoint — so no auth mock is needed here.
-    let result = client.extend_agreement_ttl(&id);
-    assert!(result.is_ok(), "extend_agreement_ttl should succeed on existing agreement");
+    // keeper entrypoint — so no auth mock is needed here. `payer` is recorded
+    // in the emitted `ttl_extended` event for the keeper audit trail. The
+    // generated client panics on a contract error, so reaching the next line
+    // is the success assertion.
+    client.extend_agreement_ttl(&id, &payer);
 }
 
 /// Test extend_agreement_ttl on non-existent agreement fails gracefully.
 #[test]
 fn test_extend_ttl_nonexistent_agreement() {
-    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+    let (env, payer, _payee, _dispute_resolver, _token_address, client) = setup();
     let id = agreement_id(&env, 99);
 
     // No auth mock needed — see comment above test_extend_ttl_success.
-    let result = client.try_extend_agreement_ttl(&id);
+    let result = client.try_extend_agreement_ttl(&id, &payer);
     assert_eq!(
         result,
         Err(Ok(TrellisError::AgreementNotFound)),
@@ -773,9 +755,9 @@ fn test_dispute_raised_by_payer() {
     client.raise_dispute(&payer, &id, &0u32);
 
     // Verify milestone status transitioned to Disputed
-    let status = client.get_milestone_status(&id, &0u32).unwrap();
+    let milestone = client.get_milestone(&id, &0u32).unwrap();
     assert_eq!(
-        status,
+        milestone.status,
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
     );
