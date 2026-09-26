@@ -66,4 +66,24 @@ pub enum TrellisError {
     /// The liveness probe (symbol() call) failed to verify the address
     /// represents an active, functional token contract.
     InvalidToken = 10,
+
+    /// `init` was called with a milestone whose `status` is not
+    /// [`EscrowStatus::Pending`].
+    ///
+    /// Every agreement sharing a token draws from one pooled contract
+    /// balance, so a milestone created in a pre-advanced state is a claim on
+    /// funds that were never escrowed for it. A `WorkSubmitted` milestone
+    /// could go straight to `approve_and_release` and a `Disputed` one to
+    /// `resolve_dispute`, either of which transfers tokens out of the pool
+    /// to the payee or back to the payer without anything having been
+    /// locked. `Pending` is the only valid initial state: it is the sole
+    /// entry point of the state machine, and every later transition is
+    /// reached by funding the milestone first.
+    ///
+    /// Appended as discriminant `11` per the stability rule above; it is a
+    /// distinct economic condition from [`TrellisError::InvalidMilestone`]
+    /// (which covers amounts and indices) and deserves its own code so an
+    /// integrator can tell "you sent a bad amount" from "you tried to
+    /// pre-advance a milestone".
+    InvalidInitialMilestoneStatus = 11,
 }
