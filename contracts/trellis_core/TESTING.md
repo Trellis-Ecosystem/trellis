@@ -198,7 +198,7 @@ PROPTEST_SEED=12345 cargo test prop_balance_conservation_happy_path
 
 ```bash
 # Run benchmark on both commits
-git checkout main
+git checkout master
 cargo bench --bench contract_bench > baseline.json
 
 git checkout feature-branch
