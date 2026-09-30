@@ -483,7 +483,7 @@ fn test_dispute_and_refund_to_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payee raises the dispute (exercises the either-party auth path).
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Resolver rules in payer's favour.
     client.resolve_dispute(&id, &0u32, &true);
@@ -1206,7 +1206,7 @@ fn test_resolve_dispute_wrong_role_fails() {
 
     client.lock_funds(&id, &0u32);
 
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // `resolve_dispute` gates on `agreement.dispute_resolver.require_auth()`,
     // which is its sole role check — see the entrypoint's doc comment.
@@ -1236,7 +1236,7 @@ fn test_raise_dispute_wrong_role_fails() {
     // `Unauthorized` before it ever reaches `caller.require_auth()`.
     let random = Address::generate(&env);
     assert_eq!(
-        client.try_raise_dispute(&random, &id, &0u32),
+        client.try_raise_dispute(&random, &id, &0u32, &None),
         Err(Ok(TrellisError::Unauthorized)),
         "a non-party caller must not be able to raise a dispute"
     );
@@ -1367,7 +1367,7 @@ fn test_dispute_raised_by_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payer raises the dispute
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     // Verify milestone status transitioned to Disputed
     let milestone = client.get_milestone(&id, &0u32);
@@ -1375,5 +1375,104 @@ fn test_dispute_raised_by_payer() {
         milestone.expect("milestone 0 must still exist").status,
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
+    );
+}
+
+/// `raise_dispute` accepts an optional `reason_uri`; both with and without
+/// a reason the milestone moves to `Disputed`, and an empty string is
+/// normalized to `None` (the call still succeeds).
+#[test]
+fn test_raise_dispute_with_and_without_reason() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let with_reason = agreement_id(&env, 40);
+    let without_reason = agreement_id(&env, 41);
+    let empty_reason = agreement_id(&env, 42);
+
+    for id in [&with_reason, &without_reason, &empty_reason] {
+        client.init(
+            id,
+            &payer,
+            &payee,
+            &token_address,
+            &one_milestone(&env, 100),
+            &dispute_resolver,
+        );
+        client.lock_funds(id, &0u32);
+    }
+
+    let uri = Some(soroban_sdk::String::from_str(&env, "ipfs://evidence"));
+    client.raise_dispute(&payer, &with_reason, &0u32, &uri);
+    client.raise_dispute(&payee, &without_reason, &0u32, &None);
+    client.raise_dispute(
+        &payee,
+        &empty_reason,
+        &0u32,
+        &Some(soroban_sdk::String::from_str(&env, "")),
+    );
+
+    for id in [&with_reason, &without_reason, &empty_reason] {
+        assert_eq!(
+            client.get_milestone(id, &0u32).unwrap().status,
+            EscrowStatus::Disputed
+        );
+    }
+}
+
+/// Reassigning the payee redirects later releases to the new payee.
+#[test]
+fn test_reassign_payee_redirects_release() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::Client::new(&env, &token_address);
+    let id = agreement_id(&env, 43);
+    let new_payee = Address::generate(&env);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.submit_work(&id, &0u32, &None);
+    client.reassign_payee(&id, &new_payee);
+    client.approve_and_release(&id, &0u32);
+
+    assert_eq!(token_client.balance(&new_payee), 500);
+    assert_eq!(token_client.balance(&payee), 0);
+}
+
+/// Reassignment is rejected while a milestone is disputed, and for a
+/// new payee who is the payer or resolver.
+#[test]
+fn test_reassign_payee_rejections() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 44);
+    let new_payee = Address::generate(&env);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    assert_eq!(
+        client.try_reassign_payee(&id, &payer),
+        Err(Ok(TrellisError::Unauthorized))
+    );
+    assert_eq!(
+        client.try_reassign_payee(&id, &dispute_resolver),
+        Err(Ok(TrellisError::ResolverCannotBeParty))
+    );
+
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
+    assert_eq!(
+        client.try_reassign_payee(&id, &new_payee),
+        Err(Ok(TrellisError::InvalidStateTransition))
     );
 }

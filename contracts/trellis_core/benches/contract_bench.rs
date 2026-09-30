@@ -223,7 +223,7 @@ fn bench_raise_dispute() {
 
     env.cost_estimate().budget().reset_default();
 
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     let cpu = env.cost_estimate().budget().cpu_instruction_cost();
     let mem = env.cost_estimate().budget().memory_bytes_cost();
@@ -247,7 +247,7 @@ fn bench_resolve_dispute() {
         &dispute_resolver,
     );
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     env.cost_estimate().budget().reset_default();
 

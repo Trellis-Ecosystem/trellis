@@ -308,6 +308,11 @@ impl TrellisContract {
     /// refusing to approve work AND refusing to raise a dispute, which would
     /// permanently lock the freelancer's funds.
     ///
+    /// `reason_uri` optionally points at the disputing party's reason or
+    /// evidence, mirroring `submit_work`'s `proof_uri`. An empty string is
+    /// normalized to `None` and the value is emitted in the `dispute_raised`
+    /// event only; it is not stored on the milestone.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::Unauthorized`] – `caller` is neither payer nor payee.
@@ -319,6 +324,7 @@ impl TrellisContract {
         caller: Address,
         agreement_id: BytesN<32>,
         milestone_id: u32,
+        reason_uri: Option<String>,
     ) -> Result<(), TrellisError> {
         let mut agreement = storage::read_agreement(&env, &agreement_id)?;
 
@@ -345,7 +351,55 @@ impl TrellisContract {
         agreement.milestones.set(milestone_id, milestone);
         storage::write_agreement(&env, &agreement_id, &agreement);
 
-        events::dispute_raised(&env, agreement_id, milestone_id, caller);
+        let reason_uri = reason_uri.filter(|s| !s.is_empty());
+        events::dispute_raised(&env, agreement_id, milestone_id, caller, reason_uri);
+
+        Ok(())
+    }
+
+    /// Reassign the payee of an agreement (e.g. assigning receivables to a factor).
+    ///
+    /// Both the current payee and `new_payee` must authorise the call, so a
+    /// payee cannot be assigned an agreement without consent. The payer's
+    /// consent is not required: the payer's obligations are unchanged.
+    ///
+    /// Reassignment is blocked while any milestone is `Disputed`, so the
+    /// resolver's ruling cannot be redirected to a different payee mid-dispute.
+    /// All other statuses are allowed; funds released later go to `new_payee`.
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::Unauthorized`] – `new_payee` is the payer.
+    /// - [`TrellisError::ResolverCannotBeParty`] – `new_payee` is the resolver.
+    /// - [`TrellisError::InvalidStateTransition`] – a milestone is `Disputed`.
+    pub fn reassign_payee(
+        env: Env,
+        agreement_id: BytesN<32>,
+        new_payee: Address,
+    ) -> Result<(), TrellisError> {
+        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
+        agreement.payee.require_auth();
+        new_payee.require_auth();
+
+        if new_payee == agreement.payer {
+            return Err(TrellisError::Unauthorized);
+        }
+        if new_payee == agreement.dispute_resolver {
+            return Err(TrellisError::ResolverCannotBeParty);
+        }
+        if agreement
+            .milestones
+            .iter()
+            .any(|m| m.status == EscrowStatus::Disputed)
+        {
+            return Err(TrellisError::InvalidStateTransition);
+        }
+
+        let old_payee = agreement.payee.clone();
+        agreement.payee = new_payee.clone();
+        storage::write_agreement(&env, &agreement_id, &agreement);
+
+        events::payee_reassigned(&env, agreement_id, old_payee, new_payee);
 
         Ok(())
     }

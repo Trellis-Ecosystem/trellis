@@ -102,15 +102,39 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 /// Emitted when either party raises a dispute on a funded or work-submitted milestone.
 ///
 /// Topics: `("trls_dspt", agreement_id)`
-/// Data:   `(milestone_id, caller)`
+/// Data:   `(milestone_id, caller, reason_uri)`
+///
+/// `reason_uri` is the optional reason/evidence link supplied by the caller.
 ///
 /// `caller` is the party (payer or payee) that triggered the dispute, provided
 /// as a typed `Address` so indexers can identify the initiating party without
 /// importing contract WASM types.
-pub fn dispute_raised(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, caller: Address) {
+pub fn dispute_raised(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    milestone_id: u32,
+    caller: Address,
+    reason_uri: Option<String>,
+) {
     env.events().publish(
         (symbol_short!("trls_dspt"), agreement_id.clone()),
-        (milestone_id, caller),
+        (milestone_id, caller, reason_uri),
+    );
+}
+
+/// Emitted when the payee of an agreement is reassigned.
+///
+/// Topics: `("trls_rasn", agreement_id)`
+/// Data:   `(old_payee, new_payee)`
+pub fn payee_reassigned(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    old_payee: Address,
+    new_payee: Address,
+) {
+    env.events().publish(
+        (symbol_short!("trls_rasn"), agreement_id.clone()),
+        (old_payee, new_payee),
     );
 }
 

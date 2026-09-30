@@ -122,6 +122,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
         nativeToScVal(wallet.publicKey, { type: 'address' }),
         nativeToScVal(idBytes, { type: 'bytes' }),
         nativeToScVal(milestone.id, { type: 'u32' }),
+        xdr.ScVal.scvVoid(), // reason_uri: Option<String> = None
       ]
 
       await invoke('raise_dispute', args, wallet.publicKey, fee)
