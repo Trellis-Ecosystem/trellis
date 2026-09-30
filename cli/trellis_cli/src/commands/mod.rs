@@ -221,6 +221,14 @@ pub enum Commands {
         milestone_id: u32,
     },
 
+    /// Check the configured Soroban RPC endpoint natively (`getHealth` +
+    /// `getLatestLedger`), without the `stellar` CLI.
+    ///
+    /// Needs only an RPC URL — no contract ID, source key, or `stellar`
+    /// binary. Exits non-zero if the endpoint is unreachable or reports
+    /// itself unhealthy.
+    Health,
+
     /// Generate a shell completion script for bash, zsh, fish, elvish, or PowerShell.
     ///
     /// Example installation (bash):
@@ -370,6 +378,8 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             agreement_id,
             milestone_id,
         } => run_milestone_status(config, agreement_id, milestone_id, opts),
+
+        Commands::Health => run_health(config, opts),
 
         // Handled in main() before dispatch is ever reached — completions
         // need the clap `Command` object, not a `Config`.
@@ -848,6 +858,64 @@ fn run_milestone_status(
     ];
 
     execute(config, "get_milestone", &args, opts)
+}
+
+/// Native connectivity probe: `getHealth`, then `getLatestLedger`.
+///
+/// Talks to `config.rpc_url` directly over HTTP rather than through
+/// `stellar`. The typed results are wrapped in a synthetic [`InvokeOutput`]
+/// so `--json`, `--human-readable`, `--quiet` and `--dry-run` render exactly
+/// as they do for every contract command. On success stdout is
+/// `{"health": {...}, "latest_ledger": {"hash", "protocol_version", "sequence"}}`.
+fn run_health(config: &Config, opts: &OutputOpts) -> Result<(), String> {
+    let command_debug = ["getHealth", "getLatestLedger"]
+        .map(|method| RpcClient::native_preview(config, method))
+        .join("\n");
+
+    if opts.dry_run {
+        let out = InvokeOutput {
+            stdout: command_debug.clone(),
+            stderr: String::new(),
+            success: true,
+            command_debug,
+        };
+        return render_output(&out, opts);
+    }
+
+    let out = match RpcClient::get_health(config) {
+        Err(e) => InvokeOutput {
+            stdout: String::new(),
+            stderr: e,
+            success: false,
+            command_debug,
+        },
+        Ok(health) if !health.is_healthy() => InvokeOutput {
+            stdout: serde_json::json!({ "health": health }).to_string(),
+            stderr: format!(
+                "RPC endpoint {} reports status {:?}",
+                config.rpc_url, health.status
+            ),
+            success: false,
+            command_debug,
+        },
+        Ok(health) => match RpcClient::get_latest_ledger(config) {
+            Ok(ledger) => InvokeOutput {
+                stdout: serde_json::json!({ "health": health, "latest_ledger": ledger })
+                    .to_string(),
+                stderr: String::new(),
+                success: true,
+                command_debug,
+            },
+            Err(e) => InvokeOutput {
+                stdout: String::new(),
+                stderr: e,
+                success: false,
+                command_debug,
+            },
+        },
+    };
+
+    render_output(&out, opts)
 }
 
 // ---------------------------------------------------------------------------

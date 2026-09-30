@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+                  "bytes": "b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -371,7 +371,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+                  "bytes": "b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9"
                 }
               ]
             },
@@ -391,7 +391,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+                      "bytes": "b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9"
                     }
                   ]
                 },
@@ -403,7 +403,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5"
+                        "bytes": "b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9"
                       }
                     },
                     {

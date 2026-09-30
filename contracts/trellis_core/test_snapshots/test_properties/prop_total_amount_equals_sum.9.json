@@ -81,16 +81,8 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 2752
+                              "lo": 4310
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 0
                           }
                         },
                         {
@@ -122,16 +114,8 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 2038
+                              "lo": 8935
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 1
                           }
                         },
                         {
@@ -163,16 +147,8 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 6574
+                              "lo": 7880
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 2
                           }
                         },
                         {
@@ -204,16 +180,107 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 6585
+                              "lo": 8575
                             }
                           }
                         },
                         {
                           "key": {
-                            "symbol": "id"
+                            "symbol": "proof_uri"
+                          },
+                          "val": "void"
+                        },
+                        {
+                          "key": {
+                            "symbol": "status"
                           },
                           "val": {
-                            "u32": 3
+                            "vec": [
+                              {
+                                "symbol": "Pending"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "amount"
+                          },
+                          "val": {
+                            "i128": {
+                              "hi": 0,
+                              "lo": 7903
+                            }
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "proof_uri"
+                          },
+                          "val": "void"
+                        },
+                        {
+                          "key": {
+                            "symbol": "status"
+                          },
+                          "val": {
+                            "vec": [
+                              {
+                                "symbol": "Pending"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "amount"
+                          },
+                          "val": {
+                            "i128": {
+                              "hi": 0,
+                              "lo": 6102
+                            }
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "proof_uri"
+                          },
+                          "val": "void"
+                        },
+                        {
+                          "key": {
+                            "symbol": "status"
+                          },
+                          "val": {
+                            "vec": [
+                              {
+                                "symbol": "Pending"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "amount"
+                          },
+                          "val": {
+                            "i128": {
+                              "hi": 0,
+                              "lo": 5278
+                            }
                           }
                         },
                         {
@@ -455,16 +522,8 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 2752
+                                    "lo": 4310
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 0
                                 }
                               },
                               {
@@ -496,16 +555,8 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 2038
+                                    "lo": 8935
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 1
                                 }
                               },
                               {
@@ -537,16 +588,8 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 6574
+                                    "lo": 7880
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 2
                                 }
                               },
                               {
@@ -578,16 +621,107 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 6585
+                                    "lo": 8575
                                   }
                                 }
                               },
                               {
                                 "key": {
-                                  "symbol": "id"
+                                  "symbol": "proof_uri"
+                                },
+                                "val": "void"
+                              },
+                              {
+                                "key": {
+                                  "symbol": "status"
                                 },
                                 "val": {
-                                  "u32": 3
+                                  "vec": [
+                                    {
+                                      "symbol": "Pending"
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "amount"
+                                },
+                                "val": {
+                                  "i128": {
+                                    "hi": 0,
+                                    "lo": 7903
+                                  }
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "proof_uri"
+                                },
+                                "val": "void"
+                              },
+                              {
+                                "key": {
+                                  "symbol": "status"
+                                },
+                                "val": {
+                                  "vec": [
+                                    {
+                                      "symbol": "Pending"
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "amount"
+                                },
+                                "val": {
+                                  "i128": {
+                                    "hi": 0,
+                                    "lo": 6102
+                                  }
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "proof_uri"
+                                },
+                                "val": "void"
+                              },
+                              {
+                                "key": {
+                                  "symbol": "status"
+                                },
+                                "val": {
+                                  "vec": [
+                                    {
+                                      "symbol": "Pending"
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "amount"
+                                },
+                                "val": {
+                                  "i128": {
+                                    "hi": 0,
+                                    "lo": 5278
+                                  }
                                 }
                               },
                               {
@@ -644,7 +778,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 17949
+                          "lo": 48983
                         }
                       }
                     }

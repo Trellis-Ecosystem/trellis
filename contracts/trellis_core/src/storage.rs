@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, BytesN, Env};
+use soroban_sdk::{contracttype, BytesN, Env, Map};
 
 use crate::errors::TrellisError;
 use crate::types::Agreement;
@@ -12,6 +12,15 @@ pub enum DataKey {
     /// Persistent storage key for a single escrow agreement.
     /// The inner BytesN<32> is the globally unique agreement ID.
     Agreement(BytesN<32>),
+    /// Persistent storage key for an agreement's optional per-milestone
+    /// deadlines (`Map<milestone_id, ledger timestamp>`).
+    ///
+    /// Kept in its own entry rather than as a field on `Milestone` so the
+    /// `Milestone` / `Agreement` XDR layout — and therefore every existing
+    /// `init` caller and every already-stored agreement — is unchanged. Only
+    /// written once a deadline is actually set; agreements without deadlines
+    /// never pay for it.
+    Deadlines(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -52,17 +61,21 @@ const LEDGER_THRESHOLD: u32 = DAY_IN_LEDGERS * 15;
 ///
 /// A no-op while the entry still has more than [`LEDGER_THRESHOLD`] ledgers
 /// left, and a no-op if the entry does not exist.
+///
+/// The agreement's deadline entry (if any) is bumped alongside it, so a
+/// deadline can never be archived while the agreement it guards is live.
 fn bump_ttl(env: &Env, id: &BytesN<32>) {
-    let key = DataKey::Agreement(id.clone());
-
-    // extend_ttl traps on a missing entry, so guard the lookup.
-    if !env.storage().persistent().has(&key) {
-        return;
+    for key in [
+        DataKey::Agreement(id.clone()),
+        DataKey::Deadlines(id.clone()),
+    ] {
+        // extend_ttl traps on a missing entry, so guard the lookup.
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
+        }
     }
-
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
 }
 
 /// Persist an [`Agreement`] to ledger storage under its unique ID.
@@ -132,4 +145,30 @@ pub fn has_agreement(env: &Env, id: &BytesN<32>) -> bool {
     env.storage()
         .persistent()
         .has(&DataKey::Agreement(id.clone()))
+}
+
+/// Return the deadline (ledger timestamp, seconds) set for `milestone_id`, or
+/// `None` if the milestone has no deadline.
+pub fn read_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get::<_, Map<u32, u64>>(&DataKey::Deadlines(id.clone()))
+        .and_then(|deadlines| deadlines.get(milestone_id))
+}
+
+/// Set (or replace) the deadline for `milestone_id`.
+///
+/// Callers must already have verified the agreement exists; the TTL bump
+/// below then renews both the agreement and the deadline entry together.
+pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u64) {
+    let key = DataKey::Deadlines(id.clone());
+    let mut deadlines: Map<u32, u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Map::new(env));
+    deadlines.set(milestone_id, deadline);
+    env.storage().persistent().set(&key, &deadlines);
+
+    bump_ttl(env, id);
 }

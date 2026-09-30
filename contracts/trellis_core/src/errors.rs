@@ -101,4 +101,24 @@ pub enum TrellisError {
     /// integrator can tell "you sent a bad amount" from "you tried to
     /// pre-advance a milestone".
     InvalidInitialMilestoneStatus = 11,
+
+    /// `init` was called with more than `MAX_MILESTONES` milestones.
+    ///
+    /// Bounds the size of the stored agreement (and therefore the storage
+    /// rent and the per-call deserialisation cost every later entrypoint
+    /// pays).
+    MilestoneCountExceeded = 12,
+
+    /// `init` was called with `payer == payee`. An agreement where one
+    /// address sits on both sides of the escrow has no counterparty.
+    PayerEqualsPayee = 13,
+
+    /// `set_milestone_deadline` was called with a deadline that is not
+    /// strictly in the future (`deadline <= env.ledger().timestamp()`).
+    /// Such a deadline would make the milestone immediately expirable.
+    DeadlineInPast = 14,
+
+    /// `expire_milestone` was called on a milestone that has no deadline, or
+    /// whose deadline has not yet passed.
+    DeadlineNotReached = 15,
 }

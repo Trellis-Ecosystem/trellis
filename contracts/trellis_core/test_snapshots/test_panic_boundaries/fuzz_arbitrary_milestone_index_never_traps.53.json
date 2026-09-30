@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "3737373737373737373737373737373737373737373737373737373737373737"
+                  "bytes": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -338,7 +338,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "3737373737373737373737373737373737373737373737373737373737373737"
+                  "bytes": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5"
                 }
               ]
             },
@@ -358,7 +358,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "3737373737373737373737373737373737373737373737373737373737373737"
+                      "bytes": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5"
                     }
                   ]
                 },
@@ -370,7 +370,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "3737373737373737373737373737373737373737373737373737373737373737"
+                        "bytes": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5"
                       }
                     },
                     {

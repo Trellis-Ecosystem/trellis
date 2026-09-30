@@ -59,7 +59,7 @@
               "function_name": "init",
               "args": [
                 {
-                  "bytes": "babababababababababababababababababababababababababababababababa"
+                  "bytes": "8080808080808080808080808080808080808080808080808080808080808080"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
@@ -305,7 +305,7 @@
                   "symbol": "Agreement"
                 },
                 {
-                  "bytes": "babababababababababababababababababababababababababababababababa"
+                  "bytes": "8080808080808080808080808080808080808080808080808080808080808080"
                 }
               ]
             },
@@ -325,7 +325,7 @@
                       "symbol": "Agreement"
                     },
                     {
-                      "bytes": "babababababababababababababababababababababababababababababababa"
+                      "bytes": "8080808080808080808080808080808080808080808080808080808080808080"
                     }
                   ]
                 },
@@ -337,7 +337,7 @@
                         "symbol": "agreement_id"
                       },
                       "val": {
-                        "bytes": "babababababababababababababababababababababababababababababababa"
+                        "bytes": "8080808080808080808080808080808080808080808080808080808080808080"
                       }
                     },
                     {

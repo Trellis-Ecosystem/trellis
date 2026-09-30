@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod input;
+mod keystore;
 mod rpc;
 mod sanitizer;
 mod utils;
@@ -175,7 +176,11 @@ fn main() {
     // need to inspect the generated invocation.
     //
     // ── #68: Validate stellar binary at startup (non-dry-run only) ────────
-    if !cli.dry_run {
+    // `health` talks to the RPC endpoint natively (#467/#468), so it needs
+    // neither the `stellar` binary nor a contract ID / source key.
+    let native_only = matches!(cli.command, Commands::Health);
+
+    if !cli.dry_run && !native_only {
         if let Err(msg) = validate_environment() {
             eprintln!("{msg}");
             process::exit(1);
@@ -187,6 +192,7 @@ fn main() {
         cli.network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
+        cli.source_key_file.clone(),
     ) {
         Ok(c) => c,
         Err(msg) => {
@@ -197,7 +203,12 @@ fn main() {
 
     // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
     // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
-    if let Err(errors) = config.validate() {
+    let validation = if native_only {
+        config::validate_rpc_url(&config.rpc_url).map_err(|e| vec![e])
+    } else {
+        config.validate()
+    };
+    if let Err(errors) = validation {
         eprintln!("Error: invalid configuration:");
         for e in &errors {
             eprintln!("  - {e}");
@@ -213,7 +224,7 @@ fn main() {
     // Rejects malformed URLs and cleartext HTTP to non-localhost hosts so a
     // compromised `.env` cannot point the CLI at a forged RPC endpoint.
     // `--unsafe-rpc` downgrades the hard error to a printed warning.
-    match config::validate_rpc_url(&config.rpc_url, cli.unsafe_rpc) {
+    match config::check_rpc_transport(&config.rpc_url, cli.unsafe_rpc) {
         Ok(Some(warning)) => eprintln!("{warning}"),
         Ok(None) => {}
         Err(msg) => {

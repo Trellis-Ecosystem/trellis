@@ -484,11 +484,28 @@ Trellis is a monorepo with three layers:
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+| `set_milestone_deadline` | Payer | Sets an optional deadline (ledger timestamp) on a still-`Pending` milestone |
+| `get_milestone_deadline` | Anyone | Returns a milestone's deadline, if one is set (read-only) |
+| `expire_milestone` | Anyone | After the deadline, closes a stalled `Pending` or `Funded` milestone as `Refunded`, returning any locked funds to the payer |
 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
 <br />
 Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent.
+</details>
+
+<details>
+<summary>⏱️ <strong>Milestone Deadlines</strong></summary>
+<br />
+A milestone can carry an optional deadline so an unresponsive counterparty cannot stall it forever. The payer sets it with <code>set_milestone_deadline</code> while the milestone is still <code>Pending</code>, so the payee sees it before any funds are locked or work starts. It is a ledger timestamp (Unix seconds) and must be in the future. Once <code>env.ledger().timestamp()</code> is past the deadline, anyone (payer, payee or a keeper) may call <code>expire_milestone</code>:
+
+<ul>
+<li><code>Pending</code> (never funded) → <code>Refunded</code>; no tokens move.</li>
+<li><code>Funded</code> (payee never submitted work) → <code>Refunded</code>; the locked amount returns to the payer.</li>
+<li><code>WorkSubmitted</code> and <code>Disputed</code> are <em>never</em> expired: once the payee has delivered, a silent payer must not win by default, and a timeout must not cut arbitration short. Use <code>raise_dispute</code> / <code>resolve_dispute</code> instead.</li>
+</ul>
+
+Tradeoffs: timestamps are used instead of ledger sequences because deadlines are agreed in wall-clock terms and ledger close times vary; validators bound timestamp drift, so this is precise to within seconds, not to the ledger. Expiry is an explicit call rather than automatic, because Soroban has no scheduler. Deadlines live in a separate storage entry (not a <code>Milestone</code> field), so the <code>init</code> argument layout and every existing caller are unchanged. That entry has its TTL renewed alongside the agreement's.
 </details>
 
 ### Tech Stack
@@ -617,6 +634,8 @@ trellis lock-funds --agreement-id <hex-id> --milestone-id 0
 ```
 
 All **8 CLI commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, and `status`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
+
+`trellis health` checks the configured RPC endpoint natively (`getHealth` + `getLatestLedger` over HTTP). It needs only an RPC URL, with no `stellar` binary, contract ID or source key, and it supports `--json` / `--human-readable` / `--quiet` / `--dry-run`.
 
 #### Global Output Flags
 

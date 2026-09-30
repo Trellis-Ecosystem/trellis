@@ -1,11 +1,11 @@
 use crate::config::Config;
-use governor::{Quota, RateLimiter};
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
-static RPC_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
+static RPC_RATE_LIMITER: OnceLock<DefaultDirectRateLimiter> = OnceLock::new();
 
-fn get_rate_limiter() -> &'static RateLimiter {
+fn get_rate_limiter() -> &'static DefaultDirectRateLimiter {
     RPC_RATE_LIMITER.get_or_init(|| {
         let limit_per_sec: u32 = std::env::var("STELLAR_RPC_RATE_LIMIT")
             .ok()
@@ -24,7 +24,10 @@ fn apply_rate_limit() {
     let limiter = get_rate_limiter();
     if limiter.check().is_err() {
         eprintln!("⚠️  RPC rate limit active — request queued until quota resets");
-        limiter.until_ready().wait();
+        // `until_ready` is async; the CLI is synchronous, so poll instead.
+        while limiter.check().is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
@@ -222,6 +225,7 @@ impl RpcClient {
 
         let (cmd_args, command_debug) = Self::build_cmd_args(config, fn_name, args);
 
+        apply_rate_limit();
         let mut command = Command::new(stellar_bin());
         command.args(&cmd_args);
 
@@ -251,6 +255,153 @@ impl RpcClient {
             },
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Native Soroban JSON-RPC (read-only methods)
+// ---------------------------------------------------------------------------
+//
+// First slice of the native-RPC work: methods that need no signing and no
+// XDR, just a JSON request/response, are POSTed straight to
+// `config.rpc_url`. Contract invokes still go through `stellar` above.
+
+/// Per-request timeout for native JSON-RPC calls. Generous enough for a slow
+/// public endpoint, short enough that a dead one fails fast.
+const NATIVE_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Typed result of the Soroban `getHealth` JSON-RPC method.
+///
+/// Parsed from the RPC's camelCase keys; serialised (e.g. by `trellis
+/// health --json`) with the snake_case field names below.
+///
+/// Only `status` is guaranteed by every RPC release; the ledger fields were
+/// added later, so they are optional rather than failing the parse against
+/// an older endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct HealthStatus {
+    /// `"healthy"` when the node is in sync; anything else is unhealthy.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_ledger: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_ledger: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_retention_window: Option<u32>,
+}
+
+impl HealthStatus {
+    pub fn is_healthy(&self) -> bool {
+        self.status == "healthy"
+    }
+}
+
+/// Typed result of the Soroban `getLatestLedger` JSON-RPC method.
+///
+/// The building block for TTL-aware transaction building: a transaction's
+/// validity window and a footprint's `liveUntilLedger` are both expressed
+/// relative to `sequence`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct LatestLedger {
+    /// Hex-encoded ledger hash (the RPC names this field `id`).
+    #[serde(rename(deserialize = "id"))]
+    pub hash: String,
+    /// Stellar protocol version the ledger closed under.
+    pub protocol_version: u32,
+    /// Ledger sequence number.
+    pub sequence: u32,
+}
+
+/// A JSON-RPC 2.0 response envelope: exactly one of `result` / `error`.
+#[derive(serde::Deserialize)]
+struct JsonRpcResponse<T> {
+    result: Option<T>,
+    error: Option<JsonRpcError>,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonRpcError {
+    code: i64,
+    message: String,
+}
+
+impl RpcClient {
+    /// Call the Soroban `getHealth` method natively (no `stellar` binary).
+    ///
+    /// Returns `Err` on a transport failure, a non-2xx HTTP status, a
+    /// JSON-RPC `error` object, or a body that does not parse. An endpoint
+    /// that answers but reports itself unhealthy is `Ok` — check
+    /// [`HealthStatus::is_healthy`].
+    pub fn get_health(config: &Config) -> Result<HealthStatus, String> {
+        native_call(&config.rpc_url, "getHealth")
+    }
+
+    /// Call the Soroban `getLatestLedger` method natively (no `stellar`
+    /// binary). Same error contract as [`Self::get_health`].
+    pub fn get_latest_ledger(config: &Config) -> Result<LatestLedger, String> {
+        native_call(&config.rpc_url, "getLatestLedger")
+    }
+
+    /// Describe the native request `method` would send, without sending it.
+    /// Used by `--dry-run` and printed on failure, like [`Self::preview`].
+    pub fn native_preview(config: &Config, method: &str) -> String {
+        format!("POST {} {}", config.rpc_url, json_rpc_request(method))
+    }
+}
+
+/// Build the JSON-RPC 2.0 request body for a parameterless `method`.
+fn json_rpc_request(method: &str) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method })
+}
+
+/// POST a parameterless JSON-RPC `method` to `rpc_url` and decode `result`.
+fn native_call<T: serde::de::DeserializeOwned>(rpc_url: &str, method: &str) -> Result<T, String> {
+    apply_rate_limit();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(NATIVE_RPC_TIMEOUT)
+        .build()
+        .map_err(|e| format!("{method}: failed to build HTTP client: {e}"))?;
+
+    let response = client
+        .post(rpc_url)
+        .json(&json_rpc_request(method))
+        .send()
+        .map_err(|e| format!("{method}: request to {rpc_url} failed: {e}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|e| format!("{method}: failed to read response body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "{method}: HTTP {status} from {rpc_url}: {}",
+            body.trim()
+        ));
+    }
+
+    parse_json_rpc_response(method, &body)
+}
+
+/// Decode a JSON-RPC response body into `T`, surfacing an `error` object.
+fn parse_json_rpc_response<T: serde::de::DeserializeOwned>(
+    method: &str,
+    body: &str,
+) -> Result<T, String> {
+    let envelope: JsonRpcResponse<T> = serde_json::from_str(body).map_err(|e| {
+        format!(
+            "{method}: malformed JSON-RPC response ({e}): {}",
+            body.trim()
+        )
+    })?;
+
+    if let Some(err) = envelope.error {
+        return Err(format!("{method}: RPC error {}: {}", err.code, err.message));
+    }
+    envelope
+        .result
+        .ok_or_else(|| format!("{method}: JSON-RPC response has neither result nor error"))
 }
 
 /// Decode a subprocess output stream, without silently discarding bytes.
@@ -418,19 +569,33 @@ mod tests {
             "error: network passphrase mismatch: expected 'Test SDF Network ; September 2015'"
         ));
         assert!(!is_transient_error("unknown network 'testnet'"));
-        assert!(!is_transient_error("no network configured; run `stellar network add`"));
-        assert!(!is_transient_error("network name contains invalid characters"));
+        assert!(!is_transient_error(
+            "no network configured; run `stellar network add`"
+        ));
+        assert!(!is_transient_error(
+            "network name contains invalid characters"
+        ));
         // "deadline" / "temporary" / "unreachable" as bare words in an
         // unrelated message are no longer enough on their own.
-        assert!(!is_transient_error("filing deadline for the proposal has passed"));
-        assert!(!is_transient_error("temporary directory could not be created"));
+        assert!(!is_transient_error(
+            "filing deadline for the proposal has passed"
+        ));
+        assert!(!is_transient_error(
+            "temporary directory could not be created"
+        ));
     }
 
     #[test]
     fn transient_detects_network_failure_phrases() {
-        assert!(is_transient_error("network error: could not reach RPC endpoint"));
-        assert!(is_transient_error("Os error: network is unreachable (os error 101)"));
-        assert!(is_transient_error("dns lookup failed: Temporary failure in name resolution"));
+        assert!(is_transient_error(
+            "network error: could not reach RPC endpoint"
+        ));
+        assert!(is_transient_error(
+            "Os error: network is unreachable (os error 101)"
+        ));
+        assert!(is_transient_error(
+            "dns lookup failed: Temporary failure in name resolution"
+        ));
         assert!(is_transient_error("504 Gateway Timeout"));
         assert!(is_transient_error("grpc status: deadline exceeded"));
     }
@@ -575,6 +740,158 @@ mod tests {
             .expect("--source present");
         assert_eq!(argv[src + 1], "alice");
         assert!(debug.starts_with("stellar contract invoke"));
+    }
+
+    // --- native JSON-RPC: getHealth (#467) / getLatestLedger (#468) ---
+
+    fn cfg_for(server: &mockito::Server) -> Config {
+        Config {
+            rpc_url: server.url(),
+            ..cfg_with_source("alice")
+        }
+    }
+
+    /// Match a POST whose JSON body is exactly the JSON-RPC 2.0 request for
+    /// `method` — this is the request-shape assertion.
+    fn expect_request(server: &mut mockito::Server, method: &str, body: &str) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_header("content-type", "application/json")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create()
+    }
+
+    #[test]
+    fn get_health_sends_json_rpc_request_and_parses_result() {
+        let mut server = mockito::Server::new();
+        let mock = expect_request(
+            &mut server,
+            "getHealth",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"healthy","latestLedger":51583040,"oldestLedger":51565761,"ledgerRetentionWindow":17280}}"#,
+        );
+
+        let health = RpcClient::get_health(&cfg_for(&server)).expect("healthy response parses");
+        mock.assert();
+        assert!(health.is_healthy());
+        assert_eq!(
+            health,
+            HealthStatus {
+                status: "healthy".to_string(),
+                latest_ledger: Some(51583040),
+                oldest_ledger: Some(51565761),
+                ledger_retention_window: Some(17280),
+            }
+        );
+    }
+
+    #[test]
+    fn get_health_accepts_status_only_response_from_older_rpc() {
+        let mut server = mockito::Server::new();
+        let _mock = expect_request(
+            &mut server,
+            "getHealth",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"unhealthy"}}"#,
+        );
+
+        let health = RpcClient::get_health(&cfg_for(&server)).expect("parses");
+        assert!(!health.is_healthy());
+        assert_eq!(health.latest_ledger, None);
+    }
+
+    #[test]
+    fn get_latest_ledger_sends_json_rpc_request_and_parses_result() {
+        let mut server = mockito::Server::new();
+        let mock = expect_request(
+            &mut server,
+            "getLatestLedger",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"id":"c73c5eac58a441d4eb733c35253ae85f783e018f7be5ef974258fed067aabb36","protocolVersion":22,"sequence":2539605}}"#,
+        );
+
+        let ledger = RpcClient::get_latest_ledger(&cfg_for(&server)).expect("parses");
+        mock.assert();
+        assert_eq!(
+            ledger,
+            LatestLedger {
+                hash: "c73c5eac58a441d4eb733c35253ae85f783e018f7be5ef974258fed067aabb36"
+                    .to_string(),
+                protocol_version: 22,
+                sequence: 2539605,
+            }
+        );
+    }
+
+    #[test]
+    fn native_call_surfaces_json_rpc_error_object() {
+        let mut server = mockito::Server::new();
+        let _mock = expect_request(
+            &mut server,
+            "getLatestLedger",
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#,
+        );
+
+        let err = RpcClient::get_latest_ledger(&cfg_for(&server)).unwrap_err();
+        assert!(
+            err.contains("-32601") && err.contains("method not found"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn native_call_rejects_http_error_status() {
+        let mut server = mockito::Server::new();
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(503)
+            .with_body("Service Unavailable")
+            .create();
+
+        let err = RpcClient::get_health(&cfg_for(&server)).unwrap_err();
+        assert!(err.contains("503"), "got: {err}");
+        // The message stays classifiable by the existing retry heuristic.
+        assert!(is_transient_error(&err), "got: {err}");
+    }
+
+    #[test]
+    fn native_call_rejects_malformed_result() {
+        let mut server = mockito::Server::new();
+        // `sequence` must be a number — a typed parse must not silently
+        // accept a wrong-shaped ledger.
+        let _mock = expect_request(
+            &mut server,
+            "getLatestLedger",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"id":"ab","protocolVersion":22,"sequence":"x"}}"#,
+        );
+
+        let err = RpcClient::get_latest_ledger(&cfg_for(&server)).unwrap_err();
+        assert!(err.contains("malformed JSON-RPC response"), "got: {err}");
+    }
+
+    #[test]
+    fn native_call_reports_unreachable_endpoint() {
+        // Nothing listens on port 9 (discard) on loopback in CI.
+        let cfg = Config {
+            rpc_url: "http://127.0.0.1:9".to_string(),
+            ..cfg_with_source("alice")
+        };
+        let err = RpcClient::get_health(&cfg).unwrap_err();
+        assert!(err.starts_with("getHealth: request to"), "got: {err}");
+    }
+
+    #[test]
+    fn native_preview_shows_endpoint_and_body() {
+        let preview = RpcClient::native_preview(&cfg_with_source("alice"), "getHealth");
+        assert!(preview.starts_with("POST https://soroban-testnet.stellar.org "));
+        assert!(
+            preview.contains(r#""method":"getHealth""#),
+            "got: {preview}"
+        );
     }
 
     #[test]

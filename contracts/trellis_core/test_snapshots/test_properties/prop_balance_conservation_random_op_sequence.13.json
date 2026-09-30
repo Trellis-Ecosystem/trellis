@@ -81,16 +81,8 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 9702
+                              "lo": 4067
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 0
                           }
                         },
                         {
@@ -122,16 +114,8 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 9324
+                              "lo": 8628
                             }
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 1
                           }
                         },
                         {
@@ -163,16 +147,41 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 4747
+                              "lo": 4279
                             }
                           }
                         },
                         {
                           "key": {
-                            "symbol": "id"
+                            "symbol": "proof_uri"
+                          },
+                          "val": "void"
+                        },
+                        {
+                          "key": {
+                            "symbol": "status"
                           },
                           "val": {
-                            "u32": 2
+                            "vec": [
+                              {
+                                "symbol": "Pending"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "amount"
+                          },
+                          "val": {
+                            "i128": {
+                              "hi": 0,
+                              "lo": 9807
+                            }
                           }
                         },
                         {
@@ -220,7 +229,7 @@
                   "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
                 },
                 {
-                  "u32": 0
+                  "u32": 1
                 }
               ]
             }
@@ -241,7 +250,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 9702
+                        "lo": 8628
                       }
                     }
                   ]
@@ -284,16 +293,13 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-              "function_name": "raise_dispute",
+              "function_name": "cancel_unfunded_milestone",
               "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                },
                 {
                   "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
                 },
                 {
-                  "u32": 0
+                  "u32": 3
                 }
               ]
             }
@@ -305,21 +311,42 @@
     [],
     [
       [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
         {
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-              "function_name": "resolve_dispute",
+              "function_name": "submit_work",
               "args": [
                 {
                   "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
                 },
                 {
-                  "u32": 0
+                  "u32": 1
+                },
+                "void"
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "function_name": "approve_and_release",
+              "args": [
+                {
+                  "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
                 },
                 {
-                  "bool": false
+                  "u32": 1
                 }
               ]
             }
@@ -536,7 +563,40 @@
       [
         {
           "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 6277191135259896685
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 6277191135259896685
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
             "key": {
               "ledger_key_nonce": {
                 "nonce": 8370022561469687789
@@ -551,7 +611,7 @@
             "data": {
               "contract_data": {
                 "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 8370022561469687789
@@ -667,57 +727,8 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 9702
+                                    "lo": 4067
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 0
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Completed"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 9324
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 1
                                 }
                               },
                               {
@@ -749,16 +760,74 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 4747
+                                    "lo": 8628
                                   }
                                 }
                               },
                               {
                                 "key": {
-                                  "symbol": "id"
+                                  "symbol": "proof_uri"
+                                },
+                                "val": "void"
+                              },
+                              {
+                                "key": {
+                                  "symbol": "status"
                                 },
                                 "val": {
-                                  "u32": 2
+                                  "vec": [
+                                    {
+                                      "symbol": "Completed"
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "amount"
+                                },
+                                "val": {
+                                  "i128": {
+                                    "hi": 0,
+                                    "lo": 4279
+                                  }
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "proof_uri"
+                                },
+                                "val": "void"
+                              },
+                              {
+                                "key": {
+                                  "symbol": "status"
+                                },
+                                "val": {
+                                  "vec": [
+                                    {
+                                      "symbol": "Refunded"
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "amount"
+                                },
+                                "val": {
+                                  "i128": {
+                                    "hi": 0,
+                                    "lo": 9807
+                                  }
                                 }
                               },
                               {
@@ -815,7 +884,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 23773
+                          "lo": 26781
                         }
                       }
                     }
@@ -904,7 +973,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 999990298
+                          "lo": 999991372
                         }
                       }
                     },
@@ -977,7 +1046,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 9702
+                          "lo": 8628
                         }
                       }
                     },

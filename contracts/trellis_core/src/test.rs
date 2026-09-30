@@ -1,6 +1,6 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger},
     token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
 };
 
@@ -397,7 +397,7 @@ fn test_lock_funds_needs_no_token_allowance() {
     let id = agreement_id(&env, 90);
     let amount: i128 = 1_000;
 
-    auth_as(&env, &payer);
+    allow_all_auth(&env);
     client.init(
         &id,
         &payer,
@@ -415,7 +415,7 @@ fn test_lock_funds_needs_no_token_allowance() {
     assert!(payer_before >= amount, "fixture must fund the payer");
 
     // No approve / set_allowance call is made here — deliberately.
-    auth_as(&env, &payer);
+    allow_all_auth(&env);
     client.lock_funds(&id, &0u32);
 
     assert_eq!(
@@ -1376,4 +1376,292 @@ fn test_dispute_raised_by_payer() {
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Milestone deadlines (#454)
+// ---------------------------------------------------------------------------
+
+/// Ledger timestamp every deadline test starts from.
+const DEADLINE_T0: u64 = 1_000_000;
+
+/// Init a single-milestone agreement at `DEADLINE_T0` and set its deadline to
+/// `DEADLINE_T0 + ttl`.
+fn init_with_deadline(
+    env: &Env,
+    client: &TrellisContractClient,
+    seed: u8,
+    parties: (&Address, &Address, &Address, &Address),
+    amount: i128,
+    ttl: u64,
+) -> BytesN<32> {
+    let (payer, payee, dispute_resolver, token_address) = parties;
+    env.ledger().set_timestamp(DEADLINE_T0);
+    let id = agreement_id(env, seed);
+    client.init(
+        &id,
+        payer,
+        payee,
+        token_address,
+        &one_milestone(env, amount),
+        dispute_resolver,
+    );
+    client.set_milestone_deadline(&id, &0u32, &(DEADLINE_T0 + ttl));
+    id
+}
+
+/// The deadline is stored beside the agreement and readable via the view,
+/// and leaves the `Milestone` struct itself untouched.
+#[test]
+fn test_set_milestone_deadline_is_readable() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = init_with_deadline(
+        &env,
+        &client,
+        50,
+        (&payer, &payee, &dispute_resolver, &token_address),
+        500,
+        100,
+    );
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_ddln")],
+        "set_milestone_deadline must emit trls_ddln",
+    );
+
+    assert_eq!(
+        client.get_milestone_deadline(&id, &0u32),
+        Some(DEADLINE_T0 + 100)
+    );
+    // Out-of-range milestone and unknown agreement both read as `None`.
+    assert_eq!(client.get_milestone_deadline(&id, &1u32), None);
+    assert_eq!(
+        client.get_milestone_deadline(&agreement_id(&env, 51), &0u32),
+        None
+    );
+    assert_eq!(
+        client.get_milestone(&id, &0u32),
+        Some(Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        })
+    );
+}
+
+/// A deadline at or before the current ledger timestamp is rejected.
+#[test]
+fn test_set_milestone_deadline_rejects_past_deadline() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    env.ledger().set_timestamp(DEADLINE_T0);
+    let id = agreement_id(&env, 52);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    assert_eq!(
+        client.try_set_milestone_deadline(&id, &0u32, &DEADLINE_T0),
+        Err(Ok(TrellisError::DeadlineInPast))
+    );
+    assert_eq!(
+        client.try_set_milestone_deadline(&id, &0u32, &(DEADLINE_T0 - 1)),
+        Err(Ok(TrellisError::DeadlineInPast))
+    );
+    assert_eq!(client.get_milestone_deadline(&id, &0u32), None);
+}
+
+/// Deadlines can only be set before funds are locked, so they can never be
+/// imposed on a payee already working against escrowed funds.
+#[test]
+fn test_set_milestone_deadline_rejected_once_funded() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    env.ledger().set_timestamp(DEADLINE_T0);
+    let id = agreement_id(&env, 53);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+
+    assert_eq!(
+        client.try_set_milestone_deadline(&id, &0u32, &(DEADLINE_T0 + 100)),
+        Err(Ok(TrellisError::InvalidStateTransition))
+    );
+    assert_eq!(
+        client.try_set_milestone_deadline(&id, &7u32, &(DEADLINE_T0 + 100)),
+        Err(Ok(TrellisError::InvalidMilestone))
+    );
+}
+
+/// `set_milestone_deadline` is payer-only: without a payer signature it traps.
+#[test]
+#[should_panic(expected = "InvalidAction")]
+fn test_set_milestone_deadline_wrong_role_fails() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    env.ledger().set_timestamp(DEADLINE_T0);
+    let id = agreement_id(&env, 54);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    deny_all_auth(&env);
+    client.set_milestone_deadline(&id, &0u32, &(DEADLINE_T0 + 100));
+}
+
+/// Unfunded milestone past its deadline: a third-party keeper can close it
+/// as `Refunded` with no token movement.
+#[test]
+fn test_expire_unfunded_milestone_after_deadline() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = init_with_deadline(
+        &env,
+        &client,
+        55,
+        (&payer, &payee, &dispute_resolver, &token_address),
+        500,
+        100,
+    );
+    let keeper = Address::generate(&env);
+    let payer_balance = token_client.balance(&payer);
+
+    env.ledger().set_timestamp(DEADLINE_T0 + 101);
+    client.expire_milestone(&keeper, &id, &0u32);
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_expd")],
+        "expire_milestone must emit trls_expd",
+    );
+
+    assert_eq!(
+        client.get_milestone(&id, &0u32).map(|m| m.status),
+        Some(EscrowStatus::Refunded)
+    );
+    assert_eq!(token_client.balance(&payer), payer_balance);
+    // The milestone left `Pending`, so it can no longer be funded.
+    assert_eq!(
+        client.try_lock_funds(&id, &0u32),
+        Err(Ok(TrellisError::InvalidStateTransition))
+    );
+}
+
+/// Funded milestone where the payee never submitted work: past the deadline
+/// the locked funds go back to the payer.
+#[test]
+fn test_expire_funded_milestone_refunds_payer() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = init_with_deadline(
+        &env,
+        &client,
+        56,
+        (&payer, &payee, &dispute_resolver, &token_address),
+        2_000,
+        100,
+    );
+    let payer_balance_before_lock = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    assert_eq!(token_client.balance(&client.address), 2_000);
+
+    env.ledger().set_timestamp(DEADLINE_T0 + 101);
+    client.expire_milestone(&payer, &id, &0u32);
+
+    assert_eq!(token_client.balance(&payer), payer_balance_before_lock);
+    assert_eq!(token_client.balance(&client.address), 0);
+    assert_eq!(token_client.balance(&payee), 0);
+    assert_eq!(
+        client.get_milestone(&id, &0u32).map(|m| m.status),
+        Some(EscrowStatus::Refunded)
+    );
+    // Terminal: a second expiry cannot pay out twice.
+    assert_eq!(
+        client.try_expire_milestone(&payer, &id, &0u32),
+        Err(Ok(TrellisError::InvalidStateTransition))
+    );
+}
+
+/// Before (and exactly at) the deadline, and with no deadline at all, the
+/// fallback must not trigger.
+#[test]
+fn test_expire_milestone_before_deadline_or_without_one_fails() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = init_with_deadline(
+        &env,
+        &client,
+        57,
+        (&payer, &payee, &dispute_resolver, &token_address),
+        500,
+        100,
+    );
+    client.lock_funds(&id, &0u32);
+
+    env.ledger().set_timestamp(DEADLINE_T0 + 100);
+    assert_eq!(
+        client.try_expire_milestone(&payer, &id, &0u32),
+        Err(Ok(TrellisError::DeadlineNotReached))
+    );
+
+    let no_deadline = agreement_id(&env, 58);
+    client.init(
+        &no_deadline,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    env.ledger().set_timestamp(u64::MAX);
+    assert_eq!(
+        client.try_expire_milestone(&payer, &no_deadline, &0u32),
+        Err(Ok(TrellisError::DeadlineNotReached))
+    );
+    assert_eq!(
+        client.try_expire_milestone(&payer, &no_deadline, &9u32),
+        Err(Ok(TrellisError::InvalidMilestone))
+    );
+}
+
+/// Once the payee has delivered, an unresponsive payer must not be able to
+/// win by default: a `WorkSubmitted` (or `Disputed`) milestone never expires,
+/// and the normal approve / dispute flow keeps working past the deadline.
+#[test]
+fn test_expire_milestone_does_not_touch_submitted_or_disputed_work() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let parties = (&payer, &payee, &dispute_resolver, &token_address);
+
+    let submitted = init_with_deadline(&env, &client, 59, parties, 700, 100);
+    client.lock_funds(&submitted, &0u32);
+    client.submit_work(&submitted, &0u32, &None);
+
+    let disputed = init_with_deadline(&env, &client, 60, parties, 300, 100);
+    client.lock_funds(&disputed, &0u32);
+    client.raise_dispute(&payee, &disputed, &0u32);
+
+    env.ledger().set_timestamp(DEADLINE_T0 + 1_000);
+    for id in [&submitted, &disputed] {
+        assert_eq!(
+            client.try_expire_milestone(&payer, id, &0u32),
+            Err(Ok(TrellisError::InvalidStateTransition))
+        );
+    }
+
+    client.approve_and_release(&submitted, &0u32);
+    assert_eq!(token_client.balance(&payee), 700);
 }

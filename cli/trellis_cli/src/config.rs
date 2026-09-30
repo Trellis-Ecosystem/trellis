@@ -126,6 +126,46 @@ pub fn validate_rpc_url(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse cleartext `http://` to a non-loopback RPC host (#156).
+///
+/// Runs after [`validate_rpc_url`] has accepted the URL's shape. A planted
+/// `.env` could otherwise point the CLI at an unauthenticated endpoint that
+/// forges results. `allow_insecure` (the `--unsafe-rpc` flag) downgrades the
+/// refusal to a warning the caller prints.
+///
+/// Returns `Ok(None)` when no warning is needed, `Ok(Some(warning))` when
+/// cleartext was allowed by the flag, and `Err(message)` when it was not.
+pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<String>, String> {
+    let parsed =
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+    if parsed.scheme() != "http" {
+        return Ok(None);
+    }
+
+    let loopback = match parsed.host() {
+        Some(url::Host::Domain(d)) => d == "localhost" || d.ends_with(".localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+
+    if loopback {
+        Ok(None)
+    } else if allow_insecure {
+        Ok(Some(format!(
+            "warning: using cleartext HTTP RPC endpoint {raw} (--unsafe-rpc). \
+             Responses from this endpoint are not authenticated and can be \
+             tampered with — never use this against mainnet."
+        )))
+    } else {
+        Err(format!(
+            "Error: refusing to use insecure RPC URL {raw:?}. Non-localhost \
+             endpoints must use https://. Pass --unsafe-rpc to allow http:// \
+             for local development."
+        ))
+    }
+}
+
 impl Config {
     /// Load configuration from environment variables with network detection.
     ///
@@ -144,7 +184,7 @@ impl Config {
             _ => Network::Testnet,
         };
 
-        Self::resolve(network, None, None)
+        Self::resolve(network, None, None, None)
     }
 
     /// Resolve configuration from a `--network` preset plus optional CLI
@@ -187,7 +227,11 @@ impl Config {
             .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
 
         let source_key =
-            std::env::var("TRELLIS_SOURCE_KEY").unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string());
+            match cli_source_key_file.or_else(|| std::env::var("TRELLIS_SOURCE_KEY_FILE").ok()) {
+                Some(path) => read_source_key_file(&path)?,
+                None => std::env::var("TRELLIS_SOURCE_KEY")
+                    .unwrap_or_else(|_| "UNSET_SOURCE_KEY".to_string()),
+            };
 
         Ok(Config {
             rpc_url,
@@ -348,6 +392,34 @@ mod tests {
         let err = cfg.validate().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].contains("TRELLIS_CONTRACT_ID"), "got: {:?}", err);
+    }
+
+    // --- check_rpc_transport (#156) ---
+
+    #[test]
+    fn rpc_transport_allows_https_and_loopback_http() {
+        assert_eq!(
+            check_rpc_transport("https://rpc.example.com", false),
+            Ok(None)
+        );
+        assert_eq!(
+            check_rpc_transport("http://localhost:8000", false),
+            Ok(None)
+        );
+        assert_eq!(
+            check_rpc_transport("http://127.0.0.1:8000/rpc", false),
+            Ok(None)
+        );
+        assert_eq!(check_rpc_transport("http://[::1]:8000", false), Ok(None));
+    }
+
+    #[test]
+    fn rpc_transport_refuses_remote_http_unless_unsafe() {
+        assert!(check_rpc_transport("http://rpc.example.com", false).is_err());
+        let warning = check_rpc_transport("http://rpc.example.com", true)
+            .expect("--unsafe-rpc allows it")
+            .expect("with a warning");
+        assert!(warning.contains("--unsafe-rpc"), "got: {warning}");
     }
 
     // --- validate_rpc_url (#237) ---

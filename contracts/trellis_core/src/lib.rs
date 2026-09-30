@@ -642,6 +642,146 @@ impl TrellisContract {
         events::ttl_extended(&env, agreement_id, caller);
         Ok(())
     }
+
+    /// Set a deadline on a milestone that has not been funded yet.
+    ///
+    /// `deadline` is a ledger timestamp (Unix seconds, compared against
+    /// `env.ledger().timestamp()`). Once it passes, anyone may call
+    /// [`Self::expire_milestone`] to close the milestone if it is still
+    /// stalled — see that entrypoint for exactly which states are covered.
+    ///
+    /// Only the payer may set a deadline, and only while the milestone is
+    /// `Pending`: the deadline is part of the terms the payee sees *before*
+    /// any funds are locked and any work starts, so it can never be imposed
+    /// on (or moved under) a payee who is already working against escrowed
+    /// funds. Calling it again while still `Pending` replaces the deadline.
+    ///
+    /// Deadlines are stored beside the agreement rather than as a field on
+    /// [`Milestone`], so the `init` argument layout and `get_agreement` /
+    /// `get_milestone` return types are unchanged for existing callers. Use
+    /// [`Self::get_milestone_deadline`] to read one back.
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
+    /// - [`TrellisError::InvalidStateTransition`] – milestone not `Pending`.
+    /// - [`TrellisError::DeadlineInPast`] – `deadline` is not strictly after
+    ///   the current ledger timestamp.
+    pub fn set_milestone_deadline(
+        env: Env,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+        deadline: u64,
+    ) -> Result<(), TrellisError> {
+        let agreement = storage::read_agreement(&env, &agreement_id)?;
+        agreement.payer.require_auth();
+
+        let milestone = agreement
+            .milestones
+            .get(milestone_id)
+            .ok_or(TrellisError::InvalidMilestone)?;
+
+        if milestone.status != EscrowStatus::Pending {
+            return Err(TrellisError::InvalidStateTransition);
+        }
+
+        if deadline <= env.ledger().timestamp() {
+            return Err(TrellisError::DeadlineInPast);
+        }
+
+        storage::write_deadline(&env, &agreement_id, milestone_id, deadline);
+        events::deadline_set(&env, agreement_id, milestone_id, deadline);
+
+        Ok(())
+    }
+
+    /// Return the deadline set for a milestone, if any.
+    ///
+    /// Read-only view — no auth required, no state modified. Returns `None`
+    /// when the agreement or milestone does not exist, or when no deadline
+    /// was ever set (mirroring [`Self::get_milestone`]).
+    pub fn get_milestone_deadline(
+        env: Env,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+    ) -> Option<u64> {
+        storage::read_deadline(&env, &agreement_id, milestone_id)
+    }
+
+    /// Close a stalled milestone whose deadline has passed.
+    ///
+    /// Permissionless: `caller` only has to authorise its own call (so the
+    /// emitted event names who really triggered it). The payer, the payee
+    /// or a third-party keeper can all use it — the outcome is fixed by the
+    /// milestone's state, not by who calls.
+    ///
+    /// Covered stalled states, once `env.ledger().timestamp() > deadline`:
+    /// - `Pending` (never funded) → `Refunded`. No tokens move; this is the
+    ///   automatic equivalent of [`Self::cancel_unfunded_milestone`].
+    /// - `Funded` (payee never submitted work) → `Refunded`, and the locked
+    ///   `amount` is returned to the payer.
+    ///
+    /// Deliberately **not** covered:
+    /// - `WorkSubmitted` — the payee has delivered, so an unresponsive payer
+    ///   must not be able to win by default. Either party can still
+    ///   [`Self::raise_dispute`].
+    /// - `Disputed` — the resolver owns the outcome; a timeout would let
+    ///   either party run out the clock on arbitration.
+    /// - `Completed` / `Refunded` — already terminal.
+    ///
+    /// All of these return [`TrellisError::InvalidStateTransition`].
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
+    /// - [`TrellisError::DeadlineNotReached`] – no deadline set, or the
+    ///   current ledger timestamp is not yet past it.
+    /// - [`TrellisError::InvalidStateTransition`] – milestone is not
+    ///   `Pending` or `Funded`.
+    pub fn expire_milestone(
+        env: Env,
+        caller: Address,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+    ) -> Result<(), TrellisError> {
+        caller.require_auth();
+
+        let mut agreement = storage::read_agreement(&env, &agreement_id)?;
+
+        let mut milestone = agreement
+            .milestones
+            .get(milestone_id)
+            .ok_or(TrellisError::InvalidMilestone)?;
+
+        match storage::read_deadline(&env, &agreement_id, milestone_id) {
+            Some(deadline) if env.ledger().timestamp() > deadline => {}
+            _ => return Err(TrellisError::DeadlineNotReached),
+        }
+
+        let refunded_amount = match milestone.status {
+            EscrowStatus::Pending => 0,
+            EscrowStatus::Funded => milestone.amount,
+            _ => return Err(TrellisError::InvalidStateTransition),
+        };
+
+        // Checks-effects-interactions: persist the terminal state before any
+        // token transfer.
+        milestone.status = EscrowStatus::Refunded;
+        agreement.milestones.set(milestone_id, milestone);
+        storage::write_agreement(&env, &agreement_id, &agreement);
+
+        if refunded_amount > 0 {
+            token::Client::new(&env, &agreement.token).transfer(
+                &env.current_contract_address(),
+                &agreement.payer,
+                &refunded_amount,
+            );
+        }
+
+        events::milestone_expired(&env, agreement_id, milestone_id, refunded_amount, caller);
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

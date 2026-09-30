@@ -87,14 +87,6 @@
                         },
                         {
                           "key": {
-                            "symbol": "id"
-                          },
-                          "val": {
-                            "u32": 0
-                          }
-                        },
-                        {
-                          "key": {
                             "symbol": "proof_uri"
                           },
                           "val": "void"
@@ -335,14 +327,6 @@
                                     "hi": 0,
                                     "lo": 750
                                   }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "id"
-                                },
-                                "val": {
-                                  "u32": 0
                                 }
                               },
                               {
