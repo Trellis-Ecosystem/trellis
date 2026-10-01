@@ -29,10 +29,10 @@ crate-type = ["cdylib", "rlib"]
 # (the [dependencies] entry) and embeds it in `trellis --version`. Keep it on a
 # single line; the CLI build fails if the entry cannot be found.
 [dependencies]
-soroban-sdk = { version = ">=22.0.0, <23", features = ["alloc"] }
+soroban-sdk = { version = ">=22.0.0, <29", features = ["alloc"] }
 
 [dev-dependencies]
-soroban-sdk = { version = ">=22.0.0, <23", features = ["testutils"] }
+soroban-sdk = { version = ">=22.0.0, <29", features = ["testutils"] }
 proptest = { version = "1.5.0", default-features = false, features = ["std"] }
 
 [[bench]]
