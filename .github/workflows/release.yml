@@ -28,12 +28,15 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   changelog:
     name: Generate changelog
     runs-on: ubuntu-latest
+    # Pushes the regenerated CHANGELOG.md back to the default branch.
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -217,6 +220,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run == false }}
     needs: [changelog, build-contract, build-cli]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v8

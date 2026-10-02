@@ -433,6 +433,11 @@ impl TrellisContract {
     /// refusing to approve work AND refusing to raise a dispute, which would
     /// permanently lock the freelancer's funds.
     ///
+    /// `reason_uri` optionally points at the disputing party's reason or
+    /// evidence, mirroring `submit_work`'s `proof_uri`. An empty string is
+    /// normalized to `None` and the value is emitted in the `dispute_raised`
+    /// event only; it is not stored on the milestone.
+    ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::Unauthorized`] – `caller` is neither payer nor payee.
@@ -444,6 +449,7 @@ impl TrellisContract {
         caller: Address,
         agreement_id: BytesN<32>,
         milestone_id: u32,
+        reason_uri: Option<String>,
     ) -> Result<(), TrellisError> {
         // #401: header + single milestone only — O(1) reads and one write.
         let header = storage::read_header(&env, &agreement_id)?;

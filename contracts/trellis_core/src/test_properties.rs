@@ -154,7 +154,7 @@ proptest! {
             locked += amount;
 
             // Balance must not change when raising a dispute.
-            client.raise_dispute(&payer, &id, &mid);
+            client.raise_dispute(&payer, &id, &mid, &None);
 
             prop_assert_eq!(
                 token_client.balance(&client.address),
@@ -494,7 +494,7 @@ proptest! {
                     expected_balance -= amounts[i];
                 }
                 FuzzOp::Dispute => {
-                    client.raise_dispute(&payer, &id, &mid);
+                    client.raise_dispute(&payer, &id, &mid, &None);
                     status[i] = EscrowStatus::Disputed;
                 }
                 FuzzOp::ResolveRefund => {

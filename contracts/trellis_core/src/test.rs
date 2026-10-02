@@ -527,7 +527,7 @@ fn test_dispute_and_refund_to_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payee raises the dispute (exercises the either-party auth path).
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Resolver rules in payer's favour.
     client.resolve_dispute(&id, &0u32, &true);
@@ -1399,7 +1399,7 @@ fn test_resolve_dispute_wrong_role_fails() {
 
     client.lock_funds(&id, &0u32);
 
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // `resolve_dispute` gates on `agreement.dispute_resolver.require_auth()`,
     // which is its sole role check — see the entrypoint's doc comment.
@@ -1429,7 +1429,7 @@ fn test_raise_dispute_wrong_role_fails() {
     // `Unauthorized` before it ever reaches `caller.require_auth()`.
     let random = Address::generate(&env);
     assert_eq!(
-        client.try_raise_dispute(&random, &id, &0u32),
+        client.try_raise_dispute(&random, &id, &0u32, &None),
         Err(Ok(TrellisError::Unauthorized)),
         "a non-party caller must not be able to raise a dispute"
     );
@@ -1560,7 +1560,7 @@ fn test_dispute_raised_by_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payer raises the dispute
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     // Verify milestone status transitioned to Disputed
     let milestone = client.get_milestone(&id, &0u32);
