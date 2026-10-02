@@ -477,3 +477,87 @@ stderr: {}",
         stderr
     );
 }
+
+
+// ---------------------------------------------------------------------------
+// Native RPC health probe (#467 / #468)
+// ---------------------------------------------------------------------------
+
+/// `trellis health` calls getHealth + getLatestLedger directly over HTTP
+/// (no `stellar` binary) and reports both through the usual `--json`
+/// envelope.
+#[test]
+fn test_health_reports_native_rpc_results() {
+    let mut server = mockito::Server::new();
+    let _health = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getHealth"}),
+        ))
+        .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"status":"healthy","latestLedger":100,"oldestLedger":1,"ledgerRetentionWindow":17280}}"#)
+        .create();
+    let _ledger = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getLatestLedger"}),
+        ))
+        .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"id":"abcd","protocolVersion":22,"sequence":100}}"#)
+        .create();
+
+    let output = trellis_cmd()
+        // Prove the stellar binary is not needed for a native call.
+        .env("STELLAR_MOCK_BIN", "/nonexistent/stellar")
+        .args(["--rpc-url", &server.url(), "--json", "health"])
+        .output()
+        .expect("failed to execute trellis");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "health should succeed\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json prints one JSON envelope");
+    assert_eq!(envelope["status"], "success");
+    assert_eq!(envelope["result"]["health"]["status"], "healthy");
+    assert_eq!(envelope["result"]["latest_ledger"]["sequence"], 100);
+    assert_eq!(envelope["result"]["latest_ledger"]["protocol_version"], 22);
+    assert_eq!(envelope["result"]["latest_ledger"]["hash"], "abcd");
+}
+
+/// An endpoint that answers but reports itself unhealthy must fail the
+/// command, and getLatestLedger is never attempted.
+#[test]
+fn test_health_fails_on_unhealthy_endpoint() {
+    let mut server = mockito::Server::new();
+    let _health = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getHealth"}),
+        ))
+        .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"status":"unhealthy"}}"#)
+        .create();
+    let ledger = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getLatestLedger"}),
+        ))
+        .expect(0)
+        .create();
+
+    let output = trellis_cmd()
+        .args(["--rpc-url", &server.url(), "--json", "health"])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(!output.status.success(), "unhealthy endpoint must exit non-zero");
+    let envelope: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("JSON");
+    assert_eq!(envelope["status"], "error");
+    assert!(
+        envelope["error"].as_str().unwrap_or("").contains("unhealthy"),
+        "got: {envelope}"
+    );
+    ledger.assert();
+}

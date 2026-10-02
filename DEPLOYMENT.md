@@ -210,6 +210,19 @@ trellis cancel-milestone --agreement-id <hex> --milestone-id 0
 
 > Must be signed by the payer. Only works on milestones still in `Pending` status.
 
+### Check RPC connectivity
+
+```bash
+trellis health
+trellis --json health   # {"status":"success","result":{"health":{...},"latest_ledger":{"hash","protocol_version","sequence"}},...}
+```
+
+> Calls the Soroban `getHealth` and `getLatestLedger` JSON-RPC methods directly
+> over HTTP. The `stellar` binary, `TRELLIS_CONTRACT_ID` and `TRELLIS_SOURCE_KEY`
+> are all optional here, since only the RPC URL is used. Exits non-zero if the
+> endpoint is unreachable or does not report `healthy`. `--dry-run` prints the
+> JSON-RPC requests without sending them.
+
 ---
 
 ## Testnet Token (USDC)

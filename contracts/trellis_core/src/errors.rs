@@ -122,4 +122,13 @@ pub enum TrellisError {
     /// sides of the escrow into a single address — there would be no real
     /// counterparty to release or dispute funds.
     PayerEqualsPayee = 14,
+
+    /// `set_milestone_deadline` was called with a deadline that is not
+    /// strictly in the future (`deadline <= env.ledger().timestamp()`).
+    /// Such a deadline would make the milestone immediately expirable.
+    DeadlineInPast = 15,
+
+    /// `expire_milestone` was called on a milestone that has no deadline, or
+    /// whose deadline has not yet passed.
+    DeadlineNotReached = 16,
 }

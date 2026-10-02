@@ -271,3 +271,29 @@ pub fn has_agreement(env: &Env, id: &BytesN<32>) -> bool {
         .persistent()
         .has(&DataKey::Agreement(id.clone()))
 }
+
+/// Return the deadline (ledger timestamp, seconds) set for `milestone_id`, or
+/// `None` if the milestone has no deadline.
+pub fn read_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get::<_, Map<u32, u64>>(&DataKey::Deadlines(id.clone()))
+        .and_then(|deadlines| deadlines.get(milestone_id))
+}
+
+/// Set (or replace) the deadline for `milestone_id`.
+///
+/// Callers must already have verified the agreement exists; the TTL bump
+/// below then renews both the agreement and the deadline entry together.
+pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u64) {
+    let key = DataKey::Deadlines(id.clone());
+    let mut deadlines: Map<u32, u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Map::new(env));
+    deadlines.set(milestone_id, deadline);
+    env.storage().persistent().set(&key, &deadlines);
+
+    bump_ttl(env, id);
+}

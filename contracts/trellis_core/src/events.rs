@@ -28,6 +28,8 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   8. "trls_ttle"  ( 9 chars) → symbol_short! — ttl_extended       (abbreviated)
 //   9. "trls_prtl"  ( 9 chars) → symbol_short! — funds_partially_released (abbreviated)
 //  10. "trls_cmpl"  ( 9 chars) → symbol_short! — agreement_completed (abbreviated)
+//  11. "trls_ddln"  ( 9 chars) → symbol_short! — deadline_set       (abbreviated)
+//  12. "trls_expd"  ( 9 chars) → symbol_short! — milestone_expired  (abbreviated)
 //
 // All abbreviations follow the pattern: drop the vowels from the root word
 // while keeping enough consonants to be unambiguous.  They are intentional
@@ -44,6 +46,8 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //   8. "ttl_extended" → (caller: Address)
 //   9. "partially_released" → (milestone_id: u32, amount: i128, remaining: i128)
 //  10. "agreement_completed" → (completed_count: u32, refunded_count: u32)
+//  11. "deadline_set" → (milestone_id: u32, deadline: u64)
+//  12. "expired"   → (milestone_id: u32, refunded_amount: i128, caller: Address)
 //
 // Schema changes: the `amount` field on "disputed", "resolved" and
 // "cancelled" was appended as the last tuple element, so an indexer that
@@ -262,5 +266,41 @@ pub fn ttl_extended(env: &Env, agreement_id: BytesN<32>, caller: Address) {
     env.events().publish(
         (symbol_short!("trls_ttle"), agreement_id.clone()),
         (caller,),
+    );
+}
+
+/// Emitted when the payer sets (or moves) a milestone's deadline.
+///
+/// Topics: `("trls_ddln", agreement_id)`
+/// Data:   `(milestone_id, deadline)`
+///
+/// `deadline` is a ledger timestamp (Unix seconds).
+pub fn deadline_set(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, deadline: u64) {
+    env.events().publish(
+        (symbol_short!("trls_ddln"), agreement_id.clone()),
+        (milestone_id, deadline),
+    );
+}
+
+/// Emitted when a milestone is closed by the deadline fallback.
+///
+/// Topics: `("trls_expd", agreement_id)`
+/// Data:   `(milestone_id, refunded_amount, caller)`
+///
+/// `refunded_amount` is `0` when the milestone expired while still `Pending`
+/// (nothing was ever escrowed), and the milestone amount when it expired
+/// while `Funded` (the locked funds went back to the payer). `caller` is
+/// whoever triggered the expiry — the entrypoint is permissionless, so this
+/// may be a keeper rather than either party.
+pub fn milestone_expired(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    milestone_id: u32,
+    refunded_amount: i128,
+    caller: Address,
+) {
+    env.events().publish(
+        (symbol_short!("trls_expd"), agreement_id.clone()),
+        (milestone_id, refunded_amount, caller),
     );
 }
