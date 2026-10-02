@@ -650,6 +650,19 @@ required for these commands. The decoded result is rendered through the same
 `--human-readable`, and `--quiet` all behave identically whether or not the
 Stellar CLI is installed.
 
+Native transaction simulation is implemented in
+`cli/trellis_cli/src/rpc.rs` (`RpcClient::simulate_transaction`) against the
+Soroban JSON-RPC `simulateTransaction` method. For a base64
+`TransactionEnvelope` XDR it returns a typed result containing the recommended
+minimum resource fee (`minResourceFee`), the resource fee and instruction /
+I/O-byte budgets embedded in the `transactionData`, and the fully parsed
+ledger footprint (its read-only and read-write `LedgerKey`s). For a read-only
+invocation the returned `results[0].xdr` `ScVal` is decoded directly, so a
+query value can be fetched without any signing key. A reverted host function
+call is surfaced as a typed contract error, kept distinct from network-level
+and JSON-RPC-level failures so callers can tell "the contract said no" apart
+from "the network was unreachable".
+
 `--dry-run` prints the `stellar contract invoke` command that would be executed
 without actually running it or submitting anything on-chain. Because it never
 spawns the `stellar` binary, it works on machines where the Stellar CLI is not
