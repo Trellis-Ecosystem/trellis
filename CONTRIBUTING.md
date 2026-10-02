@@ -51,8 +51,8 @@ Before starting any task, update your local branch:
 
 ```bash
 git fetch upstream
-git checkout main
-git merge upstream/main
+git checkout master
+git merge upstream/master
 ```
 
 ## 3. Project Structure
