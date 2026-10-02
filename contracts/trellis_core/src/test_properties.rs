@@ -16,7 +16,12 @@
 //!    nowhere.
 //!
 //! 2. **State machine reachability** — `approve_and_release` always fails with
-//!    `InvalidStateTransition` unless the milestone is `WorkSubmitted`.
+//!    `InvalidStateTransition` unless the milestone is `WorkSubmitted`. This
+//!    covers the non-`WorkSubmitted` states in both directions: the pre-funding
+//!    states (`Pending`, `Funded`) and the terminal ones (`Completed`,
+//!    `Disputed`, `Refunded`) — the latter being the re-entry / double-approval
+//!    paths where a missed check would pay the payee twice out of the pooled
+//!    contract balance (#392).
 //!
 //! 3. **Zero/negative-amount rejection** — `init` always fails with
 //!    `InvalidMilestone` when any milestone has `amount <= 0`, regardless of
@@ -227,6 +232,115 @@ proptest! {
             result,
             Err(Ok(TrellisError::InvalidStateTransition)),
             "approve on Funded must always fail"
+        );
+    }
+
+    /// #392 — terminal-state re-entry, part 1: a Disputed milestone is a
+    /// `resolve_dispute` entrypoint, never an `approve_and_release` one. A
+    /// disputed milestone still holds the escrowed amount, so approving it
+    /// directly would release funds before the resolver has ruled on them.
+    #[test]
+    fn prop_approve_on_disputed_always_fails(amount in 1i128..=100_000i128) {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let token_client = token::TokenClient::new(&env, &token_address);
+        let id = agreement_id(&env, 52);
+
+        client.init(
+            &id, &payer, &payee, &token_address,
+            &milestones_from_amounts(&env, &[amount]),
+            &dispute_resolver,
+        );
+        client.lock_funds(&id, &0u32);
+        client.raise_dispute(&payer, &id, &0u32);
+
+        let result = client.try_approve_and_release(&id, &0u32);
+        prop_assert_eq!(
+            result,
+            Err(Ok(TrellisError::InvalidStateTransition)),
+            "approve on Disputed must always fail"
+        );
+        // Fund-safety consequence: the rejected call must not release anything.
+        prop_assert_eq!(
+            token_client.balance(&payee), 0,
+            "approve on Disputed must not pay the payee"
+        );
+        prop_assert_eq!(
+            token_client.balance(&client.address), amount,
+            "the escrowed amount must stay locked while the dispute is open"
+        );
+    }
+
+    /// #392 — terminal-state re-entry, part 2: a Refunded milestone has already
+    /// had its funds returned to the payer. A second
+    /// `approve_and_release` against it would pay the payee out of the pooled
+    /// balance that other agreements' milestones are funded from.
+    #[test]
+    fn prop_approve_on_refunded_always_fails(amount in 1i128..=100_000i128) {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let token_client = token::TokenClient::new(&env, &token_address);
+        let id = agreement_id(&env, 53);
+
+        client.init(
+            &id, &payer, &payee, &token_address,
+            &milestones_from_amounts(&env, &[amount]),
+            &dispute_resolver,
+        );
+        // A cancelled unfunded milestone is Refunded; fund it and refund it via
+        // the dispute path instead, so the milestone really did hold funds.
+        client.lock_funds(&id, &0u32);
+        client.raise_dispute(&payer, &id, &0u32);
+        client.resolve_dispute(&id, &0u32, &true);
+
+        let result = client.try_approve_and_release(&id, &0u32);
+        prop_assert_eq!(
+            result,
+            Err(Ok(TrellisError::InvalidStateTransition)),
+            "approve on Refunded must always fail"
+        );
+        prop_assert_eq!(
+            token_client.balance(&payee), 0,
+            "approve on Refunded must not pay the payee"
+        );
+        prop_assert_eq!(
+            token_client.balance(&client.address), 0,
+            "the refunded amount must not re-enter the escrow balance"
+        );
+    }
+
+    /// #392 — terminal-state re-entry, part 3: double approval. A Completed
+    /// milestone's funds have already been transferred to the payee, so the
+    /// second call must fail *and* leave the payee's balance untouched — the
+    /// pool is shared by every milestone on the same token, so an unguarded
+    /// second release would drain another milestone's escrow.
+    #[test]
+    fn prop_double_approve_on_completed_always_fails(amount in 1i128..=100_000i128) {
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let token_client = token::TokenClient::new(&env, &token_address);
+        let id = agreement_id(&env, 54);
+
+        client.init(
+            &id, &payer, &payee, &token_address,
+            &milestones_from_amounts(&env, &[amount]),
+            &dispute_resolver,
+        );
+        client.lock_funds(&id, &0u32);
+        client.submit_work(&id, &0u32, &None);
+        client.approve_and_release(&id, &0u32);
+
+        prop_assert_eq!(
+            token_client.balance(&payee), amount,
+            "the first release must pay the payee exactly once"
+        );
+
+        let result = client.try_approve_and_release(&id, &0u32);
+        prop_assert_eq!(
+            result,
+            Err(Ok(TrellisError::InvalidStateTransition)),
+            "a second approve on a Completed milestone must always fail"
+        );
+        prop_assert_eq!(
+            token_client.balance(&payee), amount,
+            "the rejected re-entry must not pay the payee a second time"
         );
     }
 }

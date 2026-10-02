@@ -426,6 +426,126 @@ fn test_init_accepts_pending_milestones_happy_path() {
     assert_eq!(token_client.balance(&client.address), 0);
 }
 
+/// An agreement with no milestones can never transition through any state, so
+/// `init` must reject an empty milestone set with `EmptyMilestoneSet` rather
+/// than permanently burning the storage entry (#390).
+///
+/// The adjacent case is the failure ordering: the rejection has to happen
+/// before any state is written, so the same `agreement_id` remains usable and
+/// a subsequent well-formed `init` succeeds instead of hitting
+/// `AlreadyInitialized`.
+#[test]
+fn test_init_empty_milestones_fails() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 122);
+    let empty: Vec<Milestone> = Vec::new(&env);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &empty,
+        &dispute_resolver,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::EmptyMilestoneSet)),
+        "init with an empty milestone set must return EmptyMilestoneSet"
+    );
+
+    // Adjacent case: the rejected call must not have written anything, so the
+    // same ID is still free for a well-formed agreement.
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected empty-milestone init must not persist an agreement"
+    );
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    assert_eq!(
+        client.get_agreement(&id).milestones.len(),
+        1,
+        "the agreement ID must remain usable after an empty-milestone rejection"
+    );
+}
+
+/// The dispute resolver must be a neutral third party: letting the payer be
+/// the resolver would hand it unilateral control over disputes it raised
+/// itself, so `init` must return `ResolverCannotBeParty` (#389).
+#[test]
+fn test_payer_as_resolver_rejected() {
+    let (env, payer, payee, _dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 123);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &payer, // payer doubles as its own dispute resolver
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ResolverCannotBeParty)),
+        "init with dispute_resolver == payer must return ResolverCannotBeParty"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected resolver-as-party init must not persist an agreement"
+    );
+}
+
+/// The same neutrality requirement applies to the payee (#389).
+///
+/// The adjacent case is the happy path: a resolver distinct from both parties
+/// is still accepted, so the new check is not over-broad.
+#[test]
+fn test_payee_as_resolver_rejected() {
+    let (env, payer, payee, _dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 124);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &payee, // payee doubles as its own dispute resolver
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ResolverCannotBeParty)),
+        "init with dispute_resolver == payee must return ResolverCannotBeParty"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected resolver-as-party init must not persist an agreement"
+    );
+
+    // Adjacent case: a genuinely neutral third-party resolver is accepted.
+    let neutral = Address::generate(&env);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &neutral,
+    );
+    assert_eq!(
+        client.get_agreement(&id).dispute_resolver,
+        neutral,
+        "a neutral dispute resolver must still be accepted"
+    );
+}
+
 /// `lock_funds` moves the payer's tokens via a single `token::transfer` that
 /// the payer authorizes with `require_auth()` — there is no approve/allowance
 /// step anywhere in the crate (#383).
@@ -1433,6 +1553,68 @@ fn test_raise_dispute_wrong_role_fails() {
         Err(Ok(TrellisError::Unauthorized)),
         "a non-party caller must not be able to raise a dispute"
     );
+}
+
+/// `raise_dispute` authorises exactly two callers: the payer and the payee
+/// (#388). Each must be able to open the dispute window on its own, otherwise a
+/// payer could stall a `WorkSubmitted` milestone forever by neither approving
+/// nor disputing.
+///
+/// The adjacent case to the unauthorized-caller rejection is this happy path:
+/// a check that wrongly rejected either role would strand the payee's funds, so
+/// both roles are driven independently on separate milestones of one agreement.
+#[test]
+fn test_raise_dispute_by_payer_and_payee_both_succeed() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 126);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.lock_funds(&id, &1u32);
+
+    // The payer disputes milestone 0 on its own authority.
+    assert_eq!(
+        client.try_raise_dispute(&payer, &id, &0u32),
+        Ok(Ok(())),
+        "the payer must be able to raise a dispute without the payee"
+    );
+    // The payee disputes milestone 1 on its own authority.
+    assert_eq!(
+        client.try_raise_dispute(&payee, &id, &1u32),
+        Ok(Ok(())),
+        "the payee must be able to raise a dispute without the payer"
+    );
+
+    for (mid, who) in [(0u32, "payer"), (1u32, "payee")] {
+        assert_eq!(
+            client
+                .get_milestone(&id, &mid)
+                .expect("milestone must still exist")
+                .status,
+            EscrowStatus::Disputed,
+            "milestone {mid} must be Disputed after the {who} raised the dispute"
+        );
+    }
 }
 
 /// `cancel_unfunded_milestone` is payer-only: without a payer signature it traps.
