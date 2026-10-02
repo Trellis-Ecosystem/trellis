@@ -55,6 +55,655 @@ pub struct InvokeOutput {
     pub command_debug: String,
 }
 
+// ---------------------------------------------------------------------------
+// Native transaction simulation (#476)
+// ---------------------------------------------------------------------------
+
+/// A typed failure from [`RpcClient::simulate_transaction`].
+///
+/// Simulation can fail in three genuinely different ways, and callers need to
+/// tell them apart:
+///
+/// * [`SimulationError::Network`] — the request never produced a simulation
+///   (DNS/connect/timeout/HTTP/JSON failure). These are the only errors safe
+///   to retry.
+/// * [`SimulationError::Rpc`] — the endpoint answered with a JSON-RPC error
+///   object, e.g. the envelope was malformed. Retrying cannot help.
+/// * [`SimulationError::Contract`] — the endpoint *did* simulate the call but
+///   the host function reverted (a contract-level error), reported by the RPC
+///   as `result.error` together with any diagnostic `events`. Never retried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SimulationError {
+    /// Transport-/protocol-level failure talking to the RPC endpoint.
+    Network(String),
+    /// A JSON-RPC error object returned by the endpoint.
+    Rpc {
+        /// JSON-RPC error code.
+        code: i64,
+        /// JSON-RPC error message.
+        message: String,
+    },
+    /// The simulated invocation reverted — a contract-level, not network,
+    /// error. `events` carries any diagnostic events the RPC returned.
+    Contract {
+        /// Human-readable description of the reverted call.
+        message: String,
+        /// Base64-encoded diagnostic events, if the endpoint returned any.
+        events: Vec<String>,
+    },
+}
+
+impl std::fmt::Display for SimulationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SimulationError::Network(msg) => {
+                write!(f, "simulateTransaction network error: {msg}")
+            }
+            SimulationError::Rpc { code, message } => {
+                write!(f, "simulateTransaction RPC error {code}: {message}")
+            }
+            SimulationError::Contract { message, .. } => {
+                write!(f, "simulateTransaction contract error: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SimulationError {}
+
+/// A parsed `LedgerKey` from a simulated transaction's resource footprint.
+///
+/// Only the identity fields are kept — enough to show *what* the invocation
+/// touches. Addresses and hashes are hex-encoded XDR payloads rather than
+/// StrKey; callers that need StrKey re-encode them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LedgerKey {
+    /// A classic account entry (`LedgerEntryType::ACCOUNT`).
+    Account { account_id: String },
+    /// A trustline (`LedgerEntryType::TRUSTLINE`).
+    Trustline { account_id: String, asset: String },
+    /// An offer (`LedgerEntryType::OFFER`).
+    Offer { seller_id: String, offer_id: i64 },
+    /// A data entry (`LedgerEntryType::DATA`).
+    Data { account_id: String, name: String },
+    /// A claimable balance (`LedgerEntryType::CLAIMABLE_BALANCE`).
+    ClaimableBalance { balance_id: String },
+    /// A liquidity pool (`LedgerEntryType::LIQUIDITY_POOL`).
+    LiquidityPool { pool_id: String },
+    /// A contract data entry (`LedgerEntryType::CONTRACT_DATA`).
+    ContractData { contract: String, durability: String },
+    /// A contract WASM entry (`LedgerEntryType::CONTRACT_CODE`).
+    ContractCode { hash: String },
+    /// A network config setting (`LedgerEntryType::CONFIG_SETTING`).
+    ConfigSetting { id: u32 },
+    /// A time-to-live entry (`LedgerEntryType::TTL`).
+    Ttl { key_hash: String },
+}
+
+impl std::fmt::Display for LedgerKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LedgerKey::Account { account_id } => write!(f, "account({account_id})"),
+            LedgerKey::Trustline { account_id, asset } => {
+                write!(f, "trustline({account_id}, {asset})")
+            }
+            LedgerKey::Offer { seller_id, offer_id } => {
+                write!(f, "offer({seller_id}, {offer_id})")
+            }
+            LedgerKey::Data { account_id, name } => {
+                write!(f, "data({account_id}, {name})")
+            }
+            LedgerKey::ClaimableBalance { balance_id } => {
+                write!(f, "claimable_balance({balance_id})")
+            }
+            LedgerKey::LiquidityPool { pool_id } => {
+                write!(f, "liquidity_pool({pool_id})")
+            }
+            LedgerKey::ContractData {
+                contract,
+                durability,
+            } => write!(f, "contract_data({contract}, {durability})"),
+            LedgerKey::ContractCode { hash } => write!(f, "contract_code({hash})"),
+            LedgerKey::ConfigSetting { id } => write!(f, "config_setting({id})"),
+            LedgerKey::Ttl { key_hash } => write!(f, "ttl({key_hash})"),
+        }
+    }
+}
+
+/// The ledger entries a simulated invocation reads and writes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResourceFootprint {
+    /// Entries read but not modified.
+    pub read_only: Vec<LedgerKey>,
+    /// Entries read and written.
+    pub read_write: Vec<LedgerKey>,
+}
+
+impl std::fmt::Display for ResourceFootprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "read-only ({}):", self.read_only.len())?;
+        for key in &self.read_only {
+            writeln!(f, "  - {key}")?;
+        }
+        write!(f, "read-write ({}):", self.read_write.len())?;
+        for key in &self.read_write {
+            write!(f, "\n  - {key}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A parsed `simulateTransaction` response.
+#[derive(Debug, Clone)]
+pub struct SimulationResult {
+    /// Recommended minimum resource fee (in stroops) from `minResourceFee`.
+    pub min_resource_fee: i64,
+    /// Resource fee embedded in the recommended `transactionData`.
+    pub resource_fee: i64,
+    /// The ledger footprint the invocation would touch.
+    pub footprint: ResourceFootprint,
+    /// CPU instructions consumed.
+    pub instructions: u32,
+    /// Ledger bytes read.
+    pub read_bytes: u32,
+    /// Ledger bytes written.
+    pub write_bytes: u32,
+    /// Decoded `results[0].xdr`, when the endpoint returned one. Mutating
+    /// invocations typically return a scalar or `void`; read-only invocations
+    /// return their query result here.
+    pub result: Option<serde_json::Value>,
+    /// Raw base64 `results[0].xdr`, preserved for callers that want the
+    /// undecoded `ScVal`.
+    pub raw_result_xdr: Option<String>,
+    /// If `results[0].xdr` was present but could not be decoded, the reason.
+    pub result_decode_error: Option<String>,
+    /// Base64-encoded diagnostic events emitted during simulation.
+    pub events: Vec<String>,
+    /// Latest ledger known to the RPC at simulation time.
+    pub latest_ledger: Option<u64>,
+}
+
+/// A minimal big-endian XDR cursor over an in-memory byte slice.
+///
+/// This is intentionally separate from the `std::io::Cursor` used by the
+/// `ScVal` decoder above: parsing a footprint requires *skipping* arbitrary
+/// XDR values (including nested `ScVal`s) as well as reading fixed scalars,
+/// and a byte-offset cursor makes that straightforward.
+struct XdrReader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> XdrReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        XdrReader { bytes, pos: 0 }
+    }
+
+    fn read_u32(&mut self) -> Result<u32, String> {
+        let end = self.pos + 4;
+        if end > self.bytes.len() {
+            return Err(format!(
+                "unexpected end of XDR: wanted 4 bytes at offset {}, have {}",
+                self.pos,
+                self.bytes.len() - self.pos
+            ));
+        }
+        let v = u32::from_be_bytes(self.bytes[self.pos..end].try_into().unwrap());
+        self.pos = end;
+        Ok(v)
+    }
+
+    fn read_i64(&mut self) -> Result<i64, String> {
+        let end = self.pos + 8;
+        if end > self.bytes.len() {
+            return Err(format!(
+                "unexpected end of XDR: wanted 8 bytes at offset {}, have {}",
+                self.pos,
+                self.bytes.len() - self.pos
+            ));
+        }
+        let v = i64::from_be_bytes(self.bytes[self.pos..end].try_into().unwrap());
+        self.pos = end;
+        Ok(v)
+    }
+
+    fn read_fixed(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let end = self.pos + n;
+        if end > self.bytes.len() {
+            return Err(format!(
+                "unexpected end of XDR: wanted {n} bytes at offset {}, have {}",
+                self.pos,
+                self.bytes.len() - self.pos
+            ));
+        }
+        let s = &self.bytes[self.pos..end];
+        self.pos = end;
+        Ok(s)
+    }
+
+    /// Read a length-prefixed opaque value, skipping its alignment padding.
+    fn read_opaque(&mut self) -> Result<Vec<u8>, String> {
+        let len = self.read_u32()? as usize;
+        let raw = self.read_fixed(len)?.to_vec();
+        let pad = (4 - (len % 4)) % 4;
+        self.read_fixed(pad)?;
+        Ok(raw)
+    }
+}
+
+/// Parse a base64 `SorobanTransactionData` XDR blob into the pieces
+/// `simulateTransaction` callers need: the ledger footprint, the embedded
+/// resource fee, and the instruction/IO byte budgets.
+///
+/// The wire layout (see `Stellar-transaction.x` / CAP-0046-07) is:
+///
+/// ```text
+/// struct SorobanTransactionData {
+///     ExtensionPoint ext;          // uint32 discriminant, 0 today
+///     SorobanResources resources;  // { footprint, instructions, readBytes, writeBytes }
+///     int64 resourceFee;
+/// }
+/// struct LedgerFootprint { LedgerKey readOnly<>; LedgerKey readWrite<>; }
+/// ```
+fn parse_transaction_data(
+    xdr_base64: &str,
+) -> Result<(ResourceFootprint, i64, u32, u32, u32), String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in transactionData: {e}"))?;
+    let mut r = XdrReader::new(&raw);
+
+    let ext = r.read_u32()?;
+    if ext != 0 {
+        return Err(format!("unsupported SorobanTransactionData extension {ext}"));
+    }
+
+    let read_only_len = r.read_u32()? as usize;
+    let mut read_only = Vec::with_capacity(read_only_len);
+    for _ in 0..read_only_len {
+        read_only.push(read_ledger_key(&mut r)?);
+    }
+
+    let read_write_len = r.read_u32()? as usize;
+    let mut read_write = Vec::with_capacity(read_write_len);
+    for _ in 0..read_write_len {
+        read_write.push(read_ledger_key(&mut r)?);
+    }
+
+    let instructions = r.read_u32()?;
+    let read_bytes = r.read_u32()?;
+    let write_bytes = r.read_u32()?;
+    let resource_fee = r.read_i64()?;
+
+    Ok((
+        ResourceFootprint {
+            read_only,
+            read_write,
+        },
+        resource_fee,
+        instructions,
+        read_bytes,
+        write_bytes,
+    ))
+}
+
+/// `LedgerEntryType` discriminants (see `Stellar-ledger-entries.x`).
+const LEDGER_ACCOUNT: u32 = 0;
+const LEDGER_TRUSTLINE: u32 = 1;
+const LEDGER_OFFER: u32 = 2;
+const LEDGER_DATA: u32 = 3;
+const LEDGER_CLAIMABLE_BALANCE: u32 = 4;
+const LEDGER_LIQUIDITY_POOL: u32 = 5;
+const LEDGER_CONTRACT_DATA: u32 = 6;
+const LEDGER_CONTRACT_CODE: u32 = 7;
+const LEDGER_CONFIG_SETTING: u32 = 8;
+const LEDGER_TTL: u32 = 9;
+
+/// Read one `LedgerKey` from the footprint, consuming exactly its bytes.
+fn read_ledger_key(r: &mut XdrReader<'_>) -> Result<LedgerKey, String> {
+    let kind = r.read_u32()?;
+    match kind {
+        LEDGER_ACCOUNT => Ok(LedgerKey::Account {
+            account_id: read_account_id(r)?,
+        }),
+        LEDGER_TRUSTLINE => Ok(LedgerKey::Trustline {
+            account_id: read_account_id(r)?,
+            asset: read_trustline_asset(r)?,
+        }),
+        LEDGER_OFFER => Ok(LedgerKey::Offer {
+            seller_id: read_account_id(r)?,
+            offer_id: r.read_i64()?,
+        }),
+        LEDGER_DATA => Ok(LedgerKey::Data {
+            account_id: read_account_id(r)?,
+            name: String::from_utf8_lossy(&r.read_opaque()?).into_owned(),
+        }),
+        LEDGER_CLAIMABLE_BALANCE => Ok(LedgerKey::ClaimableBalance {
+            balance_id: read_claimable_balance_id(r)?,
+        }),
+        LEDGER_LIQUIDITY_POOL => Ok(LedgerKey::LiquidityPool {
+            pool_id: hex_encode(r.read_fixed(32)?),
+        }),
+        LEDGER_CONTRACT_DATA => {
+            let contract = read_sc_address(r)?;
+            skip_scval(r)?;
+            let durability = match r.read_u32()? {
+                0 => "temporary",
+                1 => "persistent",
+                other => return Err(format!("unknown ContractDataDurability {other}")),
+            };
+            Ok(LedgerKey::ContractData {
+                contract,
+                durability: durability.to_string(),
+            })
+        }
+        LEDGER_CONTRACT_CODE => Ok(LedgerKey::ContractCode {
+            hash: hex_encode(r.read_fixed(32)?),
+        }),
+        LEDGER_CONFIG_SETTING => Ok(LedgerKey::ConfigSetting { id: r.read_u32()? }),
+        LEDGER_TTL => Ok(LedgerKey::Ttl {
+            key_hash: hex_encode(r.read_fixed(32)?),
+        }),
+        other => Err(format!("unsupported LedgerKey type {other}")),
+    }
+}
+
+/// Read a StrKey-shaped `AccountID` (a `PublicKey` union with a single
+/// ed25519 case) and return the 32-byte key as hex.
+fn read_account_id(r: &mut XdrReader<'_>) -> Result<String, String> {
+    let pk_type = r.read_u32()?;
+    if pk_type != 0 {
+        return Err(format!("unsupported PublicKey type {pk_type}"));
+    }
+    Ok(hex_encode(r.read_fixed(32)?))
+}
+
+/// Read a `SCAddress` union and return a hex encoding of its identity.
+fn read_sc_address(r: &mut XdrReader<'_>) -> Result<String, String> {
+    match r.read_u32()? {
+        // SC_ADDRESS_TYPE_ACCOUNT: PublicKey union (ed25519 only).
+        0 => read_account_id(r),
+        // SC_ADDRESS_TYPE_CONTRACT / _LIQUIDITY_POOL: 32-byte hash.
+        1 | 4 => Ok(hex_encode(r.read_fixed(32)?)),
+        // SC_ADDRESS_TYPE_MUXED_ACCOUNT: MuxedEd25519Account { id, ed25519 }.
+        2 => {
+            let id = r.read_fixed(8)?;
+            let key = r.read_fixed(32)?;
+            let mut out = Vec::with_capacity(40);
+            out.extend_from_slice(id);
+            out.extend_from_slice(key);
+            Ok(hex_encode(&out))
+        }
+        // SC_ADDRESS_TYPE_CLAIMABLE_BALANCE: ClaimableBalanceID union.
+        3 => read_claimable_balance_id(r),
+        other => Err(format!("unsupported ScAddress type {other}")),
+    }
+}
+
+/// Read a `ClaimableBalanceID` union (only the v0 hash case exists today).
+fn read_claimable_balance_id(r: &mut XdrReader<'_>) -> Result<String, String> {
+    let kind = r.read_u32()?;
+    if kind != 0 {
+        return Err(format!("unsupported ClaimableBalanceID type {kind}"));
+    }
+    Ok(hex_encode(r.read_fixed(32)?))
+}
+
+/// Read a `TrustLineAsset` union and render it as `code:issuer` / `native`.
+fn read_trustline_asset(r: &mut XdrReader<'_>) -> Result<String, String> {
+    let kind = r.read_u32()?;
+    match kind {
+        // ASSET_TYPE_NATIVE
+        0 => Ok("native".to_string()),
+        // ASSET_TYPE_CREDIT_ALPHANUM4 / _ALPHANUM12
+        1 | 2 => {
+            let code_len = if kind == 1 { 4 } else { 12 };
+            let code = r.read_fixed(code_len)?;
+            let code = code
+                .iter()
+                .take_while(|&&b| b != 0)
+                .map(|&b| b as char)
+                .collect::<String>();
+            let issuer = read_account_id(r)?;
+            Ok(format!("{code}:{issuer}"))
+        }
+        // ASSET_TYPE_POOL_SHARE
+        3 => Ok(format!("pool_share:{}", hex_encode(r.read_fixed(32)?))),
+        other => Err(format!("unsupported TrustLineAsset type {other}")),
+    }
+}
+
+/// Skip one XDR-encoded `ScVal`, so the cursor lands on the field after it.
+///
+/// This must decode exactly (not guess) the value's length — e.g. a
+/// `contract_data` footprint key carries an arbitrary `ScVal` as its key, so
+/// the cursor can only reach the following durability byte by walking that
+/// value. Discriminants match `Stellar-contract.x`.
+fn skip_scval(r: &mut XdrReader<'_>) -> Result<(), String> {
+    let kind = r.read_u32()?;
+    match kind {
+        // SCV_BOOL
+        0 => {
+            r.read_fixed(4)?;
+        }
+        // SCV_VOID
+        1 => {}
+        // SCV_ERROR: SCErrorType + (uint32 contractCode | SCErrorCode)
+        2 => {
+            r.read_fixed(8)?;
+        }
+        // SCV_U32 / SCV_I32
+        3 | 4 => {
+            r.read_fixed(4)?;
+        }
+        // SCV_U64 / SCV_I64 / SCV_TIMEPOINT / SCV_DURATION
+        5..=8 => {
+            r.read_fixed(8)?;
+        }
+        // SCV_U128 / SCV_I128
+        9 | 10 => {
+            r.read_fixed(16)?;
+        }
+        // SCV_U256 / SCV_I256
+        11 | 12 => {
+            r.read_fixed(32)?;
+        }
+        // SCV_BYTES / SCV_STRING / SCV_SYMBOL
+        13..=15 => {
+            r.read_opaque()?;
+        }
+        // SCV_VEC: optional `SCVec*`
+        16 => {
+            if r.read_u32()? != 0 {
+                let len = r.read_u32()? as usize;
+                for _ in 0..len {
+                    skip_scval(r)?;
+                }
+            }
+        }
+        // SCV_MAP: optional `SCMap*`
+        17 => {
+            if r.read_u32()? != 0 {
+                let len = r.read_u32()? as usize;
+                for _ in 0..len {
+                    skip_scval(r)?;
+                    skip_scval(r)?;
+                }
+            }
+        }
+        // SCV_ADDRESS
+        18 => skip_sc_address(r)?,
+        // SCV_CONTRACT_INSTANCE: ContractExecutable + optional SCMap storage
+        19 => {
+            skip_contract_executable(r)?;
+            if r.read_u32()? != 0 {
+                let len = r.read_u32()? as usize;
+                for _ in 0..len {
+                    skip_scval(r)?;
+                    skip_scval(r)?;
+                }
+            }
+        }
+        // SCV_LEDGER_KEY_CONTRACT_INSTANCE
+        20 => {}
+        // SCV_LEDGER_KEY_NONCE: SCNonceKey { int64 nonce }
+        21 => {
+            r.read_fixed(8)?;
+        }
+        // SCV_EXECUTABLE_TAG: ContractExecutable
+        22 => skip_contract_executable(r)?,
+        other => return Err(format!("unsupported ScVal discriminant {other}")),
+    }
+    Ok(())
+}
+
+/// Skip a `SCAddress` union.
+fn skip_sc_address(r: &mut XdrReader<'_>) -> Result<(), String> {
+    match r.read_u32()? {
+        // ACCOUNT: PublicKey union (ed25519)
+        0 => {
+            let pk = r.read_u32()?;
+            if pk != 0 {
+                return Err(format!("unsupported PublicKey type {pk}"));
+            }
+            r.read_fixed(32)?;
+        }
+        // CONTRACT / LIQUIDITY_POOL: Hash
+        1 | 4 => {
+            r.read_fixed(32)?;
+        }
+        // MUXED_ACCOUNT: MuxedEd25519Account { id, ed25519 }
+        2 => {
+            r.read_fixed(40)?;
+        }
+        // CLAIMABLE_BALANCE: ClaimableBalanceID union
+        3 => {
+            let cb = r.read_u32()?;
+            if cb != 0 {
+                return Err(format!("unsupported ClaimableBalanceID type {cb}"));
+            }
+            r.read_fixed(32)?;
+        }
+        other => return Err(format!("unsupported ScAddress type {other}")),
+    }
+    Ok(())
+}
+
+/// Skip a `ContractExecutable` union.
+fn skip_contract_executable(r: &mut XdrReader<'_>) -> Result<(), String> {
+    match r.read_u32()? {
+        // CONTRACT_EXECUTABLE_WASM: Hash
+        0 => {
+            r.read_fixed(32)?;
+        }
+        // CONTRACT_EXECUTABLE_STELLAR_ASSET: void
+        1 => {}
+        // CONTRACT_EXECUTABLE_EXTERNAL_REF: SCAddress + SCString tag
+        2 => {
+            skip_sc_address(r)?;
+            r.read_opaque()?;
+        }
+        other => return Err(format!("unsupported ContractExecutable type {other}")),
+    }
+    Ok(())
+}
+
+/// Collect the base64 diagnostic events from a `simulateTransaction` result.
+fn extract_events_vec(result: &serde_json::Value) -> Vec<String> {
+    result
+        .get("events")
+        .and_then(|v| v.as_array())
+        .map(|events| {
+            events
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse a raw `simulateTransaction` JSON-RPC response body into a
+/// [`SimulationResult`], or a typed [`SimulationError`].
+fn parse_simulation_response(
+    json: &serde_json::Value,
+) -> Result<SimulationResult, SimulationError> {
+    // A JSON-RPC-level error object means the endpoint rejected the request.
+    if let Some(err) = json.get("error") {
+        let code = err.get("code").and_then(|v| v.as_i64()).unwrap_or(-32603);
+        let message = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown JSON-RPC error")
+            .to_string();
+        return Err(SimulationError::Rpc { code, message });
+    }
+
+    let result = json.get("result").ok_or_else(|| {
+        SimulationError::Network("simulateTransaction response is missing `result`".to_string())
+    })?;
+
+    let events = extract_events_vec(result);
+
+    // `result.error` is how the RPC reports a reverted host function call.
+    if let Some(err) = result.get("error").and_then(|v| v.as_str()) {
+        return Err(SimulationError::Contract {
+            message: err.to_string(),
+            events,
+        });
+    }
+
+    let min_resource_fee = result
+        .get("minResourceFee")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| {
+            SimulationError::Network(
+                "simulateTransaction response is missing a valid `minResourceFee`".to_string(),
+            )
+        })?;
+
+    let (footprint, resource_fee, instructions, read_bytes, write_bytes) = match result
+        .get("transactionData")
+        .and_then(|v| v.as_str())
+    {
+        Some(data) => parse_transaction_data(data).map_err(SimulationError::Network)?,
+        None => (ResourceFootprint::default(), 0, 0, 0, 0),
+    };
+
+    let raw_result_xdr = result
+        .get("results")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|r| r.get("xdr"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    // Best-effort decode of the return value. A mutating invocation commonly
+    // returns a scalar or void — still valid, just not the map shape the
+    // Trellis read-only queries use — so a decode failure is recorded rather
+    // than failing the whole simulation.
+    let (decoded_result, result_decode_error) = match raw_result_xdr.as_deref() {
+        Some(xdr) => match decode_scval_json(xdr) {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e)),
+        },
+        None => (None, None),
+    };
+
+    Ok(SimulationResult {
+        min_resource_fee,
+        resource_fee,
+        footprint,
+        instructions,
+        read_bytes,
+        write_bytes,
+        result: decoded_result,
+        raw_result_xdr,
+        result_decode_error,
+        events,
+        latest_ledger: result.get("latestLedger").and_then(|v| v.as_u64()),
+    })
+}
+
 /// Resolve which `stellar` executable to invoke.
 ///
 /// The integration suite (`tests/cli_integration.rs`) sets
@@ -96,6 +745,22 @@ pub fn decode_scval_result(xdr_base64: &str) -> Result<ContractResult, String> {
     let val = parse_scval(&raw)
         .map_err(|e| format!("failed to parse ScVal XDR: {e}"))?;
     scval_to_contract_result(&val)
+}
+
+/// Decode a base64-encoded Soroban `ScVal` XDR result into a
+/// [`serde_json::Value`].
+///
+/// Unlike [`decode_scval_result`], which requires the top-level value to be a
+/// map (the shape of the Trellis read-only queries), this accepts *any*
+/// `ScVal` and is therefore the right decoder for a `simulateTransaction`
+/// `results[0].xdr` payload — a mutating invocation's simulated return value
+/// is often a scalar or `void` rather than a map.
+pub fn decode_scval_json(xdr_base64: &str) -> Result<serde_json::Value, String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in ScVal result: {e}"))?;
+    let val = parse_scval(&raw)
+        .map_err(|e| format!("failed to parse ScVal XDR: {e}"))?;
+    Ok(scval_to_json(&val))
 }
 
 /// Minimal base64 decoder (standard alphabet, `=` padding) so the CLI does
@@ -147,6 +812,8 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 enum ScVal {
     Void,
     Bool(bool),
+    /// `SCV_ERROR` — an `SCError` union rendered as a diagnostic string.
+    Error(String),
     U32(u32),
     I32(i32),
     U64(u64),
@@ -187,45 +854,91 @@ fn read_u64(cur: &mut std::io::Cursor<&[u8]>) -> Result<u64, String> {
     Ok(u64::from_be_bytes(buf))
 }
 
+/// Read a length-prefixed XDR opaque value, consuming the 0–3 zero bytes of
+/// padding that align it to the next 4-byte boundary.
+///
+/// The padding matters for nested values: without it a short symbol inside a
+/// map/vec would leave the cursor misaligned and every following field would
+/// be decoded from the wrong offset.
+fn read_opaque(cur: &mut std::io::Cursor<&[u8]>) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let len = read_u32(cur)? as usize;
+    let mut buf = vec![0u8; len];
+    cur.read_exact(&mut buf)
+        .map_err(|e| format!("unexpected end of XDR: {e}"))?;
+    let pad = (4 - (len % 4)) % 4;
+    if pad > 0 {
+        let mut skip = [0u8; 4];
+        cur.read_exact(&mut skip[..pad])
+            .map_err(|e| format!("unexpected end of XDR padding: {e}"))?;
+    }
+    Ok(buf)
+}
+
 fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
     let disc = read_u32(cur)?;
     match disc {
-        0 => Ok(ScVal::Void),
-        1 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
-        3 => Ok(ScVal::I32(read_u32(cur)? as i32)),
-        4 => Ok(ScVal::U32(read_u32(cur)?)),
-        5 => Ok(ScVal::I64(read_u64(cur)? as i64)),
-        6 => Ok(ScVal::U64(read_u64(cur)?)),
+        0 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
+        1 => Ok(ScVal::Void),
+        2 => {
+            let kind = read_u32(cur)?;
+            let code = read_u32(cur)?;
+            Ok(ScVal::Error(format!("SCError(type={kind}, code={code})")))
+        }
+        3 => Ok(ScVal::U32(read_u32(cur)?)),
+        4 => Ok(ScVal::I32(read_u32(cur)? as i32)),
+        5 => Ok(ScVal::U64(read_u64(cur)?)),
+        6 => Ok(ScVal::I64(read_u64(cur)? as i64)),
+        7 | 8 => Ok(ScVal::U64(read_u64(cur)?)),
+        9 => {
+            let hi = read_u64(cur)? as u128;
+            let lo = read_u64(cur)? as u128;
+            Ok(ScVal::U128((hi << 64) | lo))
+        }
         10 => {
-            let len = read_u32(cur)? as usize;
-            let mut buf = vec![0u8; len];
-            use std::io::Read;
-            cur.read_exact(&mut buf)
-                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
-            Ok(ScVal::Bytes(buf))
+            let hi = read_u64(cur)? as i64 as i128;
+            let lo = read_u64(cur)? as i128;
+            Ok(ScVal::I128((hi << 64) | lo))
         }
-        14 => {
-            let len = read_u32(cur)? as usize;
-            let mut buf = vec![0u8; len];
-            use std::io::Read;
-            cur.read_exact(&mut buf)
-                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
-            Ok(ScVal::String(String::from_utf8_lossy(&buf).into_owned()))
-        }
-        15 => {
-            let len = read_u32(cur)? as usize;
-            let mut buf = vec![0u8; len];
-            use std::io::Read;
-            cur.read_exact(&mut buf)
-                .map_err(|e| format!("unexpected end of XDR: {e}"))?;
-            Ok(ScVal::Symbol(String::from_utf8_lossy(&buf).into_owned()))
-        }
+        13 => Ok(ScVal::Bytes(read_opaque(cur)?)),
+        14 => Ok(ScVal::String(
+            String::from_utf8_lossy(&read_opaque(cur)?).into_owned(),
+        )),
+        15 => Ok(ScVal::Symbol(
+            String::from_utf8_lossy(&read_opaque(cur)?).into_owned(),
+        )),
+        // SCV_VEC: `SCVec*` — an optional pointer, so a presence flag
+        // precedes the length. A null vec decodes to an empty vec.
         16 => {
-            // ScVal::Address — the payload is a ScAddress union. We only
-            // need a printable form; the contract's read-only queries return
-            // account/contract addresses encoded as StrKey in the CLI's
-            // existing output, so we render the raw XDR bytes as hex here
-            // and let callers that need StrKey re-encode.
+            if read_u32(cur)? == 0 {
+                return Ok(ScVal::Vec(Vec::new()));
+            }
+            let len = read_u32(cur)? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(read_scval(cur)?);
+            }
+            Ok(ScVal::Vec(items))
+        }
+        // SCV_MAP: `SCMap*` — same optional-pointer encoding.
+        17 => {
+            if read_u32(cur)? == 0 {
+                return Ok(ScVal::Map(Vec::new()));
+            }
+            let len = read_u32(cur)? as usize;
+            let mut entries = Vec::with_capacity(len);
+            for _ in 0..len {
+                let k = read_scval(cur)?;
+                let v = read_scval(cur)?;
+                entries.push((k, v));
+            }
+            Ok(ScVal::Map(entries))
+        }
+        // SCV_ADDRESS: the payload is a ScAddress union. We only need a
+        // printable form; the contract's read-only queries return
+        // account/contract addresses, so we render the raw XDR bytes as hex
+        // and let callers that need StrKey re-encode.
+        18 => {
             let addr_type = read_u32(cur)?;
             match addr_type {
                 0 => {
@@ -240,8 +953,8 @@ fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
                         .map_err(|e| format!("unexpected end of XDR: {e}"))?;
                     Ok(ScVal::Address(hex_encode(&buf)))
                 }
-                1 => {
-                    // SC_ADDRESS_TYPE_CONTRACT: 32-byte hash.
+                // SC_ADDRESS_TYPE_CONTRACT / _LIQUIDITY_POOL: 32-byte hash.
+                1 | 4 => {
                     let mut buf = [0u8; 32];
                     use std::io::Read;
                     cur.read_exact(&mut buf)
@@ -250,26 +963,6 @@ fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
                 }
                 other => Err(format!("unsupported ScAddress type {other}")),
             }
-        }
-        17 => {
-            // ScVal::Vec
-            let len = read_u32(cur)? as usize;
-            let mut items = Vec::with_capacity(len);
-            for _ in 0..len {
-                items.push(read_scval(cur)?);
-            }
-            Ok(ScVal::Vec(items))
-        }
-        18 => {
-            // ScVal::Map
-            let len = read_u32(cur)? as usize;
-            let mut entries = Vec::with_capacity(len);
-            for _ in 0..len {
-                let k = read_scval(cur)?;
-                let v = read_scval(cur)?;
-                entries.push((k, v));
-            }
-            Ok(ScVal::Map(entries))
         }
         other => Err(format!("unsupported ScVal discriminant {other}")),
     }
@@ -307,6 +1000,7 @@ fn scval_to_json(val: &ScVal) -> serde_json::Value {
     match val {
         ScVal::Void => Value::Null,
         ScVal::Bool(b) => Value::Bool(*b),
+        ScVal::Error(e) => Value::String(e.clone()),
         ScVal::U32(n) => Value::from(*n),
         ScVal::I32(n) => Value::from(*n),
         ScVal::U64(n) => Value::from(*n),
@@ -588,6 +1282,107 @@ impl RpcClient {
             std::thread::sleep(std::time::Duration::from_secs(1));
             poll_attempt += 1;
         }
+    }
+
+    /// Simulate a contract invocation via the native Soroban JSON-RPC
+    /// `simulateTransaction` method, without signing or submitting anything.
+    ///
+    /// This is the native counterpart to shelling out to `stellar contract
+    /// invoke`: callers pass a base64 `TransactionEnvelope` XDR, exactly like
+    /// [`RpcClient::send_and_poll`], and receive the recommended resource
+    /// footprint, minimum resource fee and — for a read-only invocation — the
+    /// decoded return value.
+    ///
+    /// Unlike `send_and_poll`, this never mutates chain state; it is also the
+    /// mechanism for fetching a read-only result with no signing key at all,
+    /// because the network executes the invocation without ever asking for a
+    /// signature.
+    ///
+    /// Transient network failures are retried with the same exponential
+    /// backoff as the rest of the CLI (`STELLAR_RPC_RETRIES`, default 3).
+    /// Contract-level failures (`result.error`) become
+    /// [`SimulationError::Contract`] and are never retried.
+    pub fn simulate_transaction(
+        config: &Config,
+        envelope_xdr: &str,
+        quiet: bool,
+    ) -> Result<SimulationResult, SimulationError> {
+        let max_retries: u32 = std::env::var("STELLAR_RPC_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+
+        const BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
+
+        let mut attempt = 0u32;
+        loop {
+            match Self::simulate_once(config, envelope_xdr) {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    // Only transport-level failures are transient; an RPC or
+                    // contract rejection will fail identically on every retry.
+                    let transient = match &err {
+                        SimulationError::Network(msg) => is_transient_error(msg),
+                        SimulationError::Rpc { .. } | SimulationError::Contract { .. } => false,
+                    };
+                    if !transient || attempt >= max_retries {
+                        return Err(err);
+                    }
+
+                    attempt += 1;
+                    let idx = ((attempt - 1) as usize).min(BACKOFF_MS.len() - 1);
+                    let delay_ms = BACKOFF_MS[idx] + jitter_millis();
+
+                    if !quiet {
+                        eprintln!(
+                            "simulateTransaction attempt {attempt}/{max_retries} failed \
+                             (transient error), retrying in {delay_ms}ms…"
+                        );
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+            }
+        }
+    }
+
+    /// A single native `simulateTransaction` request — no retry logic here.
+    fn simulate_once(
+        config: &Config,
+        envelope_xdr: &str,
+    ) -> Result<SimulationResult, SimulationError> {
+        let client = reqwest::blocking::Client::new();
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "simulateTransaction",
+            "params": {
+                "transaction": envelope_xdr,
+            }
+        });
+
+        apply_rate_limit();
+
+        let response = client
+            .post(config.rpc_url.as_str())
+            .json(&body)
+            .send()
+            .map_err(|e| SimulationError::Network(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(SimulationError::Network(format!(
+                "HTTP {} from {}",
+                status.as_u16(),
+                config.rpc_url
+            )));
+        }
+
+        let json: serde_json::Value = response.json().map_err(|e| {
+            SimulationError::Network(format!("malformed simulateTransaction response: {e}"))
+        })?;
+
+        parse_simulation_response(&json)
     }
     ///
     /// Backoff schedule (before jitter): 1 s, 2 s, 4 s, 8 s (capped).
@@ -1661,5 +2456,258 @@ mod tests {
         cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
         let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
         assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
+    }
+
+    // --- #476: native transaction simulation / resource-fee parsing ---
+
+    /// The `transactionData` from the official `simulateTransaction` docs
+    /// example: two read-only keys (contract data + contract code) and one
+    /// read-write contract-data key.
+    const DOCS_TRANSACTION_DATA_B64: &str = "AAAAAAAAAAIAAAAGAAAAAcwD/nT9D7Dc2LxRdab+2vEUF8B+XoN7mQW21oxPT8ALAAAAFAAAAAEAAAAHy8vNUZ8vyZ2ybPHW0XbSrRtP7gEWsJ6zDzcfY9P8z88AAAABAAAABgAAAAHMA/50/Q+w3Ni8UXWm/trxFBfAfl6De5kFttaMT0/ACwAAABAAAAABAAAAAgAAAA8AAAAHQ291bnRlcgAAAAASAAAAAAAAAAAg4dbAxsGAGICfBG3iT2cKGYQ6hK4sJWzZ6or1C5v6GAAAAAEAHfKyAAAFiAAAAIgAAAAAAAAAAw==";
+
+    /// `ScVal::Map { status: "active", milestone_count: 3 }` as base64 XDR.
+    const MAP_RESULT_B64: &str = "AAAAEQAAAAEAAAACAAAADwAAAAZzdGF0dXMAAAAAAA8AAAAGYWN0aXZlAAAAAAAPAAAAD21pbGVzdG9uZV9jb3VudAAAAAADAAAAAw==";
+
+    #[test]
+    fn parse_transaction_data_reads_footprint_and_fees() {
+        let (footprint, resource_fee, instructions, read_bytes, write_bytes) =
+            parse_transaction_data(DOCS_TRANSACTION_DATA_B64).expect("docs example must parse");
+
+        assert_eq!(footprint.read_only.len(), 2);
+        assert_eq!(footprint.read_write.len(), 1);
+        assert_eq!(resource_fee, 3);
+        assert_eq!(instructions, 1_962_674);
+        assert_eq!(read_bytes, 1_416);
+        assert_eq!(write_bytes, 136);
+        // The read-only set is the contract's instance entry plus its WASM.
+        assert!(matches!(
+            &footprint.read_only[0],
+            LedgerKey::ContractData { .. }
+        ));
+        assert!(matches!(&footprint.read_only[1], LedgerKey::ContractCode { .. }));
+        assert!(matches!(
+            &footprint.read_write[0],
+            LedgerKey::ContractData { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_transaction_data_rejects_bad_base64() {
+        let err = parse_transaction_data("not base64!!").unwrap_err();
+        assert!(err.contains("base64"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_scval_json_decodes_a_map() {
+        let value = decode_scval_json(MAP_RESULT_B64).expect("map must decode");
+        assert_eq!(value["status"], serde_json::json!("active"));
+        assert_eq!(value["milestone_count"], serde_json::json!(3));
+    }
+
+    // --- #476: mock-server tests for simulate_transaction ---
+
+    /// Spawn a one-shot mock JSON-RPC HTTP server on an ephemeral port and
+    /// return its URL plus a join handle. It answers exactly one request with
+    /// `status_line` and `body`, then exits (dropping the listener).
+    fn spawn_mock_rpc(
+        status_line: &'static str,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let addr = listener.local_addr().expect("mock server addr");
+        let url = format!("http://127.0.0.1:{}/", addr.port());
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock request");
+
+            // Drain the request headers so we can honor Content-Length when
+            // reading (and discarding) the body.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut buf).expect("read request");
+                if n == 0 {
+                    break request.len();
+                }
+                request.extend_from_slice(&buf[..n]);
+                if let Some(pos) = find_subsequence(&request, b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+
+            let content_length = request[..header_end]
+                .split(|&b| b == b'\n')
+                .find_map(|line| {
+                    let line = String::from_utf8_lossy(line);
+                    let (name, value) = line.split_once(':')?;
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+
+            while request.len() < header_end + content_length {
+                let n = stream.read(&mut buf).expect("read request body");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+            }
+
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write mock response");
+            stream.flush().ok();
+        });
+
+        (url, handle)
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn cfg_for_url(url: &str) -> Config {
+        Config {
+            rpc_url: url.to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: "CAABC123".to_string(),
+            source_key: "alice".to_string(),
+        }
+    }
+
+    #[test]
+    fn simulate_transaction_parses_successful_simulation() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "transactionData": DOCS_TRANSACTION_DATA_B64,
+                "minResourceFee": "90353",
+                "events": ["AAAA"],
+                "results": [ { "auth": [], "xdr": MAP_RESULT_B64 } ],
+                "latestLedger": 2_552_139u64,
+            }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let sim = RpcClient::simulate_transaction(&cfg, "AAAAAgAAAAA=", true)
+            .expect("simulation should succeed");
+
+        assert_eq!(sim.min_resource_fee, 90_353);
+        assert_eq!(sim.resource_fee, 3);
+        assert_eq!(sim.instructions, 1_962_674);
+        assert_eq!(sim.read_bytes, 1_416);
+        assert_eq!(sim.write_bytes, 136);
+        assert_eq!(sim.footprint.read_only.len(), 2);
+        assert_eq!(sim.footprint.read_write.len(), 1);
+        assert_eq!(sim.events, vec!["AAAA".to_string()]);
+        assert_eq!(sim.latest_ledger, Some(2_552_139));
+        assert!(sim.result_decode_error.is_none());
+
+        let result = sim.result.expect("decoded result");
+        assert_eq!(result["status"], serde_json::json!("active"));
+        assert_eq!(result["milestone_count"], serde_json::json!(3));
+
+        handle.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn simulate_transaction_surfaces_contract_error_distinctly() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "error": "Host function call failed: contract error #7",
+                "events": ["ZGlhZw=="],
+                "latestLedger": 10,
+            }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let err = RpcClient::simulate_transaction(&cfg, "AAAAAgAAAAA=", true)
+            .expect_err("a reverted host call must fail the simulation");
+
+        match &err {
+            SimulationError::Contract { message, events } => {
+                assert!(
+                    message.contains("Host function call failed"),
+                    "got: {message}"
+                );
+                assert_eq!(events, &vec!["ZGlhZw==".to_string()]);
+            }
+            other => panic!("expected Contract error, got {other:?}"),
+        }
+        // A contract-level failure must be distinguishable from a network one.
+        assert!(!matches!(&err, SimulationError::Network(_)));
+        assert!(!matches!(&err, SimulationError::Rpc { .. }));
+        assert!(err.to_string().contains("contract error"));
+
+        handle.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn simulate_transaction_reports_jsonrpc_error_separately() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32602, "message": "invalid transaction envelope" }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let err = RpcClient::simulate_transaction(&cfg, "not-xdr", true)
+            .expect_err("a JSON-RPC error must fail");
+
+        match &err {
+            SimulationError::Rpc { code, message } => {
+                assert_eq!(*code, -32602);
+                assert!(message.contains("invalid transaction envelope"), "got: {message}");
+            }
+            other => panic!("expected Rpc error, got {other:?}"),
+        }
+        assert!(!matches!(&err, SimulationError::Contract { .. }));
+        assert!(err.to_string().contains("RPC error"));
+
+        handle.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn simulate_transaction_reports_http_failure_as_network_error() {
+        // 400 is deliberately *not* a transient status, so the retry loop does
+        // not kick in and the test stays fast and deterministic.
+        let (url, handle) = spawn_mock_rpc("400 Bad Request", String::new());
+        let cfg = cfg_for_url(&url);
+
+        let err = RpcClient::simulate_transaction(&cfg, "AAAAAgAAAAA=", true)
+            .expect_err("HTTP 400 must fail");
+
+        match err {
+            SimulationError::Network(msg) => assert!(msg.contains("400"), "got: {msg}"),
+            other => panic!("expected Network error, got {other:?}"),
+        }
+
+        handle.join().expect("mock server thread");
     }
 }

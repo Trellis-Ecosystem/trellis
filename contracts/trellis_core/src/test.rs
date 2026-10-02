@@ -1,6 +1,6 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events, Ledger},
+    testutils::{storage::Persistent, Address as _, Events},
     token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
 };
 
@@ -252,8 +252,9 @@ fn test_happy_path() {
 /// that were never escrowed for that milestone.
 ///
 /// Each non-Pending status is checked individually because they are the ones
-/// that reach a fund-moving entrypoint; `Completed` and `Refunded` are inert
-/// dead ends, but are rejected too so the invariant stays "Pending only".
+/// that reach a fund-moving entrypoint; `Completed`, `Refunded` and
+/// `Cancelled` are inert dead ends, but are rejected too so the invariant stays
+/// "Pending only".
 #[test]
 fn test_init_rejects_non_pending_initial_milestone_status() {
     // WorkSubmitted → approve_and_release; Disputed → resolve_dispute.
@@ -264,6 +265,7 @@ fn test_init_rejects_non_pending_initial_milestone_status() {
         EscrowStatus::Completed,
         EscrowStatus::Disputed,
         EscrowStatus::Refunded,
+        EscrowStatus::Cancelled,
     ];
 
     for (i, status) in forbidden.iter().enumerate() {
@@ -424,6 +426,126 @@ fn test_init_accepts_pending_milestones_happy_path() {
     assert_eq!(token_client.balance(&client.address), 0);
 }
 
+/// An agreement with no milestones can never transition through any state, so
+/// `init` must reject an empty milestone set with `EmptyMilestoneSet` rather
+/// than permanently burning the storage entry (#390).
+///
+/// The adjacent case is the failure ordering: the rejection has to happen
+/// before any state is written, so the same `agreement_id` remains usable and
+/// a subsequent well-formed `init` succeeds instead of hitting
+/// `AlreadyInitialized`.
+#[test]
+fn test_init_empty_milestones_fails() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 122);
+    let empty: Vec<Milestone> = Vec::new(&env);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &empty,
+        &dispute_resolver,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::EmptyMilestoneSet)),
+        "init with an empty milestone set must return EmptyMilestoneSet"
+    );
+
+    // Adjacent case: the rejected call must not have written anything, so the
+    // same ID is still free for a well-formed agreement.
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected empty-milestone init must not persist an agreement"
+    );
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    assert_eq!(
+        client.get_agreement(&id).milestones.len(),
+        1,
+        "the agreement ID must remain usable after an empty-milestone rejection"
+    );
+}
+
+/// The dispute resolver must be a neutral third party: letting the payer be
+/// the resolver would hand it unilateral control over disputes it raised
+/// itself, so `init` must return `ResolverCannotBeParty` (#389).
+#[test]
+fn test_payer_as_resolver_rejected() {
+    let (env, payer, payee, _dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 123);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &payer, // payer doubles as its own dispute resolver
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ResolverCannotBeParty)),
+        "init with dispute_resolver == payer must return ResolverCannotBeParty"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected resolver-as-party init must not persist an agreement"
+    );
+}
+
+/// The same neutrality requirement applies to the payee (#389).
+///
+/// The adjacent case is the happy path: a resolver distinct from both parties
+/// is still accepted, so the new check is not over-broad.
+#[test]
+fn test_payee_as_resolver_rejected() {
+    let (env, payer, payee, _dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 124);
+
+    let result = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &payee, // payee doubles as its own dispute resolver
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ResolverCannotBeParty)),
+        "init with dispute_resolver == payee must return ResolverCannotBeParty"
+    );
+    assert!(
+        client.try_get_agreement(&id).is_err(),
+        "a rejected resolver-as-party init must not persist an agreement"
+    );
+
+    // Adjacent case: a genuinely neutral third-party resolver is accepted.
+    let neutral = Address::generate(&env);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &neutral,
+    );
+    assert_eq!(
+        client.get_agreement(&id).dispute_resolver,
+        neutral,
+        "a neutral dispute resolver must still be accepted"
+    );
+}
+
 /// `lock_funds` moves the payer's tokens via a single `token::transfer` that
 /// the payer authorizes with `require_auth()` — there is no approve/allowance
 /// step anywhere in the crate (#383).
@@ -441,7 +563,6 @@ fn test_lock_funds_needs_no_token_allowance() {
     let id = agreement_id(&env, 90);
     let amount: i128 = 1_000;
 
-    allow_all_auth(&env);
     client.init(
         &id,
         &payer,
@@ -459,7 +580,6 @@ fn test_lock_funds_needs_no_token_allowance() {
     assert!(payer_before >= amount, "fixture must fund the payer");
 
     // No approve / set_allowance call is made here — deliberately.
-    allow_all_auth(&env);
     client.lock_funds(&id, &0u32);
 
     assert_eq!(
@@ -527,7 +647,7 @@ fn test_dispute_and_refund_to_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payee raises the dispute (exercises the either-party auth path).
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Resolver rules in payer's favour.
     client.resolve_dispute(&id, &0u32, &true);
@@ -542,8 +662,18 @@ fn test_dispute_and_refund_to_payer() {
         0,
         "contract balance should be zero after resolution"
     );
-}
 
+    // Adjacent regression guard: a dispute refund must still persist
+    // `Refunded` — only the never-funded cancellation path moved to
+    // `Cancelled`, so the two histories remain distinguishable.
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Refunded,
+        "dispute refund must still persist Refunded"
+    );
+}
 
 /// Cancel a milestone that was never funded, then verify a second cancel fails.
 #[test]
@@ -563,12 +693,23 @@ fn test_cancel_unfunded_milestone() {
     // First cancel — must succeed (milestone is still Pending).
     client.cancel_unfunded_milestone(&id, &0u32);
 
-    // Second cancel — must fail (milestone is now Refunded, not Pending).
+    // The stored status must be `Cancelled`, not `Refunded` — a reader of
+    // get_agreement/get_milestone must be able to distinguish a never-funded
+    // cancellation from a dispute refund without replaying the event log.
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Cancelled,
+        "cancellation must persist Cancelled, not Refunded"
+    );
+
+    // Second cancel — must fail (milestone is now Cancelled, not Pending).
     let result = client.try_cancel_unfunded_milestone(&id, &0u32);
     assert_eq!(
         result,
         Err(Ok(TrellisError::InvalidStateTransition)),
-        "second cancel on an already-Refunded milestone must return InvalidStateTransition"
+        "second cancel on an already-Cancelled milestone must return InvalidStateTransition"
     );
 }
 
@@ -597,6 +738,77 @@ fn test_cancel_funded_milestone_fails_with_invalid_state_transition() {
         result,
         Err(Ok(TrellisError::InvalidStateTransition)),
         "cancelling a Funded milestone must return InvalidStateTransition"
+    );
+}
+
+/// `proof_uri` is stored verbatim in the agreement's persistent entry, so an
+/// unbounded length would let a payee permanently inflate the agreement's
+/// storage footprint and rent for the lifetime of the entry, paying nothing
+/// beyond the transaction fee.
+///
+/// Both halves are asserted here: a proof one byte over the cap is rejected
+/// *and leaves no state behind* (the exploit this closes), and a proof of
+/// exactly `MAX_PROOF_URI_LEN` bytes is accepted and stored verbatim (the
+/// legitimate happy path).
+#[test]
+fn test_submit_work_proof_uri_length_bounds() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 5);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+
+    // Over the cap — rejected before any state is written.
+    let oversized = String::from_str(&env, &"x".repeat(MAX_PROOF_URI_LEN as usize + 1));
+    let result = client.try_submit_work(&id, &0u32, &Some(oversized));
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::ProofUriTooLong)),
+        "a proof_uri over MAX_PROOF_URI_LEN must be rejected"
+    );
+
+    // The rejected submission wrote nothing: still Funded, no proof stored.
+    let after_reject = client.get_agreement(&id);
+    let m0 = after_reject
+        .milestones
+        .get(0)
+        .expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::Funded,
+        "a rejected submission must not advance the milestone"
+    );
+    assert_eq!(
+        m0.proof_uri, None,
+        "a rejected submission must not store a proof"
+    );
+
+    // Exactly at the cap — accepted and stored verbatim.
+    let at_limit = String::from_str(&env, &"x".repeat(MAX_PROOF_URI_LEN as usize));
+    client.submit_work(&id, &0u32, &Some(at_limit));
+
+    let after_accept = client.get_agreement(&id);
+    let m0 = after_accept
+        .milestones
+        .get(0)
+        .expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::WorkSubmitted,
+        "a proof at exactly the cap must be accepted"
+    );
+    let stored = m0.proof_uri.expect("the accepted proof must be stored");
+    assert_eq!(
+        stored.len(),
+        MAX_PROOF_URI_LEN,
+        "the accepted proof must be stored verbatim at the cap length"
     );
 }
 
@@ -914,6 +1126,52 @@ fn test_get_agreement() {
     );
 }
 
+/// The `get_agreement` / `get_milestone` views go through
+/// `storage::read_agreement`, which renews the entry's TTL once the remaining
+/// lifetime drops below the renewal threshold — so a read is not strictly free
+/// of side effects. Above that threshold the renewal is a no-op, and this test
+/// locks that in: a read must leave the entry's TTL exactly where `init` put it.
+///
+/// The renew-on-read path itself cannot be driven from the test environment:
+/// advancing the ledger far enough to push the entry below the threshold also
+/// archives the contract instance, which the test host then rejects.
+#[test]
+fn test_view_calls_leave_ttl_untouched_above_threshold() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 25);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 100),
+        &dispute_resolver,
+    );
+
+    let key = crate::storage::DataKey::Agreement(id.clone());
+    let contract_id = client.address.clone();
+    // Persistent storage can only be inspected from inside a contract context.
+    let ttl =
+        |env: &Env| env.as_contract(&contract_id, || env.storage().persistent().get_ttl(&key));
+
+    let ttl_after_init = ttl(&env);
+    assert_eq!(
+        ttl_after_init,
+        crate::storage::LEDGER_BUMP,
+        "init must leave the entry with the full ~30-day TTL"
+    );
+
+    client.get_agreement(&id);
+    let _ = client.get_milestone(&id, &0u32);
+
+    assert_eq!(
+        ttl(&env),
+        ttl_after_init,
+        "reads above the renewal threshold must not change the entry's TTL"
+    );
+}
+
 /// Adjacent case to `test_get_agreement`: after a state transition, the whole
 /// `Agreement` read back must differ from the freshly-`init`ed one in exactly
 /// the milestone that moved — and in nothing else.
@@ -1031,12 +1289,12 @@ fn test_get_milestone_returns_correct_milestone() {
     assert_eq!(m.status, EscrowStatus::Pending, "status must be Pending");
 }
 
-/// `get_milestone` returns `None` when the `milestone_id` is out of range on an
-/// agreement that *does* exist.
+/// `get_milestone` returns `Ok(None)` when the `milestone_id` is out of range on
+/// an agreement that *does* exist.
 ///
-/// This is the second half of the entrypoint's two `None` paths and is kept
-/// deliberately separate from
-/// `test_get_milestone_unknown_agreement_returns_none` below: here the
+/// This is the vector-miss half of the entrypoint's two failure modes, and is
+/// kept deliberately separate from
+/// `test_get_milestone_unknown_agreement_returns_error` below: here the
 /// agreement was read successfully and the lookup within it is what failed.
 #[test]
 fn test_get_milestone_invalid_id_returns_none() {
@@ -1053,56 +1311,62 @@ fn test_get_milestone_invalid_id_returns_none() {
     );
 
     let result = client.get_milestone(&id, &99u32);
-    assert!(
-        result.is_none(),
-        "out-of-range milestone_id must return None"
-    );
+    assert_eq!(result, None, "out-of-range milestone_id must return None");
 }
 
-/// `get_milestone` returns `None` when the `agreement_id` was never initialised.
+/// `get_milestone` returns `AgreementNotFound` when the `agreement_id` was never
+/// initialised, and `Ok(None)` only for an out-of-range milestone id on an
+/// agreement that does exist.
 ///
-/// This exercises the other half of the entrypoint's `.ok().and_then(..)` chain:
-/// `read_agreement` fails first, so `and_then` is never reached and the whole
-/// chain short-circuits to `None`. The existing
-/// `test_get_milestone_invalid_id_returns_none` only covers an out-of-range index
-/// on an agreement that *is* in storage, so this path — a storage miss rather
-/// than a vector miss — had no dedicated test.
-///
-/// Both cases are asserted to be `None` and, per the entrypoint's doc comment,
-/// are indistinguishable to a caller. See the `# Return type` section of
-/// [`Self::get_milestone`] for why they are not being split into distinct
-/// variants here.
+/// This is the storage-miss half of the entrypoint's two failure modes, and it
+/// is the case issue #385 is about: returning a bare `Option<Milestone>`
+/// collapsed both into a single `None`. The adjacent case that could regress if
+/// this were fixed carelessly — the out-of-range id on a *real* agreement — is
+/// asserted in the same test so the two stay distinguishable.
 #[test]
-fn test_get_milestone_unknown_agreement_returns_none() {
-    let (env, _payer, _payee, _dispute_resolver, _token_address, client) = setup();
+fn test_get_milestone_unknown_agreement_returns_error() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 22);
 
-    // Never passed to `init` — the storage read misses.
-    let missing = agreement_id(&env, 22);
-
-    assert!(
-        client.get_milestone(&missing, &0u32).is_none(),
-        "an agreement that was never initialised must return None, not a trap"
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 100),
+        &dispute_resolver,
     );
 
-    // A mid-range index takes the same path: the agreement is missing, so the
-    // index is never consulted.
-    assert!(
-        client.get_milestone(&missing, &1u32).is_none(),
-        "the milestone index must not matter when the agreement does not exist"
+    // Never passed to `init` — the storage read misses, so this is a typed
+    // error rather than a silent `None`.
+    let missing = agreement_id(&env, 98);
+    assert_eq!(
+        client.try_get_milestone(&missing, &0u32),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "an agreement that was never initialised must return AgreementNotFound"
     );
 
-    // Same ID at u32::MAX, to pin that the short-circuit is on the agreement
-    // rather than on any bound check inside `Vec::get`.
-    assert!(
-        client.get_milestone(&missing, &u32::MAX).is_none(),
-        "u32::MAX must return None for a missing agreement, not InvalidMilestone"
+    // Same ID at u32::MAX, to pin that the failure is on the agreement rather
+    // than on any bound check inside `Vec::get`.
+    assert_eq!(
+        client.try_get_milestone(&missing, &u32::MAX),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "u32::MAX on a missing agreement must return AgreementNotFound, not InvalidMilestone"
+    );
+
+    // Adjacent case: the agreement exists but the index is out of range, so the
+    // two failures remain distinguishable.
+    assert_eq!(
+        client.get_milestone(&id, &7u32),
+        None,
+        "out-of-range milestone_id on an existing agreement must return None"
     );
 }
 
 /// Adjacent case: a missing agreement must not disturb a real one.
 ///
-/// `get_milestone` is a read-only view, so probing an unknown ID must leave
-/// every stored agreement byte-identical and must not emit events. This is the
+/// `get_milestone` is a view call, so probing an unknown ID must leave every
+/// stored agreement byte-identical and must not emit events. This is the
 /// regression that a careless "fix" — routing the miss through
 /// `storage::write_agreement`, or bumping TTLs on a failed read — would
 /// introduce.
@@ -1136,9 +1400,12 @@ fn test_get_milestone_unknown_agreement_leaves_existing_state_untouched() {
 
     let before = client.get_agreement(&id);
 
-    // Probe an unknown ID, then re-read the real one.
+    // Probe an unknown ID, then re-read the real one. The generated client
+    // unwraps the `Result`, so the error is only observable through
+    // `try_get_milestone` (asserted in
+    // `test_get_milestone_unknown_agreement_returns_error`).
     let missing = agreement_id(&env, 24);
-    assert!(client.get_milestone(&missing, &0u32).is_none());
+    assert!(client.try_get_milestone(&missing, &0u32).is_err());
 
     let after = client.get_agreement(&id);
     assert_eq!(
@@ -1252,7 +1519,7 @@ fn test_resolve_dispute_wrong_role_fails() {
 
     client.lock_funds(&id, &0u32);
 
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // `resolve_dispute` gates on `agreement.dispute_resolver.require_auth()`,
     // which is its sole role check — see the entrypoint's doc comment.
@@ -1282,10 +1549,72 @@ fn test_raise_dispute_wrong_role_fails() {
     // `Unauthorized` before it ever reaches `caller.require_auth()`.
     let random = Address::generate(&env);
     assert_eq!(
-        client.try_raise_dispute(&random, &id, &0u32),
+        client.try_raise_dispute(&random, &id, &0u32, &None),
         Err(Ok(TrellisError::Unauthorized)),
         "a non-party caller must not be able to raise a dispute"
     );
+}
+
+/// `raise_dispute` authorises exactly two callers: the payer and the payee
+/// (#388). Each must be able to open the dispute window on its own, otherwise a
+/// payer could stall a `WorkSubmitted` milestone forever by neither approving
+/// nor disputing.
+///
+/// The adjacent case to the unauthorized-caller rejection is this happy path:
+/// a check that wrongly rejected either role would strand the payee's funds, so
+/// both roles are driven independently on separate milestones of one agreement.
+#[test]
+fn test_raise_dispute_by_payer_and_payee_both_succeed() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 126);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 2_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.lock_funds(&id, &1u32);
+
+    // The payer disputes milestone 0 on its own authority.
+    assert_eq!(
+        client.try_raise_dispute(&payer, &id, &0u32),
+        Ok(Ok(())),
+        "the payer must be able to raise a dispute without the payee"
+    );
+    // The payee disputes milestone 1 on its own authority.
+    assert_eq!(
+        client.try_raise_dispute(&payee, &id, &1u32),
+        Ok(Ok(())),
+        "the payee must be able to raise a dispute without the payer"
+    );
+
+    for (mid, who) in [(0u32, "payer"), (1u32, "payee")] {
+        assert_eq!(
+            client
+                .get_milestone(&id, &mid)
+                .expect("milestone must still exist")
+                .status,
+            EscrowStatus::Disputed,
+            "milestone {mid} must be Disputed after the {who} raised the dispute"
+        );
+    }
 }
 
 /// `cancel_unfunded_milestone` is payer-only: without a payer signature it traps.
@@ -1413,7 +1742,7 @@ fn test_dispute_raised_by_payer() {
     client.lock_funds(&id, &0u32);
 
     // Payer raises the dispute
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     // Verify milestone status transitioned to Disputed
     let milestone = client.get_milestone(&id, &0u32);
@@ -1615,7 +1944,9 @@ fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
 
     // The milestone must still be Disputed and the escrow untouched, so a
     // rejected split cannot be used to strand or drain funds.
-    let milestone = client.get_milestone(&id, &0u32).expect("milestone 0 must exist");
+    let milestone = client
+        .get_milestone(&id, &0u32)
+        .expect("milestone 0 must exist");
     assert_eq!(
         milestone.status,
         EscrowStatus::Disputed,

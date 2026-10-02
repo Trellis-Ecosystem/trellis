@@ -481,9 +481,11 @@ Trellis is a monorepo with three layers:
 | `release_partial` | Payer | Releases part of a `Funded`/`WorkSubmitted` milestone's escrowed funds as a progress payment; the milestone completes once fully released |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
-| `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded |
+| `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded — status becomes `Cancelled`, never `Refunded` (reserved for dispute refunds) |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
+| `batch_lock_funds` | Payer | Funds multiple milestones atomically in one transaction |
+| `get_milestone` | Anyone | Returns a single milestone's state, or none if the agreement or milestone does not exist (read-only) |
 | `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
 | `set_milestone_deadline` | Payer | Sets an optional deadline (ledger timestamp) on a still-`Pending` milestone |
 | `get_milestone_deadline` | Anyone | Returns a milestone's deadline, if one is set (read-only) |
@@ -498,7 +500,7 @@ The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
 <br />
-Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent.
+Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically, and the view functions (<code>get_agreement</code>, <code>get_milestone</code>, <code>get_total_amount</code>) renew it as well whenever a read finds the remaining TTL below the threshold — so a read is not strictly side-effect free, and the caller pays for the extension. Reading keeps a watched agreement alive between transitions rather than leaving it to expire. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent.
 </details>
 
 <details>
@@ -636,11 +638,14 @@ trellis init \
 # Check status
 trellis status --agreement-id <hex-id>
 
+# Check a single milestone's status
+trellis milestone-status --agreement-id <hex-id> --milestone-id 0
+
 # Fund the first milestone
 trellis lock-funds --agreement-id <hex-id> --milestone-id 0
 ```
 
-All **8 CLI commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, and `status`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
+All **9 escrow commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `status`, and `milestone-status`. The CLI also provides two utility commands: `completion` (see [Shell Completions](#shell-completions)) and `keys` (manage secret keys in the OS keychain). See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 
 `trellis health` checks the configured RPC endpoint natively (`getHealth` + `getLatestLedger` over HTTP). It needs only an RPC URL, with no `stellar` binary, contract ID or source key, and it supports `--json` / `--human-readable` / `--quiet` / `--dry-run`.
 
@@ -668,6 +673,19 @@ required for these commands. The decoded result is rendered through the same
 `render_json`/`render_human` paths as every other command, so `--json`,
 `--human-readable`, and `--quiet` all behave identically whether or not the
 Stellar CLI is installed.
+
+Native transaction simulation is implemented in
+`cli/trellis_cli/src/rpc.rs` (`RpcClient::simulate_transaction`) against the
+Soroban JSON-RPC `simulateTransaction` method. For a base64
+`TransactionEnvelope` XDR it returns a typed result containing the recommended
+minimum resource fee (`minResourceFee`), the resource fee and instruction /
+I/O-byte budgets embedded in the `transactionData`, and the fully parsed
+ledger footprint (its read-only and read-write `LedgerKey`s). For a read-only
+invocation the returned `results[0].xdr` `ScVal` is decoded directly, so a
+query value can be fetched without any signing key. A reverted host function
+call is surfaced as a typed contract error, kept distinct from network-level
+and JSON-RPC-level failures so callers can tell "the contract said no" apart
+from "the network was unreachable".
 
 `--dry-run` prints the `stellar contract invoke` command that would be executed
 without actually running it or submitting anything on-chain. Because it never
@@ -711,7 +729,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ### ✅ Complete
 
-- Core Soroban escrow contract — all 10 entrypoints implemented and tested
+- Core Soroban escrow contract — all 12 entrypoints implemented and tested
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Contract test suite — 51 tests in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes

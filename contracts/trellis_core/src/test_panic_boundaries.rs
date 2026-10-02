@@ -113,7 +113,7 @@ fn unknown_agreement_id_never_panics() {
         Err(Ok(TrellisError::AgreementNotFound))
     );
     assert_eq!(
-        client.try_raise_dispute(&payee, &missing, &0),
+        client.try_raise_dispute(&payee, &missing, &0, &None),
         Err(Ok(TrellisError::AgreementNotFound))
     );
     assert_eq!(
@@ -134,8 +134,11 @@ fn unknown_agreement_id_never_panics() {
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
     );
-    // Option-returning view: absence, not a trap.
-    assert_eq!(client.try_get_milestone(&missing, &0), Ok(Ok(None)));
+    // A missing agreement is a typed error here, not a silent `None`.
+    assert_eq!(
+        client.try_get_milestone(&missing, &0),
+        Err(Ok(TrellisError::AgreementNotFound))
+    );
 }
 
 #[test]
@@ -159,7 +162,7 @@ fn out_of_range_milestone_index_never_panics() {
         Err(Ok(TrellisError::InvalidMilestone))
     );
     assert_eq!(
-        client.try_raise_dispute(&payee, &id, &oob),
+        client.try_raise_dispute(&payee, &id, &oob, &None),
         Err(Ok(TrellisError::InvalidMilestone))
     );
     assert_eq!(
@@ -170,6 +173,7 @@ fn out_of_range_milestone_index_never_panics() {
         client.try_cancel_unfunded_milestone(&id, &oob),
         Err(Ok(TrellisError::InvalidMilestone))
     );
+    // Existing agreement, out-of-range index: `Ok(None)`, not a trap.
     assert!(matches!(client.try_get_milestone(&id, &oob), Ok(Ok(None))));
 }
 
@@ -208,7 +212,7 @@ fn illegal_state_transitions_never_panic() {
         Err(Ok(TrellisError::InvalidStateTransition))
     );
     assert_eq!(
-        client.try_raise_dispute(&payee, &id, &0),
+        client.try_raise_dispute(&payee, &id, &0, &None),
         Err(Ok(TrellisError::InvalidStateTransition))
     );
 
@@ -228,7 +232,7 @@ fn raise_dispute_with_non_party_caller_never_panics() {
 
     let stranger = Address::generate(&env);
     assert_eq!(
-        client.try_raise_dispute(&stranger, &id, &0),
+        client.try_raise_dispute(&stranger, &id, &0, &None),
         Err(Ok(TrellisError::Unauthorized))
     );
 }
@@ -326,7 +330,7 @@ proptest! {
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
         assert_no_trap!(client.try_submit_work(&id, &milestone_id, &None), "submit_work");
         assert_no_trap!(client.try_approve_and_release(&id, &milestone_id), "approve_and_release");
-        assert_no_trap!(client.try_raise_dispute(&payee, &id, &milestone_id), "raise_dispute");
+        assert_no_trap!(client.try_raise_dispute(&payee, &id, &milestone_id, &None), "raise_dispute");
         assert_no_trap!(client.try_resolve_dispute(&id, &milestone_id, &true), "resolve_dispute");
         assert_no_trap!(client.try_cancel_unfunded_milestone(&id, &milestone_id), "cancel");
         assert_no_trap!(client.try_get_milestone(&id, &milestone_id), "get_milestone");
@@ -345,7 +349,7 @@ proptest! {
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
         assert_no_trap!(client.try_submit_work(&id, &milestone_id, &None), "submit_work");
         assert_no_trap!(client.try_approve_and_release(&id, &milestone_id), "approve_and_release");
-        assert_no_trap!(client.try_raise_dispute(&payee, &id, &milestone_id), "raise_dispute");
+        assert_no_trap!(client.try_raise_dispute(&payee, &id, &milestone_id, &None), "raise_dispute");
         assert_no_trap!(client.try_resolve_dispute(&id, &milestone_id, &false), "resolve_dispute");
         assert_no_trap!(client.try_cancel_unfunded_milestone(&id, &milestone_id), "cancel");
         assert_no_trap!(client.try_get_agreement(&id), "get_agreement");
