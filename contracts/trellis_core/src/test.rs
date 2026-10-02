@@ -8,7 +8,7 @@ use crate::{
     errors::TrellisError,
     test_utils::{agreement_id, one_milestone},
     types::{EscrowStatus, Milestone},
-    MAX_PROOF_URI_LEN, TrellisContract, TrellisContractClient,
+    TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
 };
 
 // ---------------------------------------------------------------------------
@@ -2732,10 +2732,7 @@ fn test_invalid_milestone_on_mutating_entrypoints() {
     );
 
     assert_invalid_milestone!(client.try_lock_funds(&id, &oob), "lock_funds");
-    assert_invalid_milestone!(
-        client.try_submit_work(&id, &oob, &None),
-        "submit_work"
-    );
+    assert_invalid_milestone!(client.try_submit_work(&id, &oob, &None), "submit_work");
     assert_invalid_milestone!(
         client.try_approve_and_release(&id, &oob),
         "approve_and_release"
