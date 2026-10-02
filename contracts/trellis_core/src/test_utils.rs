@@ -13,16 +13,13 @@
 //!
 //! | suite | payer mint | auth mocking |
 //! |-------|------------|--------------|
-//! | `test.rs` | [`EXAMPLE_MINT`] | none — each step installs its own [`auth_as`] mock so role checks are exercised against real signatures |
-//! | `test_properties.rs`, `test_panic_boundaries.rs` | [`FUZZ_MINT`] | blanket `env.mock_all_auths()`, because those suites drive every entrypoint from arbitrary callers and assert typed contract errors rather than signature gates |
+//! | `test.rs` | 10_000 (its own local `setup`) | blanket `env.mock_all_auths()` — its role checks are proven by turning mocking *off*, not by mocking a specific caller |
+//! | `test_properties.rs`, `test_panic_boundaries.rs` | [`FUZZ_MINT`] | same blanket mock, via [`setup_mocked`], because those suites drive every entrypoint from arbitrary callers and assert typed contract errors rather than signature gates |
 //!
 //! Both variants share [`deploy`], so the token/contract wiring can never
 //! diverge between them.
 
-use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
-    token, vec, Address, BytesN, Env, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, vec, Address, BytesN, Env, Vec};
 
 use crate::{
     types::{EscrowStatus, Milestone},
@@ -32,12 +29,6 @@ use crate::{
 // ---------------------------------------------------------------------------
 // Fixture parameters
 // ---------------------------------------------------------------------------
-
-/// Payer mint used by the example-based tests in `test.rs`.
-///
-/// Deliberately small: `test_batch_lock_funds` asserts an absolute end balance
-/// for the payer (10_000 − 1_000 = 9_000), so changing this changes that test.
-pub const EXAMPLE_MINT: i128 = 10_000;
 
 /// Payer mint used by the property-based and panic-boundary suites.
 ///
@@ -52,20 +43,6 @@ pub const FUZZ_MINT: i128 = 1_000_000_000;
 /// Build a 32-byte agreement ID from a seed byte.
 pub fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
     BytesN::from_array(env, &[seed; 32])
-}
-
-/// Authenticate a specific address for testing.
-/// Replaces blanket `env.mock_all_auths()` with granular per-caller auth.
-pub fn auth_as(env: &Env, address: &Address) {
-    env.mock_auths(&[MockAuth {
-        address,
-        invoke: &MockAuthInvoke {
-            contract: address,
-            fn_name: "",
-            args: vec![env],
-            sub_invokes: &[],
-        },
-    }]);
 }
 
 /// Create a single `Milestone` with the given amount, starting life `Pending`.
@@ -138,26 +115,12 @@ fn deploy(
     (env, payer, payee, dispute_resolver, token_address, client)
 }
 
-/// Common example-based test fixture used by `test.rs`.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-/// **Note**: auth is NOT mocked by default — tests must call [`auth_as`] explicitly.
-pub fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    deploy(Env::default(), EXAMPLE_MINT)
-}
-
 /// Fixture used by `test_properties.rs` and `test_panic_boundaries.rs`.
 ///
-/// Same wiring as [`setup`] but funds the payer generously ([`FUZZ_MINT`]) and
-/// blanket-mocks auth, so a property test can call any entrypoint from any
-/// generated caller without wiring a per-step mock.
+/// Funds the payer generously ([`FUZZ_MINT`]) and blanket-mocks auth, so a
+/// property test can call any entrypoint from any generated caller without
+/// wiring a per-step mock. `test.rs` keeps its own local `setup` instead,
+/// because it mints a smaller balance and asserts absolute end balances.
 pub fn setup_mocked() -> (
     Env,
     Address,

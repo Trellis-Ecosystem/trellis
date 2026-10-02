@@ -74,9 +74,6 @@ fn three_milestones(env: &Env) -> Vec<Milestone> {
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
-            // `split` records a dispute outcome; these fixtures never reach a
-            // dispute, so it stays `None`.
-            split: None,
         });
     }
     milestones

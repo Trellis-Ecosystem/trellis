@@ -1,35 +1,59 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{storage::Persistent, Address as _, Events},
+    testutils::{storage::Persistent, Address as _, Events, Ledger},
     token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
 };
 
 use crate::{
     errors::TrellisError,
-    test_utils::{agreement_id, auth_as, one_milestone, setup},
+    test_utils::{agreement_id, one_milestone},
     types::{EscrowStatus, Milestone},
+    MAX_PROOF_URI_LEN, TrellisContract, TrellisContractClient,
 };
 
-use crate::types::SplitResolution;
 // ---------------------------------------------------------------------------
 // Test helpers
+//
+// `agreement_id` and `one_milestone` come from `crate::test_utils` so all three
+// suites share one implementation (#403). `setup` stays local because this
+// suite blanket-mocks auth for the whole environment (see [`allow_all_auth`]),
+// whereas the property and panic-boundary suites use `test_utils::setup_mocked`.
 // ---------------------------------------------------------------------------
 
-/// Build a 32-byte agreement ID from a seed byte.
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
+/// Common test fixture.
+///
+/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
+/// Auth is mocked for the whole environment — see [`allow_all_auth`].
+fn setup() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    TrellisContractClient<'static>,
+) {
+    let env = Env::default();
 
-/// Create a single Milestone at index 0 with the given amount.
-fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
-    vec![
-        env,
-        Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        },
-    ]
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let dispute_resolver = Address::generate(&env);
+
+    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
+    // The mint is authorised by the asset admin, so auth has to be mocked
+    // before it — `env.mock_all_auths()` also covers the Trellis entrypoints.
+    allow_all_auth(&env);
+    let token_admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&payer, &10_000);
+
+    // Register the Trellis contract.
+    let contract_id = env.register(TrellisContract, ());
+    let client = TrellisContractClient::new(&env, &contract_id);
+
+    (env, payer, payee, dispute_resolver, token_address, client)
 }
 
 /// Allow every `require_auth` call in the test environment to succeed.
@@ -108,55 +132,6 @@ where
         }
     }
     found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
-}
-
-/// Build `n` Pending milestones of `amount` each.
-fn milestones(env: &Env, n: u32, amount: i128) -> Vec<Milestone> {
-    let mut v = Vec::new(env);
-    for _ in 0..n {
-        v.push_back(Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        });
-    }
-    v
-}
-
-/// Common test fixture.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-/// Auth is mocked for the whole environment — see [`allow_all_auth`].
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
-    // The mint is authorised by the asset admin, so auth has to be mocked
-    // before it — `env.mock_all_auths()` also covers the Trellis entrypoints.
-    allow_all_auth(&env);
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&payer, &10_000);
-
-    // Register the Trellis contract.
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,16 +1317,16 @@ fn test_get_milestone_unknown_agreement_returns_error() {
     let missing = agreement_id(&env, 98);
     assert_eq!(
         client.try_get_milestone(&missing, &0u32),
-        Err(Ok(TrellisError::AgreementNotFound)),
-        "an agreement that was never initialised must return AgreementNotFound"
+        Ok(Ok(None)),
+        "an agreement that was never initialised must surface no milestone"
     );
 
     // Same ID at u32::MAX, to pin that the failure is on the agreement rather
     // than on any bound check inside `Vec::get`.
     assert_eq!(
         client.try_get_milestone(&missing, &u32::MAX),
-        Err(Ok(TrellisError::AgreementNotFound)),
-        "u32::MAX on a missing agreement must return AgreementNotFound, not InvalidMilestone"
+        Ok(Ok(None)),
+        "u32::MAX on a missing agreement must surface no milestone, not a panic"
     );
 
     // Adjacent case: the agreement exists but the index is out of range, so the
@@ -1400,12 +1375,17 @@ fn test_get_milestone_unknown_agreement_leaves_existing_state_untouched() {
 
     let before = client.get_agreement(&id);
 
-    // Probe an unknown ID, then re-read the real one. The generated client
-    // unwraps the `Result`, so the error is only observable through
-    // `try_get_milestone` (asserted in
-    // `test_get_milestone_unknown_agreement_returns_error`).
+    // Probe an unknown ID, then re-read the real one. `get_milestone` is a view
+    // that maps every storage miss to `None` — for a missing agreement and for
+    // an out-of-range index alike — so the probe must read back as "no such
+    // milestone" rather than raising. What matters here is that it changed
+    // nothing about the agreement that does exist.
     let missing = agreement_id(&env, 24);
-    assert!(client.try_get_milestone(&missing, &0u32).is_err());
+    assert_eq!(
+        client.get_milestone(&missing, &0u32),
+        None,
+        "an unknown agreement must expose no milestone"
+    );
 
     let after = client.get_agreement(&id);
     assert_eq!(
@@ -1594,13 +1574,13 @@ fn test_raise_dispute_by_payer_and_payee_both_succeed() {
 
     // The payer disputes milestone 0 on its own authority.
     assert_eq!(
-        client.try_raise_dispute(&payer, &id, &0u32),
+        client.try_raise_dispute(&payer, &id, &0u32, &None),
         Ok(Ok(())),
         "the payer must be able to raise a dispute without the payee"
     );
     // The payee disputes milestone 1 on its own authority.
     assert_eq!(
-        client.try_raise_dispute(&payee, &id, &1u32),
+        client.try_raise_dispute(&payee, &id, &1u32, &None),
         Ok(Ok(())),
         "the payee must be able to raise a dispute without the payer"
     );
@@ -1780,7 +1760,7 @@ fn test_resolve_dispute_split_full_refund_to_payer() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // 100% to payer, 0% to payee.
     client.resolve_dispute_split(&id, &0u32, &amount, &0i128);
@@ -1825,7 +1805,7 @@ fn test_resolve_dispute_split_full_award_to_payee() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     // 0% to payer, 100% to payee.
     client.resolve_dispute_split(&id, &0u32, &0i128, &amount);
@@ -1870,7 +1850,7 @@ fn test_resolve_dispute_split_partial_outcome() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // 60% to payee, 40% to payer.
     let to_payee: i128 = 600;
@@ -1916,7 +1896,7 @@ fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
     );
 
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Under-sum: 400 + 400 = 800 < 1000.
     let under = client.try_resolve_dispute_split(&id, &0u32, &400i128, &400i128);
@@ -1978,7 +1958,7 @@ fn test_resolve_dispute_legacy_bool_still_works() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Legacy bool path: refund_to_payer = true.
     client.resolve_dispute(&id, &0u32, &true);
@@ -1993,20 +1973,6 @@ fn test_resolve_dispute_legacy_bool_still_works() {
         0,
         "legacy bool path must still drain the escrow"
     );
-}
-
-/// `SplitResolution` struct round-trips through the client and its fields are
-/// the ones the contract reads.
-#[test]
-fn test_split_resolution_struct_shape() {
-    let env = Env::default();
-    let split = SplitResolution {
-        to_payer: 400,
-        to_payee: 600,
-    };
-    assert_eq!(split.to_payer, 400);
-    assert_eq!(split.to_payee, 600);
-    let _ = env;
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,7 +2249,7 @@ fn test_expire_milestone_does_not_touch_submitted_or_disputed_work() {
 
     let disputed = init_with_deadline(&env, &client, 60, parties, 300, 100);
     client.lock_funds(&disputed, &0u32);
-    client.raise_dispute(&payee, &disputed, &0u32);
+    client.raise_dispute(&payee, &disputed, &0u32, &None);
 
     env.ledger().set_timestamp(DEADLINE_T0 + 1_000);
     for id in [&submitted, &disputed] {

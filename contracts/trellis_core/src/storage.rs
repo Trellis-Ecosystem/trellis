@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, BytesN, Env, Vec};
+use soroban_sdk::{contracttype, BytesN, Env, Map, Vec};
 
 use crate::errors::TrellisError;
 use crate::types::{Agreement, AgreementHeader, Milestone};
@@ -21,6 +21,14 @@ pub enum DataKey {
     /// `submit_work` and friends rewrite only this entry instead of
     /// re-serialising the whole `Vec<Milestone>` back to storage.
     Milestone(BytesN<32>, u32),
+    /// Persistent storage key for an agreement's milestone deadlines, held as a
+    /// `Map<u32, u64>` from milestone index to ledger timestamp.
+    ///
+    /// Deadlines live beside the agreement rather than as a field on
+    /// [`crate::types::Milestone`] so the `init` argument layout and the
+    /// `get_agreement` / `get_milestone` return types stay unchanged for
+    /// existing callers.
+    Deadlines(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -295,5 +303,8 @@ pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u
     deadlines.set(milestone_id, deadline);
     env.storage().persistent().set(&key, &deadlines);
 
-    bump_ttl(env, id);
+    // The deadline entry was just written, so its TTL is already fresh; the
+    // agreement header is the entry that can go stale, so that is what the
+    // bump renews alongside it.
+    bump_ttl(env, &DataKey::Agreement(id.clone()));
 }

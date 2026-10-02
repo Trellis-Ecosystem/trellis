@@ -107,7 +107,7 @@ pub enum TrellisError {
     /// for every unit of escrowed funds exactly once; any other total either
     /// leaves funds stranded in the contract or attempts to pay out more
     /// than was locked.
-    InvalidSplitAmount = 12,
+    InvalidSplitAmounts = 12,
 
     /// `init` was called with more milestones than the contract's
     /// `MAX_MILESTONES` cap (50). Beyond that cap the per-agreement storage
@@ -131,4 +131,27 @@ pub enum TrellisError {
     /// `expire_milestone` was called on a milestone that has no deadline, or
     /// whose deadline has not yet passed.
     DeadlineNotReached = 16,
+
+    /// `submit_work` was called with a `proof_uri` longer than
+    /// [`crate::MAX_PROOF_URI_LEN`].
+    ///
+    /// The URI is stored verbatim and kept for the agreement's lifetime, so an
+    /// unbounded length would be a permanent storage/rent cost imposed on the
+    /// payer by the payee. Rejecting it up front keeps an agreement's storage
+    /// footprint bounded by something the contract controls.
+    ///
+    /// Appended as discriminant `17` per the stability rule above (`16` is the
+    /// highest already assigned).
+    ProofUriTooLong = 17,
+
+    /// `release_partial` was called with an `amount` that is zero, negative,
+    /// or larger than what is still escrowed for the milestone.
+    ///
+    /// Partially-released funds are final, so an over-release would attempt to
+    /// pay out more than the milestone ever locked and either trap inside the
+    /// token contract or drain funds belonging to other milestones sharing the
+    /// same pooled balance.
+    ///
+    /// Appended as discriminant `18` per the stability rule above.
+    InvalidReleaseAmount = 18,
 }

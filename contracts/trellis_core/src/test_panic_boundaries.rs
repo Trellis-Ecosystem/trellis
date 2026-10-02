@@ -39,7 +39,7 @@ fn deterministic_config() -> ProptestConfig {
         ..ProptestConfig::default()
     }
 }
-use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Vec};
 
 use crate::{
     errors::TrellisError,
@@ -134,11 +134,9 @@ fn unknown_agreement_id_never_panics() {
         client.try_get_agreement(&missing),
         Err(Ok(TrellisError::AgreementNotFound))
     );
-    // A missing agreement is a typed error here, not a silent `None`.
-    assert_eq!(
-        client.try_get_milestone(&missing, &0),
-        Err(Ok(TrellisError::AgreementNotFound))
-    );
+    // `get_milestone` is a view that maps every storage miss to `None`,
+    // agreement and milestone alike.
+    assert_eq!(client.try_get_milestone(&missing, &0), Ok(Ok(None)));
 }
 
 #[test]
