@@ -106,6 +106,10 @@ function CreateAgreementPage() {
   const [errors, setErrors] = useState<ValidationErrors>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  // The payer is always the connected wallet: `init` requires payer auth, so any
+  // other value would fail on-chain after signing.
+  const payer = wallet.publicKey ?? ''
+
   const validateAddress = (address: string, field: string): string | undefined => {
     const trimmed = address.trim()
     if (!trimmed) return `${field} is required`
@@ -127,9 +131,15 @@ function CreateAgreementPage() {
   const validateForm = (): boolean => {
     const newErrors: ValidationErrors = {}
 
-    newErrors.payer = validateAddress(formData.payer, 'Payer')
+    newErrors.payer = validateAddress(payer, 'Payer')
     newErrors.payee = validateAddress(formData.payee, 'Payee')
     newErrors.resolver = validateAddress(formData.resolver, 'Resolver')
+    if (!newErrors.resolver) {
+      const resolver = formData.resolver.trim()
+      if (resolver === payer.trim() || resolver === formData.payee.trim()) {
+        newErrors.resolver = 'Resolver cannot be the payer or the payee'
+      }
+    }
     newErrors.token = validateAddress(formData.token, 'Token')
 
     if (milestones.length === 0) {
@@ -175,7 +185,7 @@ function CreateAgreementPage() {
     try {
       // Fall back to a fresh ID if the user never clicked "Generate".
       const id = agreementId || generateAgreementId()
-      const txHash = await invoke('init', buildInitArgs(id, formData, milestones), wallet.publicKey)
+      const txHash = await invoke('init', buildInitArgs(id, { ...formData, payer }, milestones), wallet.publicKey)
 
       toast.success({ title: 'Agreement created!', message: `Transaction: ${txHash.slice(0, 8)}...` })
 
@@ -246,9 +256,10 @@ function CreateAgreementPage() {
             </label>
             <input
               type="text"
-              value={formData.payer}
-              onChange={(e) => handleInputChange('payer', e.target.value)}
-              placeholder="G..."
+              value={payer}
+              readOnly
+              disabled
+              placeholder="Connect your wallet"
               className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                 errors.payer ? 'border-red-500' : 'border-navy-600'
               } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
