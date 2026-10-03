@@ -62,6 +62,7 @@ fn pending_milestones(env: &Env, n: u32) -> Vec<Milestone> {
             amount: 1_000,
             status: EscrowStatus::Pending,
             proof_uri: None,
+            token: None,
         });
     }
     v
