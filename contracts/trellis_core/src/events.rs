@@ -124,7 +124,11 @@ pub fn funds_released(env: &Env, agreement_id: BytesN<32>, milestone_id: u32, am
 /// Emitted when either party raises a dispute on a funded or work-submitted milestone.
 ///
 /// Topics: `("trls_dspt", agreement_id)`
-/// Data:   `(milestone_id, caller, amount)`
+/// Data:   `(milestone_id, caller, amount, reason_uri)`
+///
+/// `reason_uri` is the disputing party's optional pointer at their reason or
+/// evidence (`None` when omitted or empty). It is carried in the event only —
+/// it is never stored on the milestone.
 ///
 /// `caller` is the party (payer or payee) that triggered the dispute, provided
 /// as a typed `Address` so indexers can identify the initiating party without
@@ -139,10 +143,11 @@ pub fn dispute_raised(
     milestone_id: u32,
     caller: Address,
     amount: i128,
+    reason_uri: Option<String>,
 ) {
     env.events().publish(
         (symbol_short!("trls_dspt"), agreement_id.clone()),
-        (milestone_id, caller, amount),
+        (milestone_id, caller, amount, reason_uri),
     );
 }
 

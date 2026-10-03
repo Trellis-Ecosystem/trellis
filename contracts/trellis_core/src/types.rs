@@ -57,30 +57,17 @@ pub struct Milestone {
     /// representation of "no proof" — an empty `Some("")` is not a sentinel
     /// and callers should not construct one.
     pub proof_uri: Option<String>,
-    /// Optional split of this milestone's locked amount between payer and
-    /// payee, set when a dispute is resolved with a partial outcome.
-    ///
-    /// `None` means no split has been recorded (all-or-nothing resolution or
-    /// no dispute). When `Some`, `payer_amount + payee_amount` must equal
-    /// `amount` exactly.
-    pub split: Option<MilestoneSplit>,
-}
-
-// ---------------------------------------------------------------------------
-// Agreement — top-level escrow record stored on-chain
-//
-// See the note on [`Milestone`] for why `Eq`/`PartialEq` are derived: it lets a
-// whole agreement read back from `get_agreement` be asserted with one
-// `assert_eq!`, so no field can be added here without every existing equality
-// assertion noticing.
-// ---------------------------------------------------------------------------
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MilestoneSplit {
-    /// Portion of the milestone amount awarded back to the payer.
-    pub payer_amount: i128,
-    /// Portion of the milestone amount awarded to the payee.
-    pub payee_amount: i128,
+    // NOTE: a `split: Option<MilestoneSplit>` field was briefly added here to
+    // record a partial dispute outcome on the milestone itself. It was removed
+    // because `Option<T>` over a `#[contracttype]` struct does not satisfy the
+    // `ScVal` conversion the derive macro requires when the SDK's `testutils`
+    // feature is on, which broke every build of the test suite.
+    //
+    // Nothing needed it: `resolve_dispute_split` already publishes both legs in
+    // the `milestone_resolved` event (`payer_amount`, `payee_amount`), so an
+    // indexer can reconstruct a partial outcome from the event log without
+    // reading contract state. Reintroducing the field would mean changing how
+    // the split is surfaced, not just adding it back.
 }
 
 // ---------------------------------------------------------------------------

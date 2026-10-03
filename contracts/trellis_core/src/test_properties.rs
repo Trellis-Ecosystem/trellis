@@ -62,7 +62,7 @@ fn deterministic_config() -> ProptestConfig {
         ..ProptestConfig::default()
     }
 }
-use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
+use soroban_sdk::{token, BytesN};
 
 use crate::{
     errors::TrellisError,
@@ -241,7 +241,7 @@ proptest! {
     /// directly would release funds before the resolver has ruled on them.
     #[test]
     fn prop_approve_on_disputed_always_fails(amount in 1i128..=100_000i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 52);
 
@@ -251,7 +251,7 @@ proptest! {
             &dispute_resolver,
         );
         client.lock_funds(&id, &0u32);
-        client.raise_dispute(&payer, &id, &0u32);
+        client.raise_dispute(&payer, &id, &0u32, &None);
 
         let result = client.try_approve_and_release(&id, &0u32);
         prop_assert_eq!(
@@ -276,7 +276,7 @@ proptest! {
     /// balance that other agreements' milestones are funded from.
     #[test]
     fn prop_approve_on_refunded_always_fails(amount in 1i128..=100_000i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 53);
 
@@ -288,7 +288,7 @@ proptest! {
         // A cancelled unfunded milestone is Refunded; fund it and refund it via
         // the dispute path instead, so the milestone really did hold funds.
         client.lock_funds(&id, &0u32);
-        client.raise_dispute(&payer, &id, &0u32);
+        client.raise_dispute(&payer, &id, &0u32, &None);
         client.resolve_dispute(&id, &0u32, &true);
 
         let result = client.try_approve_and_release(&id, &0u32);
@@ -314,7 +314,7 @@ proptest! {
     /// second release would drain another milestone's escrow.
     #[test]
     fn prop_double_approve_on_completed_always_fails(amount in 1i128..=100_000i128) {
-        let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+        let (env, payer, payee, dispute_resolver, token_address, client) = setup_mocked();
         let token_client = token::TokenClient::new(&env, &token_address);
         let id = agreement_id(&env, 54);
 

@@ -9,6 +9,9 @@ pub mod types;
 mod test;
 
 #[cfg(test)]
+mod test_utils;
+
+#[cfg(test)]
 mod test_properties;
 
 #[cfg(test)]
@@ -474,35 +477,37 @@ impl TrellisContract {
         milestone.status = EscrowStatus::Disputed;
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
-        events::dispute_raised(&env, agreement_id, milestone_id, caller, amount);
+        events::dispute_raised(
+            &env,
+            agreement_id,
+            milestone_id,
+            caller,
+            amount,
+            reason_uri.filter(|s| !s.is_empty()),
+        );
 
         Ok(())
     }
 
-    /// Settle a disputed milestone as the designated `dispute_resolver`.
+    /// Settle a disputed milestone with an explicit split between the parties.
     ///
-    /// Pass `payer_amount` and `payee_amount` to split the milestone's locked
-    /// amount between the two parties. The two amounts must be non-negative
-    /// and sum exactly to the milestone's locked amount. Passing the full
-    /// amount to one side (`payer_amount = amount, payee_amount = 0` or
-    /// `payer_amount = 0, payee_amount = amount`) reproduces the previous
-    /// all-or-nothing behavior.
+    /// Pass `payer_amount` and `payee_amount` to split the milestone's still-
+    /// escrowed amount between the two parties. The two amounts must be
+    /// non-negative and sum exactly to that remainder, so every unit of locked
+    /// funds is accounted for exactly once. Passing the whole remainder to one
+    /// side reproduces [`Self::resolve_dispute`]'s all-or-nothing behaviour.
     ///
     /// # Auth
-    /// `agreement.dispute_resolver.require_auth()` is the sole enforcement
-    /// mechanism — the Soroban host automatically traps if the invoker's
-    /// signature does not match the resolver address stored on-chain.
-    /// No additional manual check is needed beyond `require_auth()`, which is
-    /// why this entrypoint has no resolver-mismatch error variant: an
-    /// unauthorised caller never reaches contract code at all.
+    /// `agreement.dispute_resolver.require_auth()` — see
+    /// [`Self::resolve_dispute`] for why that alone is sufficient.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
     /// - [`TrellisError::InvalidStateTransition`] – milestone is not `Disputed`.
     /// - [`TrellisError::InvalidSplitAmounts`] – `payer_amount` or
-    ///   `payee_amount` is negative, or the two do not sum to the locked amount.
-    pub fn resolve_dispute(
+    ///   `payee_amount` is negative, or the two do not sum to the remainder.
+    pub fn resolve_dispute_split(
         env: Env,
         agreement_id: BytesN<32>,
         milestone_id: u32,
@@ -512,9 +517,7 @@ impl TrellisContract {
         // #401: header + single milestone only — O(1) reads and one write.
         let header = storage::read_header(&env, &agreement_id)?;
 
-        // `require_auth` is the enforcement gate — the host traps if the
-        // invoker is not the resolver, so a resolver-mismatch error variant
-        // would be unreachable and is deliberately absent from TrellisError.
+        // `require_auth` is the enforcement gate — see `resolve_dispute`.
         header.dispute_resolver.require_auth();
 
         let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
@@ -523,10 +526,12 @@ impl TrellisContract {
             return Err(TrellisError::InvalidStateTransition);
         }
 
-        let amount = milestone.amount;
+        // A prior `release_partial` is final, so a ruling only ever covers what
+        // is still held in escrow for this milestone.
+        let amount = remaining_amount(&header, milestone_id, &milestone);
 
         // Validate the split: both legs must be non-negative and together
-        // account for exactly the locked amount. This is checked before any
+        // account for exactly what is still escrowed. This is checked before any
         // state write or token movement so an invalid split cannot leave the
         // milestone in a half-resolved state.
         if payer_amount < 0 || payee_amount < 0 {
@@ -548,6 +553,9 @@ impl TrellisContract {
             milestone.status = EscrowStatus::Completed;
         }
 
+        // The ruling itself is published by the `milestone_resolved` event
+        // below, which carries both legs — so an indexer can reconstruct the
+        // split without an extra field on the milestone.
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Settle both legs in a single transaction. Zero-amount legs are
@@ -569,6 +577,81 @@ impl TrellisContract {
         }
 
         events::milestone_resolved(&env, agreement_id, milestone_id, payer_amount, payee_amount);
+
+        Ok(())
+    }
+
+    /// Settle a disputed milestone in full, to one side.
+    ///
+    /// `refund_to_payer = true` returns the still-escrowed amount to the payer
+    /// (ruling against the payee); `false` releases it to the payee (ruling
+    /// against the payer).
+    ///
+    /// This is the original all-or-nothing entrypoint and is kept because
+    /// callers that have not migrated still invoke it — including the CLI's
+    /// `trellis resolve --refund-to-payer <bool>`, which is why its name and
+    /// arguments must not change. For a genuine partial outcome use
+    /// [`Self::resolve_dispute_split`], which expresses what this one cannot.
+    ///
+    /// # Auth
+    /// `agreement.dispute_resolver.require_auth()` is the sole enforcement
+    /// mechanism — the Soroban host automatically traps if the invoker's
+    /// signature does not match the resolver address stored on-chain. No
+    /// additional manual check is needed beyond `require_auth()`, which is why
+    /// this entrypoint has no resolver-mismatch error variant: an unauthorised
+    /// caller never reaches contract code at all.
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
+    /// - [`TrellisError::InvalidStateTransition`] – milestone is not `Disputed`.
+    pub fn resolve_dispute(
+        env: Env,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+        refund_to_payer: bool,
+    ) -> Result<(), TrellisError> {
+        // #401: header + single milestone only — O(1) reads and one write.
+        let header = storage::read_header(&env, &agreement_id)?;
+
+        // `require_auth` is the enforcement gate — see the doc comment above.
+        header.dispute_resolver.require_auth();
+
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
+
+        if milestone.status != EscrowStatus::Disputed {
+            return Err(TrellisError::InvalidStateTransition);
+        }
+
+        let amount = remaining_amount(&header, milestone_id, &milestone);
+
+        milestone.status = if refund_to_payer {
+            EscrowStatus::Refunded
+        } else {
+            EscrowStatus::Completed
+        };
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
+
+        // Transfer tokens from this contract after the state change.
+        token::Client::new(&env, &header.token).transfer(
+            &env.current_contract_address(),
+            if refund_to_payer {
+                &header.payer
+            } else {
+                &header.payee
+            },
+            &amount,
+        );
+
+        // The event carries the split shape the merged event signature expects:
+        // one leg is the full remainder, the other is zero.
+        events::milestone_resolved(
+            &env,
+            agreement_id,
+            milestone_id,
+            if refund_to_payer { amount } else { 0 },
+            if refund_to_payer { 0 } else { amount },
+        );
 
         Ok(())
     }
@@ -612,8 +695,14 @@ impl TrellisContract {
         }
 
         // Mark the milestone closed with no token movement required.
+        //
+        // `Cancelled`, not `Refunded`: this milestone was never funded, so no
+        // tokens ever moved. `Refunded` is reserved for a dispute ruling that
+        // actually returned escrowed funds, and a reader of `get_agreement`
+        // must be able to tell the two apart without replaying the event log —
+        // which is what this entrypoint's own doc comment promises.
         let amount = milestone.amount;
-        milestone.status = EscrowStatus::Refunded;
+        milestone.status = EscrowStatus::Cancelled;
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Emit the dedicated cancellation event rather than milestone_resolved:
@@ -931,7 +1020,7 @@ impl TrellisContract {
         // token transfer.
         milestone.status = EscrowStatus::Refunded;
         agreement.milestones.set(milestone_id, milestone);
-        storage::write_agreement(&env, &agreement_id, &agreement);
+        storage::write_agreement(&env, &agreement_id, &agreement)?;
 
         if refunded_amount > 0 {
             token::Client::new(&env, &agreement.token).transfer(

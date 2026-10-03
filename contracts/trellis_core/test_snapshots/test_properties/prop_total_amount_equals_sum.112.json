@@ -81,7 +81,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 8557
+                              "lo": 380
                             }
                           }
                         },
@@ -114,7 +114,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 4430
+                              "lo": 2620
                             }
                           }
                         },
@@ -147,7 +147,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 6501
+                              "lo": 4080
                             }
                           }
                         },
@@ -180,7 +180,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 1902
+                              "lo": 4992
                             }
                           }
                         },
@@ -213,7 +213,7 @@
                           "val": {
                             "i128": {
                               "hi": 0,
-                              "lo": 4124
+                              "lo": 5979
                             }
                           }
                         },
@@ -443,176 +443,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "milestones"
+                        "symbol": "milestone_count"
                       },
                       "val": {
-                        "vec": [
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 8557
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Pending"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 4430
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Pending"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 6501
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Pending"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 1902
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Pending"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "amount"
-                                },
-                                "val": {
-                                  "i128": {
-                                    "hi": 0,
-                                    "lo": 4124
-                                  }
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "proof_uri"
-                                },
-                                "val": "void"
-                              },
-                              {
-                                "key": {
-                                  "symbol": "status"
-                                },
-                                "val": {
-                                  "vec": [
-                                    {
-                                      "symbol": "Pending"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          }
-                        ]
+                        "u32": 5
                       }
                     },
                     {
@@ -654,8 +488,413 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 25514
+                          "lo": 18051
                         }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Milestone"
+                },
+                {
+                  "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                },
+                {
+                  "u32": 0
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Milestone"
+                    },
+                    {
+                      "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                    },
+                    {
+                      "u32": 0
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 380
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "proof_uri"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Milestone"
+                },
+                {
+                  "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                },
+                {
+                  "u32": 1
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Milestone"
+                    },
+                    {
+                      "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                    },
+                    {
+                      "u32": 1
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 2620
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "proof_uri"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Milestone"
+                },
+                {
+                  "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                },
+                {
+                  "u32": 2
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Milestone"
+                    },
+                    {
+                      "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                    },
+                    {
+                      "u32": 2
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 4080
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "proof_uri"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Milestone"
+                },
+                {
+                  "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                },
+                {
+                  "u32": 3
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Milestone"
+                    },
+                    {
+                      "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                    },
+                    {
+                      "u32": 3
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 4992
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "proof_uri"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Milestone"
+                },
+                {
+                  "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                },
+                {
+                  "u32": 4
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Milestone"
+                    },
+                    {
+                      "bytes": "4646464646464646464646464646464646464646464646464646464646464646"
+                    },
+                    {
+                      "u32": 4
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 5979
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "proof_uri"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
                       }
                     }
                   ]

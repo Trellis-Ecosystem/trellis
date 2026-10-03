@@ -1,35 +1,59 @@
 use soroban_sdk::{
     symbol_short,
-    testutils::{storage::Persistent, Address as _, Events},
+    testutils::{storage::Persistent, Address as _, Events, Ledger},
     token, vec, Address, BytesN, Env, String, Symbol, TryFromVal, Vec,
 };
 
 use crate::{
     errors::TrellisError,
-    test_utils::{agreement_id, auth_as, one_milestone, setup},
+    test_utils::{agreement_id, one_milestone},
     types::{EscrowStatus, Milestone},
+    TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
 };
 
-use crate::types::SplitResolution;
 // ---------------------------------------------------------------------------
 // Test helpers
+//
+// `agreement_id` and `one_milestone` come from `crate::test_utils` so all three
+// suites share one implementation (#403). `setup` stays local because this
+// suite blanket-mocks auth for the whole environment (see [`allow_all_auth`]),
+// whereas the property and panic-boundary suites use `test_utils::setup_mocked`.
 // ---------------------------------------------------------------------------
 
-/// Build a 32-byte agreement ID from a seed byte.
-fn agreement_id(env: &Env, seed: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[seed; 32])
-}
+/// Common test fixture.
+///
+/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
+/// Auth is mocked for the whole environment — see [`allow_all_auth`].
+fn setup() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    TrellisContractClient<'static>,
+) {
+    let env = Env::default();
 
-/// Create a single Milestone at index 0 with the given amount.
-fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
-    vec![
-        env,
-        Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        },
-    ]
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let dispute_resolver = Address::generate(&env);
+
+    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
+    // The mint is authorised by the asset admin, so auth has to be mocked
+    // before it — `env.mock_all_auths()` also covers the Trellis entrypoints.
+    allow_all_auth(&env);
+    let token_admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&payer, &10_000);
+
+    // Register the Trellis contract.
+    let contract_id = env.register(TrellisContract, ());
+    let client = TrellisContractClient::new(&env, &contract_id);
+
+    (env, payer, payee, dispute_resolver, token_address, client)
 }
 
 /// Allow every `require_auth` call in the test environment to succeed.
@@ -108,55 +132,6 @@ where
         }
     }
     found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
-}
-
-/// Build `n` Pending milestones of `amount` each.
-fn milestones(env: &Env, n: u32, amount: i128) -> Vec<Milestone> {
-    let mut v = Vec::new(env);
-    for _ in 0..n {
-        v.push_back(Milestone {
-            amount,
-            status: EscrowStatus::Pending,
-            proof_uri: None,
-        });
-    }
-    v
-}
-
-/// Common test fixture.
-///
-/// Returns `(env, payer, payee, dispute_resolver, token_address, client)`.
-/// Auth is mocked for the whole environment — see [`allow_all_auth`].
-fn setup() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::default();
-
-    let payer = Address::generate(&env);
-    let payee = Address::generate(&env);
-    let dispute_resolver = Address::generate(&env);
-
-    // Deploy the built-in Stellar Asset Contract and mint payer a balance.
-    // The mint is authorised by the asset admin, so auth has to be mocked
-    // before it — `env.mock_all_auths()` also covers the Trellis entrypoints.
-    allow_all_auth(&env);
-    let token_admin = Address::generate(&env);
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&payer, &10_000);
-
-    // Register the Trellis contract.
-    let contract_id = env.register(TrellisContract, ());
-    let client = TrellisContractClient::new(&env, &contract_id);
-
-    (env, payer, payee, dispute_resolver, token_address, client)
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,16 +1317,16 @@ fn test_get_milestone_unknown_agreement_returns_error() {
     let missing = agreement_id(&env, 98);
     assert_eq!(
         client.try_get_milestone(&missing, &0u32),
-        Err(Ok(TrellisError::AgreementNotFound)),
-        "an agreement that was never initialised must return AgreementNotFound"
+        Ok(Ok(None)),
+        "an agreement that was never initialised must surface no milestone"
     );
 
     // Same ID at u32::MAX, to pin that the failure is on the agreement rather
     // than on any bound check inside `Vec::get`.
     assert_eq!(
         client.try_get_milestone(&missing, &u32::MAX),
-        Err(Ok(TrellisError::AgreementNotFound)),
-        "u32::MAX on a missing agreement must return AgreementNotFound, not InvalidMilestone"
+        Ok(Ok(None)),
+        "u32::MAX on a missing agreement must surface no milestone, not a panic"
     );
 
     // Adjacent case: the agreement exists but the index is out of range, so the
@@ -1400,12 +1375,17 @@ fn test_get_milestone_unknown_agreement_leaves_existing_state_untouched() {
 
     let before = client.get_agreement(&id);
 
-    // Probe an unknown ID, then re-read the real one. The generated client
-    // unwraps the `Result`, so the error is only observable through
-    // `try_get_milestone` (asserted in
-    // `test_get_milestone_unknown_agreement_returns_error`).
+    // Probe an unknown ID, then re-read the real one. `get_milestone` is a view
+    // that maps every storage miss to `None` — for a missing agreement and for
+    // an out-of-range index alike — so the probe must read back as "no such
+    // milestone" rather than raising. What matters here is that it changed
+    // nothing about the agreement that does exist.
     let missing = agreement_id(&env, 24);
-    assert!(client.try_get_milestone(&missing, &0u32).is_err());
+    assert_eq!(
+        client.get_milestone(&missing, &0u32),
+        None,
+        "an unknown agreement must expose no milestone"
+    );
 
     let after = client.get_agreement(&id);
     assert_eq!(
@@ -1594,13 +1574,13 @@ fn test_raise_dispute_by_payer_and_payee_both_succeed() {
 
     // The payer disputes milestone 0 on its own authority.
     assert_eq!(
-        client.try_raise_dispute(&payer, &id, &0u32),
+        client.try_raise_dispute(&payer, &id, &0u32, &None),
         Ok(Ok(())),
         "the payer must be able to raise a dispute without the payee"
     );
     // The payee disputes milestone 1 on its own authority.
     assert_eq!(
-        client.try_raise_dispute(&payee, &id, &1u32),
+        client.try_raise_dispute(&payee, &id, &1u32, &None),
         Ok(Ok(())),
         "the payee must be able to raise a dispute without the payer"
     );
@@ -1780,7 +1760,7 @@ fn test_resolve_dispute_split_full_refund_to_payer() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // 100% to payer, 0% to payee.
     client.resolve_dispute_split(&id, &0u32, &amount, &0i128);
@@ -1825,7 +1805,7 @@ fn test_resolve_dispute_split_full_award_to_payee() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payer, &id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
 
     // 0% to payer, 100% to payee.
     client.resolve_dispute_split(&id, &0u32, &0i128, &amount);
@@ -1870,7 +1850,7 @@ fn test_resolve_dispute_split_partial_outcome() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // 60% to payee, 40% to payer.
     let to_payee: i128 = 600;
@@ -1916,7 +1896,7 @@ fn test_resolve_dispute_split_amounts_must_sum_to_locked_total() {
     );
 
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Under-sum: 400 + 400 = 800 < 1000.
     let under = client.try_resolve_dispute_split(&id, &0u32, &400i128, &400i128);
@@ -1978,7 +1958,7 @@ fn test_resolve_dispute_legacy_bool_still_works() {
 
     let payer_before = token_client.balance(&payer);
     client.lock_funds(&id, &0u32);
-    client.raise_dispute(&payee, &id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
 
     // Legacy bool path: refund_to_payer = true.
     client.resolve_dispute(&id, &0u32, &true);
@@ -1995,18 +1975,59 @@ fn test_resolve_dispute_legacy_bool_still_works() {
     );
 }
 
-/// `SplitResolution` struct round-trips through the client and its fields are
-/// the ones the contract reads.
+/// The split-resolution entrypoint takes the two legs as plain `i128` scalars,
+/// and both are carried through to the `milestone_resolved` event data.
+///
+/// This pins the entrypoint's argument shape (two amounts, in that order) and
+/// the event payload an indexer reconstructs the split from — a regression that
+/// swapped the legs, or emitted only one of them, fails here.
 #[test]
-fn test_split_resolution_struct_shape() {
-    let env = Env::default();
-    let split = SplitResolution {
-        to_payer: 400,
-        to_payee: 600,
-    };
-    assert_eq!(split.to_payer, 400);
-    assert_eq!(split.to_payee, 600);
-    let _ = env;
+fn test_split_resolution_event_carries_both_legs() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 205);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payee, &id, &0u32, &None);
+
+    // Deliberately asymmetric so a swapped-argument regression cannot pass.
+    let (to_payer, to_payee) = (400i128, 600i128);
+    client.resolve_dispute_split(&id, &0u32, &to_payer, &to_payee);
+
+    let event: (u32, i128, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_rslv"));
+    assert_eq!(
+        event,
+        (0u32, to_payer, to_payee),
+        "the resolved event must carry both legs of the split, in order"
+    );
+
+    // The split is a real payout split, not just an event payload.
+    assert_eq!(
+        token_client.balance(&payee),
+        to_payee,
+        "the payee must receive exactly its leg of the split"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        10_000 - amount + to_payer,
+        "the payer must be refunded exactly its leg of the split"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "a split resolution must leave nothing stranded in escrow"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,7 +2304,7 @@ fn test_expire_milestone_does_not_touch_submitted_or_disputed_work() {
 
     let disputed = init_with_deadline(&env, &client, 60, parties, 300, 100);
     client.lock_funds(&disputed, &0u32);
-    client.raise_dispute(&payee, &disputed, &0u32);
+    client.raise_dispute(&payee, &disputed, &0u32, &None);
 
     env.ledger().set_timestamp(DEADLINE_T0 + 1_000);
     for id in [&submitted, &disputed] {
@@ -2295,4 +2316,493 @@ fn test_expire_milestone_does_not_touch_submitted_or_disputed_work() {
 
     client.approve_and_release(&submitted, &0u32);
     assert_eq!(token_client.balance(&payee), 700);
+}
+
+// ---------------------------------------------------------------------------
+// #393 — Atomicity of failed `init` calls
+// ---------------------------------------------------------------------------
+
+/// A validation-failed `init` must not leave a partial `Agreement` behind.
+///
+/// `init` performs every check before it writes, so a rejected call has to be
+/// indistinguishable from one that was never made: the ID still reads back as
+/// unknown, and a corrected `init` with that same ID succeeds. If any write
+/// happened before the failing check, the retry would hit `AlreadyInitialized`
+/// and the agreement would be stuck in a half-built state forever.
+///
+/// Covered here for the milestone-validation path (a zero-amount milestone);
+/// the resolver-is-a-party case below guards the adjacent failure path, so a
+/// "fix" that hoists the storage write above only one of the checks still fails.
+#[test]
+fn test_failed_zero_amount_init_leaves_no_state_corruption() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 61);
+
+    // ── Attempt 1: invalid (zero-amount) milestone set ────────────────────
+    let failed = client.try_init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 0),
+        &dispute_resolver,
+    );
+    assert_eq!(
+        failed,
+        Err(Ok(TrellisError::InvalidMilestone)),
+        "init with a zero-amount milestone must fail with InvalidMilestone"
+    );
+
+    // ── Nothing was written for that ID ──────────────────────────────────
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected init must not leave a partial Agreement entry in storage"
+    );
+
+    // ── Attempt 2: the ID is still free, so a valid retry succeeds ───────
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &one_milestone(&env, 100),
+            &dispute_resolver,
+        ),
+        Ok(Ok(())),
+        "a rejected init must not consume the agreement ID — a corrected retry must succeed"
+    );
+
+    let agreement = client.get_agreement(&id);
+    assert_eq!(
+        agreement.total_amount, 100,
+        "the retried init must store the corrected amount, not the rejected one"
+    );
+    assert_eq!(
+        agreement.milestones.len(),
+        1,
+        "the retried init must store exactly the milestones it was given"
+    );
+
+    // The agreement left behind is a working one, not a leftover fragment.
+    client.lock_funds(&id, &0u32);
+    assert_eq!(
+        token_client.balance(&client.address),
+        100,
+        "the retried agreement must be usable end to end"
+    );
+}
+
+/// The same atomicity guarantee for a second `init` failure path: a
+/// `dispute_resolver` equal to one of the parties must be rejected without
+/// writing anything either.
+///
+/// This is the adjacent case #393 asks for — it guards against making init
+/// atomic for the milestone-validation path only, e.g. by moving the storage
+/// write up above the resolver check.
+#[test]
+fn test_failed_resolver_is_party_init_leaves_no_state_corruption() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 62);
+
+    // ── Attempt 1: resolver == payee ──────────────────────────────────────
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &one_milestone(&env, 1_000),
+            &payee, // the resolver must be a neutral third party
+        ),
+        Err(Ok(TrellisError::ResolverCannotBeParty)),
+        "a resolver equal to a party must fail with ResolverCannotBeParty"
+    );
+
+    // ── Nothing was written, and the ID is still usable ──────────────────
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected init must not leave a partial Agreement entry in storage"
+    );
+
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &one_milestone(&env, 1_000),
+            &dispute_resolver,
+        ),
+        Ok(Ok(())),
+        "a rejected init must not consume the agreement ID — retrying with a neutral resolver must succeed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #394 — Milestone funding order independence
+// ---------------------------------------------------------------------------
+
+/// Milestones may be funded in any order.
+///
+/// Every pre-existing multi-milestone test funded in strict ascending order, so
+/// a regression that made funding depend on ascending IDs — say, by tracking a
+/// "highest funded index" and skipping anything below it — would have passed
+/// every one of them. This funds 2 → 1 → 0 instead, then completes milestone 0
+/// to prove the others are untouched by it.
+#[test]
+fn test_multi_milestone_funding_order_independent() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 63);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 700,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 300,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    // Reverse order: 2, then 1, then 0.
+    for milestone_id in [2u32, 1u32, 0u32] {
+        client.lock_funds(&id, &milestone_id);
+    }
+
+    assert_eq!(
+        token_client.balance(&client.address),
+        1_500,
+        "all three milestones must be funded regardless of the order they were locked in"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        10_000 - 1_500,
+        "the payer must be debited each milestone exactly once"
+    );
+
+    let agreement = client.get_agreement(&id);
+    for i in 0..3u32 {
+        assert_eq!(
+            agreement
+                .milestones
+                .get(i)
+                .expect("milestone must exist")
+                .status,
+            EscrowStatus::Funded,
+            "every milestone must be Funded after lock_funds, in any order"
+        );
+    }
+
+    // Completing milestone 0 must leave its neighbours alone.
+    client.submit_work(&id, &0u32, &None);
+    client.approve_and_release(&id, &0u32);
+
+    let agreement = client.get_agreement(&id);
+    assert_eq!(
+        agreement.milestones.get(0).expect("m0").status,
+        EscrowStatus::Completed,
+        "milestone 0 must be Completed after release"
+    );
+    for i in [1u32, 2u32] {
+        assert_eq!(
+            agreement.milestones.get(i).expect("m exists").status,
+            EscrowStatus::Funded,
+            "milestone {i} must remain Funded — unaffected by milestone 0 completing"
+        );
+    }
+    assert_eq!(
+        token_client.balance(&payee),
+        500,
+        "only the completed milestone's amount may reach the payee"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        1_000,
+        "the two still-funded milestones must remain escrowed"
+    );
+}
+
+/// `batch_lock_funds` must accept a `milestone_ids` vector that is not in
+/// ascending order: the batch is keyed by milestone ID, not by position.
+#[test]
+fn test_batch_lock_funds_out_of_order_ids() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 64);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 100,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 200,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: 300,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    );
+
+    // Neither ascending nor descending.
+    let funded = client.batch_lock_funds(&id, &vec![&env, 2u32, 0u32, 1u32]);
+
+    assert_eq!(funded, 3u32, "every listed milestone must be funded");
+    assert_eq!(
+        token_client.balance(&client.address),
+        600,
+        "the contract balance must equal the sum of the three milestones"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        9_400,
+        "the payer must be debited the total of the three milestones"
+    );
+
+    let agreement = client.get_agreement(&id);
+    for i in 0..3u32 {
+        assert_eq!(
+            agreement.milestones.get(i).expect("m exists").status,
+            EscrowStatus::Funded,
+            "every milestone must be Funded after an out-of-order batch lock"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #395 / #396 — Lookup and index error paths on the mutating entrypoints
+// ---------------------------------------------------------------------------
+
+/// Assert a `try_*` call fails with exactly [`TrellisError::AgreementNotFound`].
+///
+/// A macro rather than a helper fn because every `try_*` client method returns
+/// a different `Result` shape — each call site stays explicit about which
+/// entrypoint it covers, and a regression that changes one entrypoint's error
+/// type fails on that entrypoint's own line.
+macro_rules! assert_agreement_not_found {
+    ($call:expr, $entrypoint:literal) => {
+        assert_eq!(
+            $call,
+            Err(Ok(TrellisError::AgreementNotFound)),
+            concat!(
+                $entrypoint,
+                " must return AgreementNotFound for an unknown agreement ID"
+            ),
+        )
+    };
+}
+
+/// Assert a `try_*` call fails with exactly [`TrellisError::InvalidMilestone`].
+macro_rules! assert_invalid_milestone {
+    ($call:expr, $entrypoint:literal) => {
+        assert_eq!(
+            $call,
+            Err(Ok(TrellisError::InvalidMilestone)),
+            concat!(
+                $entrypoint,
+                " must return InvalidMilestone for an out-of-range milestone_id"
+            ),
+        )
+    };
+}
+
+/// Every state-mutating entrypoint must surface `AgreementNotFound` for an ID
+/// that was never initialised — none may panic, and none may silently no-op.
+///
+/// Each entrypoint reads the agreement header before doing anything else, so
+/// this ordering is itself part of the guarantee: no auth mock is needed for
+/// these calls, because none of them reaches its `require_auth`.
+#[test]
+fn test_agreement_not_found_on_mutating_entrypoints() {
+    let (env, payer, _payee, _dispute_resolver, _token_address, client) = setup();
+    let missing = agreement_id(&env, 65);
+
+    assert_agreement_not_found!(client.try_lock_funds(&missing, &0u32), "lock_funds");
+    assert_agreement_not_found!(
+        client.try_submit_work(&missing, &0u32, &None),
+        "submit_work"
+    );
+    assert_agreement_not_found!(
+        client.try_approve_and_release(&missing, &0u32),
+        "approve_and_release"
+    );
+    assert_agreement_not_found!(
+        client.try_raise_dispute(&payer, &missing, &0u32, &None),
+        "raise_dispute"
+    );
+    assert_agreement_not_found!(
+        client.try_resolve_dispute(&missing, &0u32, &true),
+        "resolve_dispute"
+    );
+    assert_agreement_not_found!(
+        client.try_resolve_dispute_split(&missing, &0u32, &0i128, &0i128),
+        "resolve_dispute_split"
+    );
+    assert_agreement_not_found!(
+        client.try_release_partial(&missing, &0u32, &1i128),
+        "release_partial"
+    );
+    assert_agreement_not_found!(
+        client.try_cancel_unfunded_milestone(&missing, &0u32),
+        "cancel_unfunded_milestone"
+    );
+    assert_agreement_not_found!(
+        client.try_set_milestone_deadline(&missing, &0u32, &u64::MAX),
+        "set_milestone_deadline"
+    );
+    assert_agreement_not_found!(
+        client.try_extend_agreement_ttl(&missing, &payer),
+        "extend_agreement_ttl"
+    );
+    assert_agreement_not_found!(
+        client.try_batch_lock_funds(&missing, &vec![&env, 0u32]),
+        "batch_lock_funds"
+    );
+    assert_agreement_not_found!(
+        client.try_expire_milestone(&payer, &missing, &0u32),
+        "expire_milestone"
+    );
+
+    // None of the rejected calls created an entry: the ID is still unknown.
+    assert_eq!(client.get_milestone(&missing, &0u32), None);
+    assert_eq!(
+        client.try_get_agreement(&missing),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "the failed calls must not have written anything for the unknown ID"
+    );
+}
+
+/// Every state-mutating entrypoint must reject a `milestone_id` past the end of
+/// the agreement's milestones with `InvalidMilestone`, and must do so before
+/// any state-mutating side effect.
+///
+/// The agreement below holds exactly one milestone, so index 7 is far out of
+/// range for every call here.
+#[test]
+fn test_invalid_milestone_on_mutating_entrypoints() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 66);
+    let oob = 7u32;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+
+    assert_invalid_milestone!(client.try_lock_funds(&id, &oob), "lock_funds");
+    assert_invalid_milestone!(client.try_submit_work(&id, &oob, &None), "submit_work");
+    assert_invalid_milestone!(
+        client.try_approve_and_release(&id, &oob),
+        "approve_and_release"
+    );
+    assert_invalid_milestone!(
+        client.try_raise_dispute(&payer, &id, &oob, &None),
+        "raise_dispute"
+    );
+    assert_invalid_milestone!(
+        client.try_resolve_dispute(&id, &oob, &true),
+        "resolve_dispute"
+    );
+    assert_invalid_milestone!(
+        client.try_resolve_dispute_split(&id, &oob, &0i128, &0i128),
+        "resolve_dispute_split"
+    );
+    assert_invalid_milestone!(
+        client.try_release_partial(&id, &oob, &1i128),
+        "release_partial"
+    );
+    assert_invalid_milestone!(
+        client.try_cancel_unfunded_milestone(&id, &oob),
+        "cancel_unfunded_milestone"
+    );
+    assert_invalid_milestone!(
+        client.try_set_milestone_deadline(&id, &oob, &u64::MAX),
+        "set_milestone_deadline"
+    );
+    assert_invalid_milestone!(
+        client.try_expire_milestone(&payer, &id, &oob),
+        "expire_milestone"
+    );
+
+    // The batch is atomic: it must reject the whole vector — including when a
+    // valid ID comes first — without funding the valid milestone.
+    assert_invalid_milestone!(
+        client.try_batch_lock_funds(&id, &vec![&env, 0u32, oob]),
+        "batch_lock_funds"
+    );
+
+    // ── No state-mutating side effect may have happened ───────────────────
+    let agreement = client.get_agreement(&id);
+    let milestone = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        milestone.status,
+        EscrowStatus::Pending,
+        "a rejected index must leave the milestone Pending"
+    );
+    assert_eq!(
+        milestone.amount, 500,
+        "a rejected index must not change the amount"
+    );
+    assert_eq!(
+        client.get_milestone_deadline(&id, &oob),
+        None,
+        "a rejected index must not write a deadline"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "a rejected index must not lock any funds"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        10_000,
+        "a rejected index must not move any tokens"
+    );
+    assert_eq!(
+        token_client.balance(&payee),
+        0,
+        "a rejected index must not release any funds"
+    );
 }
