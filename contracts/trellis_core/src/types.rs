@@ -57,6 +57,11 @@ pub struct Milestone {
     /// representation of "no proof" — an empty `Some("")` is not a sentinel
     /// and callers should not construct one.
     pub proof_uri: Option<String>,
+    /// Token contract address used specifically for this milestone.
+    ///
+    /// If `None`, the agreement-level [`Agreement::token`] is used.
+    /// If `Some`, this milestone uses its own dedicated token contract.
+    pub token: Option<Address>,
     // NOTE: a `split: Option<MilestoneSplit>` field was briefly added here to
     // record a partial dispute outcome on the milestone itself. It was removed
     // because `Option<T>` over a `#[contracttype]` struct does not satisfy the

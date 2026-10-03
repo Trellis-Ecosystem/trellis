@@ -222,7 +222,14 @@ impl TrellisContract {
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Transfer tokens from payer → this contract.
-        token::Client::new(&env, &header.token).transfer(
+        // Use the per-milestone token if set, otherwise fall back to agreement token.
+        let milestone_token = storage::get_milestone_token(
+            &env,
+            &agreement_id,
+            milestone_id,
+            &header.token,
+        );
+        token::Client::new(&env, &milestone_token).transfer(
             &header.payer,
             &env.current_contract_address(),
             &amount,
@@ -321,7 +328,14 @@ impl TrellisContract {
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Transfer tokens from this contract → payee after state change.
-        token::Client::new(&env, &header.token).transfer(
+        // Use the per-milestone token if set, otherwise fall back to agreement token.
+        let milestone_token = storage::get_milestone_token(
+            &env,
+            &agreement_id,
+            milestone_id,
+            &header.token,
+        );
+        token::Client::new(&env, &milestone_token).transfer(
             &env.current_contract_address(),
             &header.payee,
             &amount,
@@ -404,7 +418,14 @@ impl TrellisContract {
         }
 
         // Transfer tokens from this contract → payee after state change.
-        token::Client::new(&env, &header.token).transfer(
+        // Use the per-milestone token if set, otherwise fall back to agreement token.
+        let milestone_token = storage::get_milestone_token(
+            &env,
+            &agreement_id,
+            milestone_id,
+            &header.token,
+        );
+        token::Client::new(&env, &milestone_token).transfer(
             &env.current_contract_address(),
             &header.payee,
             &amount,
@@ -560,7 +581,14 @@ impl TrellisContract {
 
         // Settle both legs in a single transaction. Zero-amount legs are
         // skipped so we never issue a no-op transfer to the token contract.
-        let token = token::Client::new(&env, &header.token);
+        // Use the per-milestone token if set, otherwise fall back to agreement token.
+        let milestone_token = storage::get_milestone_token(
+            &env,
+            &agreement_id,
+            milestone_id,
+            &header.token,
+        );
+        let token = token::Client::new(&env, &milestone_token);
         if payer_amount > 0 {
             token.transfer(
                 &env.current_contract_address(),
@@ -633,7 +661,14 @@ impl TrellisContract {
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
         // Transfer tokens from this contract after the state change.
-        token::Client::new(&env, &header.token).transfer(
+        // Use the per-milestone token if set, otherwise fall back to agreement token.
+        let milestone_token = storage::get_milestone_token(
+            &env,
+            &agreement_id,
+            milestone_id,
+            &header.token,
+        );
+        token::Client::new(&env, &milestone_token).transfer(
             &env.current_contract_address(),
             if refund_to_payer {
                 &header.payer
@@ -824,6 +859,18 @@ impl TrellisContract {
             milestone.status = EscrowStatus::Funded;
             storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
+            // Use the per-milestone token if set, otherwise fall back to agreement token.
+let _milestone_token = storage::get_milestone_token(
+                &env,
+                &agreement_id,
+                milestone_id,
+                &header.token,
+            );
+            token.transfer(
+                &header.payer,
+                &env.current_contract_address(),
+                &amount,
+            );
             events::funds_locked(&env, agreement_id.clone(), milestone_id, amount);
             funded += 1;
         }

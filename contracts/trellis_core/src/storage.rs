@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, BytesN, Env, Map, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Map, Vec};
 
 use crate::errors::TrellisError;
 use crate::types::{Agreement, AgreementHeader, Milestone};
@@ -21,6 +21,13 @@ pub enum DataKey {
     /// `submit_work` and friends rewrite only this entry instead of
     /// re-serialising the whole `Vec<Milestone>` back to storage.
     Milestone(BytesN<32>, u32),
+    /// Persistent storage key for a per-milestone token address, addressed by
+    /// the agreement ID and the milestone's index within it.
+    ///
+    /// If set, this milestone uses its own dedicated token contract, taking
+    /// precedence over the agreement-level [`Agreement::token`]. If not set
+    /// (default), the agreement token is used.
+    PerMilestoneToken(BytesN<32>, u32),
     /// Persistent storage key for an agreement's milestone deadlines, held as a
     /// `Map<u32, u64>` from milestone index to ledger timestamp.
     ///
@@ -214,6 +221,51 @@ pub fn write_milestone(env: &Env, id: &BytesN<32>, milestone_id: u32, milestone:
     let key = DataKey::Milestone(id.clone(), milestone_id);
     env.storage().persistent().set(&key, milestone);
     bump_ttl(env, &key);
+}
+
+/// Set the per-milestone token for `milestone_id` within `agreement_id`.
+///
+/// If `None`, the agreement-level token is used. If `Some`, this milestone
+/// uses its own dedicated token contract.
+#[allow(dead_code)]
+pub fn write_per_milestone_token(
+    env: &Env,
+    id: &BytesN<32>,
+    milestone_id: u32,
+    token: Option<Address>,
+) {
+    let key = DataKey::PerMilestoneToken(id.clone(), milestone_id);
+    env.storage().persistent().set(&key, &token);
+    bump_ttl(env, &key);
+}
+
+/// Get the per-milestone token for `milestone_id` within `agreement_id`.
+///
+/// Returns `None` if no per-milestone token is set (in which case the
+/// agreement-level [`Agreement::token`] is used).
+pub fn read_per_milestone_token(
+    env: &Env,
+    id: &BytesN<32>,
+    milestone_id: u32,
+) -> Option<Address> {
+    let key = DataKey::PerMilestoneToken(id.clone(), milestone_id);
+    env.storage()
+        .persistent()
+        .get::<_, Address>(&key)
+}
+
+/// Get the effective token for a milestone, preferring per-milestone token
+/// over the agreement-level token.
+pub fn get_milestone_token(
+    env: &Env,
+    agreement_id: &BytesN<32>,
+    milestone_id: u32,
+    agreement_token: &Address,
+) -> Address {
+    match read_per_milestone_token(env, agreement_id, milestone_id) {
+        Some(token) => token,
+        None => agreement_token.clone(),
+    }
 }
 
 /// Renew the TTL of an existing agreement without modifying it.

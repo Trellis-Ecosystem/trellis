@@ -53,6 +53,7 @@ pub fn one_milestone(env: &Env, amount: i128) -> Vec<Milestone> {
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
+            token: None,
         },
     ]
 }
@@ -68,6 +69,7 @@ pub fn milestones_from_amounts(env: &Env, amounts: &[i128]) -> Vec<Milestone> {
             amount,
             status: EscrowStatus::Pending,
             proof_uri: None,
+            token: None,
         });
     }
     v

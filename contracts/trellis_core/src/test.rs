@@ -2806,3 +2806,171 @@ fn test_invalid_milestone_on_mutating_entrypoints() {
         "a rejected index must not release any funds"
     );
 }
+
+#[test]
+fn test_per_milestone_token_during_init() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    allow_all_auth(&env);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+            token: Some(token_address.clone()),
+        },
+    ];
+
+    let id = agreement_id(&env, 100);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones,
+        &dispute_resolver,
+    )
+    .unwrap();
+
+    env.mock_all_auths();
+
+    // Fund the milestone - should use the per-milestone token
+    client.lock_funds(&id, 0).unwrap();
+
+    // Verify the per-milestone token was stored
+    let milestone = storage::read_milestone(&env, &id, 0).unwrap();
+    assert_eq!(milestone.token, Some(token_address));
+}
+
+#[test]
+fn test_per_milestone_token_fallback_to_agreement_token() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    allow_all_auth(&env);
+
+    let agreement_token = Address::generate(&env);
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+            token: None,
+        },
+    ];
+
+    let id = agreement_id(&env, 101);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &agreement_token,
+        &milestones,
+        &dispute_resolver,
+    )
+    .unwrap();
+
+    env.mock_all_auths();
+
+    // Fund the milestone - should fall back to the agreement token
+    client.lock_funds(&id, 0).unwrap();
+
+    // Verify the per-milestone token is None (agreement token was used)
+    let milestone = storage::read_milestone(&env, &id, 0).unwrap();
+    assert_eq!(milestone.token, None);
+}
+
+#[test]
+fn test_per_milestone_token_different_from_agreement() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    allow_all_auth(&env);
+
+    let agreement_token = Address::generate(&env);
+    let milestone_token = Address::generate(&env);
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+            token: Some(milestone_token.clone()),
+        },
+    ];
+
+    let id = agreement_id(&env, 102);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &agreement_token,
+        &milestones,
+        &dispute_resolver,
+    )
+    .unwrap();
+
+    env.mock_all_auths();
+
+    // Fund the milestone - should use the per-milestone token, NOT the agreement token
+    client.lock_funds(&id, &0u32).unwrap();
+
+    // Verify the per-milestone token was stored and used
+    let milestone = storage::read_milestone(&env, &id, 0).unwrap();
+    assert_eq!(milestone.token, Some(milestone_token));
+
+    // The per-milestone token should be different from the agreement token
+    assert_ne!(milestone.token, Some(agreement_token));
+}
+
+#[test]
+fn test_batch_lock_funds_with_per_milestone_tokens() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    allow_all_auth(&env);
+
+    let agreement_token = Address::generate(&env);
+    let milestone_token_1 = Address::generate(&env);
+    let milestone_token_2 = Address::generate(&env);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 500,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+            token: Some(milestone_token_1.clone()),
+        },
+        Milestone {
+            amount: 300,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+            token: Some(milestone_token_2.clone()),
+        },
+    ];
+
+    let id = agreement_id(&env, 103);
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &agreement_token,
+        &milestones,
+        &dispute_resolver,
+    )
+    .unwrap();
+
+    env.mock_all_auths();
+
+    // Batch fund both milestones - each should use its own per-milestone token
+    let milestone_ids = vec![&env, 0u32, 1u32];
+    let funded = client.batch_lock_funds(&id, &milestone_ids);
+
+    // Verify both milestones have their per-milestone tokens stored
+    let m1 = storage::read_milestone(&env, &id, 0).unwrap();
+    let m2 = storage::read_milestone(&env, &id, 1).unwrap();
+    assert_eq!(m1.token, Some(milestone_token_1));
+    assert_eq!(m2.token, Some(milestone_token_2));
+    assert_eq!(funded, 2u32);
+}
