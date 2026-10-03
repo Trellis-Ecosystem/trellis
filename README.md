@@ -113,6 +113,7 @@
 **Trustless, milestone-based escrow for freelance and remote work — built on Stellar's Soroban smart contract platform.**
 
 [![Contract CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/contract-ci.yml)
+[![Testnet E2E](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/e2e-testnet.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/e2e-testnet.yml)
 [![Frontend CI](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/frontend-ci.yml)
 [![npm audit](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/npm-audit.yml)
 [![CodeQL](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Trellis-Ecosystem/trellis/actions/workflows/codeql-analysis.yml)
@@ -179,11 +180,11 @@ A live test agreement exists on-chain and is queryable right now:
 trellis status --agreement-id 0101010101010101010101010101010101010101010101010101010101010101
 ```
 
-| Attribute | Value |
-|---|---|
-| **Contract ID** | `CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q` |
-| **Network** | Stellar Testnet |
-| **Explorer** | [View on Stellar Lab](https://lab.stellar.org/r/testnet/contract/CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q) |
+| Attribute       | Value                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Contract ID** | `CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q`                                                                 |
+| **Network**     | Stellar Testnet                                                                                                            |
+| **Explorer**    | [View on Stellar Lab](https://lab.stellar.org/r/testnet/contract/CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q) |
 
 > Full deployment details, every verified command, and step-by-step deployment instructions are in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
@@ -352,10 +353,10 @@ Trellis models a freelance engagement as an **agreement** made up of one or more
 
 ### The Roles
 
-| Role | Responsibility |
-|---|---|
-| **Payer** 🧑‍💼 | Funds milestones and approves completed work |
-| **Payee** 👨‍💻 | Submits proof of completed work and receives payment on approval |
+| Role                    | Responsibility                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| **Payer** 🧑‍💼            | Funds milestones and approves completed work                                   |
+| **Payee** 👨‍💻            | Submits proof of completed work and receives payment on approval               |
 | **Dispute Resolver** ⚖️ | A neutral third party who can rule on disputes, releasing funds to either side |
 
 ### The Guarantees
@@ -521,8 +522,8 @@ Tradeoffs: timestamps are used instead of ledger sequences because deadlines are
 
 <div align="center">
 
-| Category | Technologies |
-|---|---|
+| Category           | Technologies                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | **Smart Contract** | [Soroban](https://developers.stellar.org/docs/build/smart-contracts) · soroban-sdk 22.x · Rust (`#![no_std]` → WASM) |
 | **CLI** | clap 4 · clap_complete · serde + serde_json · dotenvy |
 | **Frontend** | React 19 · Vite · TypeScript · Tailwind CSS · React Router |
@@ -743,14 +744,14 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ### 🚧 Open for Contribution
 
-| Area | Description | Difficulty |
-|---|---|---|
-| Frontend — Agreement Status page | Polish and edge cases for live agreement state display | Intermediate |
-| Frontend — Create Agreement form | Validation UX, milestone builder refinements | Intermediate |
-| Frontend — Milestone actions | lock, submit, approve, dispute button workflows | Intermediate |
-| Frontend — Event feed enhancements | Real-time updates, filtering, pagination | Intermediate |
-| Native RPC client | Replace stellar CLI shell-out with native Rust HTTP client | Advanced |
-| Documentation | CONTRIBUTING.md and contributor onboarding guide | Beginner |
+| Area                               | Description                                                | Difficulty   |
+| ---------------------------------- | ---------------------------------------------------------- | ------------ |
+| Frontend — Agreement Status page   | Polish and edge cases for live agreement state display     | Intermediate |
+| Frontend — Create Agreement form   | Validation UX, milestone builder refinements               | Intermediate |
+| Frontend — Milestone actions       | lock, submit, approve, dispute button workflows            | Intermediate |
+| Frontend — Event feed enhancements | Real-time updates, filtering, pagination                   | Intermediate |
+| Native RPC client                  | Replace stellar CLI shell-out with native Rust HTTP client | Advanced     |
+| Documentation                      | CONTRIBUTING.md and contributor onboarding guide           | Beginner     |
 
 See [Issues](../../issues) for the full task list — each issue has exact requirements, acceptance criteria, a suggested branch name, and a timeframe.
 
