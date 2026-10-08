@@ -33,7 +33,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 
 stellar-xdr = "22.1"
-stellar-strkey = "0.0.9"
+stellar-strkey = "0.0.18"
 
 [dev-dependencies]
 # Local HTTP server for asserting native JSON-RPC request shape / response
