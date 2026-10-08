@@ -32,7 +32,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 
-stellar-xdr = "22.1"
+stellar-xdr = "28.0"
 stellar-strkey = "0.0.9"
 
 [dev-dependencies]
