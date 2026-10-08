@@ -86,7 +86,7 @@ jobs:
       # failed build, not for release, so two copies add nothing.
       - name: Upload production build
         if: matrix.node-version == '22.x'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-dist
           path: frontend/dist
@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report
           path: frontend/test-results

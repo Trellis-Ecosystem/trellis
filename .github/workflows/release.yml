@@ -65,7 +65,7 @@ jobs:
           OUTPUT: CHANGELOG.md
 
       - name: Upload changelog
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: changelog
           path: CHANGELOG.md
@@ -191,7 +191,7 @@ jobs:
             --release
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: trellis_core-wasm
           path: target/wasm32-unknown-unknown/release/trellis_core.wasm
@@ -238,7 +238,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/trellis-${{ matrix.target }}${{ matrix.bin == 'trellis.exe' && '.exe' || '' }}
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: trellis-cli-${{ matrix.target }}
           path: dist/*
