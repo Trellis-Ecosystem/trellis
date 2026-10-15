@@ -32,6 +32,19 @@ const WalletContext = createContext<WalletContextValue | null>(null);
 
 const STORAGE_KEY = 'trellis_wallet_connected';
 const ACCOUNT_POLL_INTERVAL_MS = 3_000;
+// Poll cadence per wallet status: fast while connected so account/network
+// switches surface quickly; slow everywhere else so an extension being
+// installed or unlocked while the app is open is still noticed. The only
+// non-polled phase is 'connecting', which resolves on its own.
+const POLL_INTERVAL_MS: Record<WalletStatus, number> = {
+  connected: ACCOUNT_POLL_INTERVAL_MS,
+  connecting: 0,
+  disconnected: 60_000,
+  detecting: 60_000,
+  unavailable: 60_000,
+};
+const BACKOFF_MULTIPLIER = 2;
+const MAX_POLL_INTERVAL_MS = 60_000;
 const PASSPHRASE_RETRY_ATTEMPTS = 3;
 const PASSPHRASE_RETRY_DELAY_MS = 500;
 const PASSPHRASE_FETCH_TIMEOUT_MS = 5_000;
@@ -185,9 +198,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // While connected, poll for the active Freighter account and network so
   // switching accounts or networks in the extension (which fires no event
   // Freighter exposes) is reflected here instead of silently going stale.
-  // While disconnected, poll much less aggressively just to notice the
-  // extension becoming available. Nothing is polled while unavailable,
-  // detecting, or connecting — those phases resolve on their own.
+  // In every other status, poll much less aggressively just to notice the
+  // extension being installed, unlocked, or a wallet being disconnected —
+  // except 'connecting', which resolves on its own.
   useEffect(() => {
     const baseInterval = POLL_INTERVAL_MS[status];
     if (!baseInterval) return;
@@ -196,12 +209,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let failureCount = 0;
     let intervalId: ReturnType<typeof setInterval>;
 
-    const intervalId = setInterval(() => {
-      void (async () => {
-        const [address, passphrase] = await Promise.all([
-          getPublicKey(),
-          fetchNetworkPassphraseWithRetry(),
-        ]);
+    const reschedule = (ms: number) => {
+      clearInterval(intervalId);
+      intervalId = setInterval(runPoll, ms);
+    };
 
     async function runPoll() {
       try {
