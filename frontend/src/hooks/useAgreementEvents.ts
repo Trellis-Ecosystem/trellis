@@ -45,6 +45,12 @@ export function useAgreementEvents(agreementId: string | null) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Signals that the component has unmounted — used to suppress state updates.
   const unmountedRef = useRef(false)
+  // The active effect's AbortController, so a manual refetch shares the
+  // unmount/abort lifecycle instead of an orphan controller.
+  const controllerRef = useRef<AbortController | null>(null)
+  // The polling scheduler lives in the effect; expose it via ref so
+  // `refetch` can resume the chain after its immediate fetch.
+  const scheduleRef = useRef<(delayMs: number) => void>(() => {})
 
   const fetchEvents = useCallback(
     async (signal: AbortSignal): Promise<boolean> => {
@@ -182,6 +188,7 @@ export function useAgreementEvents(agreementId: string | null) {
     failureCount.current = 0
 
     const controller = new AbortController()
+    controllerRef.current = controller
 
     /**
      * Recursive polling: schedule the next poll only after the current fetch
@@ -202,12 +209,14 @@ export function useAgreementEvents(agreementId: string | null) {
         }
       }, delayMs)
     }
+    scheduleRef.current = schedule
 
     // Fire immediately (0 ms delay), then recurse.
     schedule(0)
 
     return () => {
       unmountedRef.current = true
+      controllerRef.current = null
       controller.abort()
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current)
@@ -217,16 +226,24 @@ export function useAgreementEvents(agreementId: string | null) {
   }, [fetchEvents])
 
   const refetch = useCallback(() => {
-    // Cancel any pending timer and fire immediately.
+    // Cancel any pending timer and fire immediately, then resume the
+    // polling chain — without this the first manual refetch stops polling
+    // for the rest of the session.  The fetch shares the effect's
+    // AbortController so an unmount still cancels it.
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current)
       timerRef.current = null
     }
     failureCount.current = 0
-    void fetchEvents(new AbortController().signal)
+    const signal = controllerRef.current?.signal ?? new AbortController().signal
+    void fetchEvents(signal).then(() => {
+      if (!unmountedRef.current) {
+        scheduleRef.current(BASE_POLL_INTERVAL_MS)
+      }
+    })
   }, [fetchEvents])
 
-  return { events, isLoading, error, refetch }
+  return { events, isLoading, isError: error !== null, error, refetch }
 }
 
 function parseEventType(event: RawEventResponse): string {

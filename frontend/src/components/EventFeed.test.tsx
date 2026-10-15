@@ -1,48 +1,40 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import EventFeed from './EventFeed'
-import { ThemeProvider } from '../context/ThemeContext'
 
-const renderEventFeed = (agreementId?: string) => {
-  return render(
-    <ThemeProvider>
-      <EventFeed agreementId={agreementId} />
-    </ThemeProvider>
-  )
-}
+const mocks = vi.hoisted(() => ({
+  events: [] as Array<Record<string, unknown>>,
+  isLoading: false,
+  isError: false,
+  error: null as string | null,
+  refetch: vi.fn(),
+}))
+
+vi.mock('../hooks/useAgreementEvents', () => ({
+  useAgreementEvents: () => ({
+    events: mocks.events,
+    isLoading: mocks.isLoading,
+    isError: mocks.isError,
+    error: mocks.error,
+    refetch: mocks.refetch,
+  }),
+}))
 
 describe('<EventFeed />', () => {
-  it('renders event feed component', () => {
-    renderEventFeed()
-
-    expect(screen.getByText(/event|history|activity/i)).toBeInTheDocument()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.events = []
+    mocks.isLoading = false
+    mocks.isError = false
+    mocks.error = null
   })
 
-  it('renders without crashing', () => {
-    expect(() => {
-      renderEventFeed()
-    }).not.toThrow()
-  })
+  it('offers a Retry button in the error state that triggers refetch', () => {
+    mocks.error = 'RPC HTTP 500'
+    mocks.isError = true
+    render(<EventFeed agreementId={'a'.repeat(64)} />)
 
-  it('handles missing agreement ID gracefully', () => {
-    renderEventFeed()
-
-    expect(screen.getByText(/event|history|activity|no events/i)).toBeInTheDocument()
-  })
-
-  it('renders with valid agreement ID', () => {
-    const agreementId = 'a'.repeat(64)
-    renderEventFeed(agreementId)
-
-    expect(screen.getByText(/event|history|activity|loading/i)).toBeInTheDocument()
-  })
-
-  it('displays loading state when fetching events', () => {
-    const agreementId = 'a'.repeat(64)
-    renderEventFeed(agreementId)
-
-    // May show loading or events depending on data
-    const container = screen.getByText(/event|history|activity|loading|no event/i)
-    expect(container).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mocks.refetch).toHaveBeenCalledTimes(1)
   })
 })
