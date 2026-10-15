@@ -34,6 +34,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
   const [proofUri, setProofUri] = useState('')
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
   const [isRetrying, setIsRetrying] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
   const pendingAction = useRef<string | null>(null)
 
   const isLoading = status === 'building' || status === 'signing' || status === 'submitting'
@@ -141,10 +142,17 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     setIsRetrying(true)
     try {
       reset()
-      if (pendingAction.current === 'lock_funds') await handleLockFunds()
-      else if (pendingAction.current === 'submit_work') await handleSubmitWork()
-      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease()
-      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute()
+      // Bump the inclusion fee on each retry — the button is labelled
+      // 'Retry with adjusted gas', so resubmitting at the failed attempt's
+      // fee would be a no-op. The first retry already pays 2x BASE_FEE (the
+      // first attempt used the default), capped at MAX_RETRIES * BASE_FEE.
+      const nextRetry = retryCount + 1
+      setRetryCount(nextRetry)
+      const fee = String(Math.min(BASE_FEE * (nextRetry + 1), BASE_FEE * MAX_RETRIES))
+      if (pendingAction.current === 'lock_funds') await handleLockFunds(fee)
+      else if (pendingAction.current === 'submit_work') await handleSubmitWork(fee)
+      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease(fee)
+      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute(fee)
     } catch (err) {
       toast.error({ title: 'Retry failed', message: err instanceof Error ? err.message : 'Unknown error' })
     } finally {
@@ -241,7 +249,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
           />
           <div className="flex gap-2">
             <button
-              onClick={handleSubmitWork}
+              onClick={() => handleSubmitWork()}
               disabled={isLoading}
               className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >

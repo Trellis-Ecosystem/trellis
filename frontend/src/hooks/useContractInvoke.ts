@@ -83,7 +83,7 @@ export function useContractInvoke(): UseContractInvokeResult {
   }, [])
 
   const invoke = useCallback(
-    async (method: string, args: xdr.ScVal[], publicKey: string): Promise<string> => {
+    async (method: string, args: xdr.ScVal[], publicKey: string, fee?: string): Promise<string> => {
       // Abort any previously in-flight invocation before starting a new one.
       controllerRef.current?.abort()
       const controller = new AbortController()
@@ -106,7 +106,7 @@ export function useContractInvoke(): UseContractInvokeResult {
 
         // Build transaction
         const builtTx = new TransactionBuilder(sourceAccount, {
-          fee: '100000',
+          fee: fee ?? '100000',
           networkPassphrase: NETWORK_PASSPHRASE,
         })
           .addOperation(contract.call(method, ...args))
