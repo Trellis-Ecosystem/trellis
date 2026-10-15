@@ -1,9 +1,32 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import AgreementStatusPage from './AgreementStatusPage'
 import { ThemeProvider } from '../context/ThemeContext'
 import { WalletProvider } from '../context/WalletContext'
+import type { Agreement } from '../lib/soroban'
+import type { ReadErrorKind } from '../hooks/useContractRead'
+
+const mocks = vi.hoisted(() => ({
+  agreement: null as Agreement | null,
+  isLoading: false,
+  isError: false,
+  error: null as string | null,
+  errorKind: null as ReadErrorKind | null,
+  refetch: vi.fn(),
+}))
+
+vi.mock('../hooks/useAgreement', () => ({
+  useAgreement: () => ({
+    agreement: mocks.agreement,
+    isLoading: mocks.isLoading,
+    isError: mocks.isError,
+    error: mocks.error,
+    errorKind: mocks.errorKind,
+    status: 'idle',
+    refetch: mocks.refetch,
+  }),
+}))
 
 const renderAgreementStatusPage = () => {
   return render(
@@ -14,6 +37,20 @@ const renderAgreementStatusPage = () => {
         </WalletProvider>
       </ThemeProvider>
     </BrowserRouter>
+  )
+}
+
+const renderAgreementStatusPageAtId = (id: string) => {
+  return render(
+    <MemoryRouter initialEntries={[`/agreement/${id}`]}>
+      <ThemeProvider>
+        <WalletProvider>
+          <Routes>
+            <Route path="/agreement/:id" element={<AgreementStatusPage />} />
+          </Routes>
+        </WalletProvider>
+      </ThemeProvider>
+    </MemoryRouter>
   )
 }
 
@@ -95,5 +132,39 @@ describe('<AgreementStatusPage />', () => {
 
     // Valid ID should not show error
     expect(screen.queryByText(/Please enter an agreement ID/i)).not.toBeInTheDocument()
+  })
+
+  describe('error state', () => {
+    beforeEach(() => {
+      mocks.agreement = null
+      mocks.isLoading = false
+      mocks.isError = true
+      mocks.error = null
+      mocks.errorKind = null
+      mocks.refetch.mockClear()
+    })
+
+    it('shows a Retry button that refetches', () => {
+      mocks.errorKind = 'contract'
+      renderAgreementStatusPageAtId('a'.repeat(64))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(mocks.refetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('labels contract errors as Agreement not found', () => {
+      mocks.errorKind = 'contract'
+      renderAgreementStatusPageAtId('a'.repeat(64))
+
+      expect(screen.getByText('Agreement not found')).toBeInTheDocument()
+    })
+
+    it('labels network errors as unreachable', () => {
+      mocks.errorKind = 'network'
+      renderAgreementStatusPageAtId('a'.repeat(64))
+
+      expect(screen.getByText('Could not reach the network')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    })
   })
 })

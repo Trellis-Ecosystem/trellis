@@ -21,7 +21,7 @@ function AgreementStatusPage() {
     setValidationError(null)
   }, [id])
 
-  const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId)
+  const { agreement, isLoading, isError, error, errorKind, refetch } = useAgreement(queriedId)
 
   // Viewing an agreement records it in the local history list.
   useEffect(() => {
@@ -92,8 +92,21 @@ function AgreementStatusPage() {
       {/* Error State */}
       {isError && (
         <div className="mt-10 rounded-xl border border-red-500/50 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8">
-          <p className="text-red-400 font-semibold mb-2">Agreement not found</p>
-          <p className="text-sm text-gray-400">{error || 'The agreement ID may be invalid or the agreement does not exist.'}</p>
+          <p className="text-red-400 font-semibold mb-2">
+            {errorKind === 'network' ? 'Could not reach the network' : 'Agreement not found'}
+          </p>
+          <p className="text-sm text-gray-400">
+            {error ||
+              (errorKind === 'network'
+                ? 'The RPC endpoint did not respond. Check your connection and try again.'
+                : 'The agreement ID may be invalid or the agreement does not exist.')}
+          </p>
+          <button
+            onClick={refetch}
+            className="mt-4 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-navy-900 text-sm font-semibold rounded-lg transition-colors"
+          >
+            Retry
+          </button>
         </div>
       )}
 

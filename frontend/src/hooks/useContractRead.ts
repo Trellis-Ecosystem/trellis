@@ -9,6 +9,16 @@ const READ_ONLY_SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAW
 
 export type ReadStatus = 'idle' | 'loading' | 'success' | 'error'
 
+/**
+ * Distinguishes failures that retrying can never fix ('contract' — the
+ * simulation itself returned an error, e.g. a missing agreement) from
+ * transport-level failures ('network' — HTTP/RPC/timeout problems that a
+ * retry might resolve).
+ */
+export type ReadErrorKind = 'contract' | 'network'
+
+class ContractSimulationError extends Error {}
+
 interface UseContractReadResult<T> {
   data: T | null
   /** Granular status for consumers that need it. */
@@ -16,6 +26,8 @@ interface UseContractReadResult<T> {
   /** Convenience boolean derived from status — true while the RPC call is in-flight. */
   loading: boolean
   error: string | null
+  /** Null unless status is 'error'; see ReadErrorKind. */
+  errorKind: ReadErrorKind | null
   refetch: () => void
 }
 
@@ -36,6 +48,7 @@ export function useContractRead<T = unknown>(
   const [data, setData] = useState<T | null>(null)
   const [status, setStatus] = useState<ReadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [errorKind, setErrorKind] = useState<ReadErrorKind | null>(null)
   const [refetchTrigger, setRefetchTrigger] = useState(0)
 
   const refetch = useCallback(() => {
@@ -53,6 +66,7 @@ export function useContractRead<T = unknown>(
       try {
         setStatus('loading')
         setError(null)
+        setErrorKind(null)
 
         const server = new rpc.Server(RPC_URL, { allowHttp: RPC_URL.startsWith('http://') })
         const contract = new Contract(CONTRACT_ID)
@@ -74,7 +88,7 @@ export function useContractRead<T = unknown>(
         if (signal.aborted) return
 
         if (rpc.Api.isSimulationError(simulated)) {
-          throw new Error(simulated.error)
+          throw new ContractSimulationError(simulated.error)
         }
 
         if (!simulated.result) {
@@ -94,6 +108,7 @@ export function useContractRead<T = unknown>(
         const message = err instanceof Error ? err.message : 'Failed to read contract'
         console.error(`[useContractRead] ${method} failed:`, err)
         setError(message)
+        setErrorKind(err instanceof ContractSimulationError ? 'contract' : 'network')
         setStatus('error')
       }
     })()
@@ -102,5 +117,5 @@ export function useContractRead<T = unknown>(
     return () => controller.abort()
   }, [method, args, enabled, refetchTrigger])
 
-  return { data, status, loading: status === 'loading', error, refetch }
+  return { data, status, loading: status === 'loading', error, errorKind, refetch }
 }

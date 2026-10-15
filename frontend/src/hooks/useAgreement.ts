@@ -28,20 +28,28 @@ export function useAgreement(agreementId: string | null) {
   const args = useMemo(() => {
     if (!agreementId) return []
 
-    // Convert agreement ID (hex string) to ScVal bytes
-    const idBytes = hexToBytes(agreementId)
-    return [nativeToScVal(idBytes, { type: 'bytes' })]
+    // Convert agreement ID (hex string) to ScVal bytes. A malformed id yields
+    // empty args so the contract call fails through the normal error path
+    // instead of throwing during render and crashing the consumer.
+    try {
+      const idBytes = hexToBytes(agreementId)
+      return [nativeToScVal(idBytes, { type: 'bytes' })]
+    } catch {
+      return []
+    }
   }, [agreementId])
 
-  const { data, status, loading, error, refetch: _refetch } = useContractRead<xdr.ScVal>(
+  const { data, status, loading, error, errorKind, refetch: _refetch } = useContractRead<xdr.ScVal>(
     'get_agreement',
     args,
-    !!agreementId,
+    args.length > 0,
   )
 
-  // Auto-retry on transient failures before surfacing the error to the UI.
+  // Auto-retry on transient (network) failures before surfacing the error to
+  // the UI. Contract simulation errors are permanent — a missing agreement
+  // cannot start existing — so they surface immediately without retries.
   useEffect(() => {
-    if (status !== 'error') return
+    if (status !== 'error' || errorKind === 'contract') return
     if (retryCountRef.current >= MAX_RETRIES) return
 
     const delay = 1000 * (retryCountRef.current + 1) // 1 s, 2 s, 3 s
@@ -51,7 +59,7 @@ export function useAgreement(agreementId: string | null) {
     }, delay)
 
     return () => clearTimeout(timer)
-  }, [status, _refetch])
+  }, [status, errorKind, _refetch])
 
   // Reset retry counter when the queried ID changes.
   useEffect(() => {
@@ -108,9 +116,12 @@ export function useAgreement(agreementId: string | null) {
     /** True while the RPC call is in-flight (maps to status === 'loading'). */
     isLoading: loading,
     /** True when the last attempt ended in error and all retries are exhausted. */
-    isError: status === 'error' && retryCount >= MAX_RETRIES,
+    isError:
+      status === 'error' && (errorKind === 'contract' || retryCount >= MAX_RETRIES),
     /** Human-readable error message, or null. */
     error,
+    /** 'contract' errors are permanent; 'network' errors may resolve on retry. */
+    errorKind,
     /** Granular status string for consumers that need it. */
     status,
     /** Manually re-fetch and reset the retry counter. */
