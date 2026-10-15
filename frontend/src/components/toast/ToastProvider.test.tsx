@@ -1,6 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { ToastProvider, useToastActions } from '../../hooks/useToast'
+import ToastProvider from './ToastProvider'
+import { useToastActions } from '../../hooks/useToast'
 
 const TestComponent = () => {
   const toast = useToastActions()

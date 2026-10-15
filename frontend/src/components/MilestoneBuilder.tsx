@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 
 export interface MilestoneInput {
   amount: string
@@ -16,7 +16,7 @@ export default function MilestoneBuilder({ milestones, onChange, onValidationCha
   const [duplicates, setDuplicates] = useState<Set<number>>(new Set())
 
   // Check for duplicate amounts and invalid values
-  const validationStatus = useMemo(() => {
+  useEffect(() => {
     const amountMap = new Map<string, number[]>()
     const newDuplicates = new Set<number>()
     let hasErrors = false
@@ -54,7 +54,6 @@ export default function MilestoneBuilder({ milestones, onChange, onValidationCha
       onValidationChange(isValid)
     }
 
-    return { isValid, hasErrors }
   }, [milestones, onValidationChange])
 
   const addMilestone = () => {

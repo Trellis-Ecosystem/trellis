@@ -22,7 +22,7 @@ describe('useAgreementEvents', () => {
   it('provides error state', () => {
     const { result } = renderHook(() => useAgreementEvents(null))
 
-    expect(result.current).toHaveProperty('isError')
+    expect(result.current).toHaveProperty('error')
     expect(result.current).toHaveProperty('error')
   })
 
@@ -43,7 +43,7 @@ describe('useAgreementEvents', () => {
 
     expect(result.current).toHaveProperty('events')
     expect(result.current).toHaveProperty('isLoading')
-    expect(result.current).toHaveProperty('isError')
+    expect(result.current).toHaveProperty('error')
     expect(result.current).toHaveProperty('error')
     expect(result.current).toHaveProperty('refetch')
   })
@@ -52,6 +52,6 @@ describe('useAgreementEvents', () => {
     const { result } = renderHook(() => useAgreementEvents(null))
 
     expect(typeof result.current.isLoading).toBe('boolean')
-    expect(typeof result.current.isError).toBe('boolean')
+    expect(result.current.error).toBeNull()
   })
 })

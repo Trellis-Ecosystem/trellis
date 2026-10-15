@@ -9,16 +9,16 @@ const mockAgreement: Agreement = {
   agreement_id: 'a'.repeat(64),
   payer: 'GAQAA5Z4K7FF5H66GEQXCWUBSBDZXY52B3Z5U42EB46BEOV6PC6YWRYE',
   payee: 'GCYBXL5CD5FWUEURISB5PLAUQV2DNGHSACCNAK3FYJSTF2QJD5CUYNGF',
-  resolver: 'GAN2FJTJ7A4Z2VYKOO3YZWMHZKD7WWEXZB5LBPD2MPWZP3UQFQQ4S5K',
-  payment_token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  dispute_resolver: 'GAN2FJTJ7A4Z2VYKOO3YZWMHZKD7WWEXZB5LBPD2MPWZP3UQFQQ4S5K',
+  token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
   milestones: [
     {
       id: 1,
       amount: '1000',
-      status: 'pending',
+      status: 'Pending',
+      proof_uri: '',
     },
   ],
-  created: '2024-01-01',
 }
 
 const renderAgreementDetail = (agreement: Agreement) => {

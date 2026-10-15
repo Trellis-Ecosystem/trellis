@@ -162,7 +162,7 @@ export function milestoneToScVal(m: { amount: bigint | string; status: EscrowSta
   ]);
 }
 
-interface RawMilestone {
+interface ChainMilestone {
   id: number;
   amount: bigint;
   status: [EscrowStatus];
@@ -175,7 +175,7 @@ interface RawAgreement {
   payee: string;
   token: string;
   dispute_resolver: string;
-  milestones: RawMilestone[];
+  milestones: ChainMilestone[];
 }
 
 async function simulateRead<T>(method: string, args: xdr.ScVal[]): Promise<T> {

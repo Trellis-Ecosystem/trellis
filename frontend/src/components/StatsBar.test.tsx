@@ -16,7 +16,7 @@ const mockUseContractStats = vi.mocked(useContractStats)
 
 describe('<StatsBar />', () => {
   it('shows skeleton while loading', () => {
-    mockUseContractStats.mockReturnValue({ stats: null, status: 'loading', lastUpdated: null })
+    mockUseContractStats.mockReturnValue({ stats: null, status: 'loading', lastUpdated: null, error: null })
     const { container } = render(<StatsBar />)
     // Should have animated placeholder elements but no numeric values
     expect(container.querySelector('.animate-pulse')).not.toBeNull()
@@ -27,7 +27,7 @@ describe('<StatsBar />', () => {
     mockUseContractStats.mockReturnValue({
       stats: { agreements: 5, milestonesLocked: 12 },
       status: 'ok',
-      lastUpdated: '2026-07-27T12:00:00.000Z',
+      lastUpdated: '2026-07-27T12:00:00.000Z', error: null,
     })
     render(<StatsBar />)
 
@@ -41,7 +41,7 @@ describe('<StatsBar />', () => {
     mockUseContractStats.mockReturnValue({
       stats: { agreements: 3, milestonesLocked: 7 },
       status: 'stale',
-      lastUpdated: '2026-07-27T11:00:00.000Z',
+      lastUpdated: '2026-07-27T11:00:00.000Z', error: null,
     })
     render(<StatsBar />)
 
@@ -54,7 +54,7 @@ describe('<StatsBar />', () => {
   })
 
   it('shows N/A and RPC Unavailable alert when status is error — fix for #93', () => {
-    mockUseContractStats.mockReturnValue({ stats: null, status: 'error', lastUpdated: null })
+    mockUseContractStats.mockReturnValue({ stats: null, status: 'error', lastUpdated: null, error: null })
     render(<StatsBar />)
 
     // All stats show N/A
@@ -67,7 +67,7 @@ describe('<StatsBar />', () => {
   })
 
   it('never renders a hardcoded numeric value in error state — no fabricated zeros', () => {
-    mockUseContractStats.mockReturnValue({ stats: null, status: 'error', lastUpdated: null })
+    mockUseContractStats.mockReturnValue({ stats: null, status: 'error', lastUpdated: null, error: null })
     render(<StatsBar />)
 
     // Numeric zero must not appear anywhere as a stat value

@@ -115,7 +115,7 @@ function CreateAgreementPage() {
     if (!trimmed) return `${field} is required`
 
     if (trimmed.startsWith('C')) {
-      return StrKey.isValidContractKey(trimmed)
+      return StrKey.isValidContract(trimmed)
         ? undefined
         : `${field} must be a valid contract address (starts with C)`
     }

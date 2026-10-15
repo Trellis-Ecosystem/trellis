@@ -31,7 +31,17 @@ interface WalletContextValue {
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 const STORAGE_KEY = 'trellis_wallet_connected';
-const ACCOUNT_POLL_INTERVAL_MS = 3_000;
+
+// Poll cadence per phase: fast while connected (catch account/network
+// switches quickly), slow while disconnected (just watching for the
+// extension to appear), and none at all while unavailable/detecting/
+// connecting — there is nothing useful to poll for in those phases.
+const POLL_INTERVAL_MS: Partial<Record<WalletStatus, number>> = {
+  connected: 5_000,
+  disconnected: 30_000,
+};
+const BACKOFF_MULTIPLIER = 2;
+const MAX_POLL_INTERVAL_MS = 120_000;
 const PASSPHRASE_RETRY_ATTEMPTS = 3;
 const PASSPHRASE_RETRY_DELAY_MS = 500;
 const PASSPHRASE_FETCH_TIMEOUT_MS = 5_000;
@@ -189,24 +199,31 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // extension becoming available. Nothing is polled while unavailable,
   // detecting, or connecting — those phases resolve on their own.
   useEffect(() => {
-    const baseInterval = POLL_INTERVAL_MS[status];
-    if (!baseInterval) return;
+    const configuredInterval = POLL_INTERVAL_MS[status];
+    if (!configuredInterval) return;
+    const baseInterval: number = configuredInterval;
 
     let mounted = true;
+    let inFlight = false;
     let failureCount = 0;
     let intervalId: ReturnType<typeof setInterval>;
 
-    const intervalId = setInterval(() => {
-      void (async () => {
-        const [address, passphrase] = await Promise.all([
-          getPublicKey(),
-          fetchNetworkPassphraseWithRetry(),
-        ]);
+    const reschedule = (delayMs: number) => {
+      clearInterval(intervalId);
+      intervalId = setInterval(runPoll, delayMs);
+    };
 
     async function runPoll() {
+      // The passphrase fetch can retry for longer than the poll interval;
+      // skip a tick rather than stacking concurrent polls.
+      if (inFlight) return;
+      inFlight = true;
       try {
         if (status === 'connected') {
-          const [address, passphrase] = await Promise.all([getPublicKey(), getNetworkPassphrase()]);
+          const [address, passphrase] = await Promise.all([
+            getPublicKey(),
+            fetchNetworkPassphraseWithRetry(),
+          ]);
 
           if (!mounted) return;
 
@@ -238,6 +255,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           MAX_POLL_INTERVAL_MS,
         );
         reschedule(backoffMs);
+      } finally {
+        inFlight = false;
       }
     }
 

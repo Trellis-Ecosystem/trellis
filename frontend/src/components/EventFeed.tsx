@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type ReactElement } from 'react'
 import { useAgreementEvents } from '../hooks/useAgreementEvents'
 import { ExplorerLink } from './ExplorerLink'
 
@@ -124,7 +124,7 @@ function formatEventDescription(event: { type: string; amount?: string; mileston
   }
 }
 
-function getEventIcon(type: string): JSX.Element {
+function getEventIcon(type: string): ReactElement {
   const iconClass = "w-5 h-5"
   
   switch (type) {

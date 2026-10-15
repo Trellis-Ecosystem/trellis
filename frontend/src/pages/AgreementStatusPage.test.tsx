@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import AgreementStatusPage from './AgreementStatusPage'
 import { ThemeProvider } from '../context/ThemeContext'
 import { WalletProvider } from '../context/WalletContext'

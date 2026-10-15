@@ -4,7 +4,6 @@ import { getStatusBadgeColor, useMilestoneActions } from '../hooks/useMilestoneA
 interface WalletLike {
   connected: boolean;
   publicKey: string | null;
-  loading: boolean;
   error: string | null;
 }
 

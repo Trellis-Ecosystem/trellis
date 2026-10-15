@@ -6,7 +6,7 @@ import { ThemeProvider } from '../context/ThemeContext'
 const renderEventFeed = (agreementId?: string) => {
   return render(
     <ThemeProvider>
-      <EventFeed agreementId={agreementId} />
+      <EventFeed agreementId={agreementId ?? ''} />
     </ThemeProvider>
   )
 }

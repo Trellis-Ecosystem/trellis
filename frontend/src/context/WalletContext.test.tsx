@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { WalletProvider, useWallet } from './WalletContext'
+import { isFreighterInstalled } from '../lib/wallet'
 
 vi.mock('../lib/wallet', () => ({
   isFreighterInstalled: vi.fn().mockResolvedValue(false),
@@ -57,6 +58,9 @@ describe('WalletProvider', () => {
   })
 
   it('clears polling interval when component unmounts', async () => {
+    // Polling only runs while the wallet is connected or disconnected (not
+    // while Freighter is unavailable), so make the extension look installed.
+    vi.mocked(isFreighterInstalled).mockResolvedValue(true)
     const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
 
     const { unmount } = render(
@@ -73,6 +77,7 @@ describe('WalletProvider', () => {
 
     expect(clearIntervalSpy).toHaveBeenCalled()
     clearIntervalSpy.mockRestore()
+    vi.mocked(isFreighterInstalled).mockResolvedValue(false)
   })
 
   it('does not throw when mounted and unmounted rapidly', async () => {
@@ -121,7 +126,7 @@ describe('WalletProvider', () => {
       return null
     }
 
-    const { rerender } = render(
+    render(
       <WalletProvider>
         <TestComponent />
       </WalletProvider>

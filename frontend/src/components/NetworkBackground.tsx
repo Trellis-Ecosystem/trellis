@@ -34,10 +34,14 @@ export function NetworkBackground() {
   })
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const canvasEl = canvasRef.current
+    if (!canvasEl) return
+    const context = canvasEl.getContext('2d')
+    if (!context) return
+    // Re-bound with explicit types: narrowing from the guards above does not
+    // carry into the hoisted function declarations below.
+    const canvas: HTMLCanvasElement = canvasEl
+    const ctx: CanvasRenderingContext2D = context
 
     let animationId: number
     let particles: Particle[] = []
@@ -104,7 +108,7 @@ export function NetworkBackground() {
       rebuildBuckets()
     }
 
-    function drawFrame(timestamp: number) {
+    function drawFrame() {
       const mouse = mouseRef.current
       const cssW = window.innerWidth
       const cssH = window.innerHeight

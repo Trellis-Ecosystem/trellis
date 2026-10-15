@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
-import { getRecentStartLedger, isRetentionWindowError, RETENTION_WINDOW_MESSAGE } from '../lib/eventWindow'
+import { isRetentionWindowError, RETENTION_WINDOW_MESSAGE } from '../lib/eventWindow'
 
 export interface ContractStats {
   agreements: number

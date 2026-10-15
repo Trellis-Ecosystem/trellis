@@ -24,7 +24,7 @@ const PHASE_LABELS: Record<InvokeStatus, string> = {
 
 const PHASE_ORDER: InvokeStatus[] = ['building', 'signing', 'submitting']
 
-export default function TransactionStatus({ status, txHash, error, onRetry, method, retrying }: TransactionStatusProps) {
+export default function TransactionStatus({ status, txHash, error, onRetry, retrying }: TransactionStatusProps) {
   const [timeoutWarning, setTimeoutWarning] = useState(false)
   const startRef = useRef<number | null>(null)
 
