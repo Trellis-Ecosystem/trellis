@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL } from '../lib/config'
-import { hexToBytes } from '../lib/format'
 import { getRecentStartLedger, isRetentionWindowError, RETENTION_WINDOW_MESSAGE } from '../lib/eventWindow'
 import type { RawEventResponse } from '../lib/soroban'
 import { isValidEventResponse } from '../lib/soroban'
@@ -25,6 +24,24 @@ export interface AgreementEvent {
 const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
 const MAX_POLL_INTERVAL_MS = 60_000  // Cap backoff at 60 seconds
 const FETCH_TIMEOUT_MS = 30_000     // Per-request timeout: 30 seconds
+
+// The contract emits abbreviated `trls_*` topic symbols (see
+// contracts/trellis_core/src/events.rs — names are capped at 9 chars).
+// Map them to the human-readable event names EventFeed renders.
+export const EVENT_TYPE_MAP: Record<string, string> = {
+  trls_crte: 'created',
+  trls_lckd: 'locked',
+  trls_sbmt: 'work_submitted',
+  trls_rlsd: 'released',
+  trls_dspt: 'disputed',
+  trls_rslv: 'resolved',
+  trls_cncl: 'cancelled',
+  trls_prtl: 'partially_released',
+  trls_cmpl: 'completed',
+  trls_ddln: 'deadline_set',
+  trls_expd: 'expired',
+  trls_ttle: 'ttl_extended',
+}
 
 /**
  * Fetch and parse contract events for a specific agreement.
@@ -226,7 +243,7 @@ export function useAgreementEvents(agreementId: string | null) {
     void fetchEvents(new AbortController().signal)
   }, [fetchEvents])
 
-  return { events, isLoading, error, refetch }
+  return { events, isLoading, isError: error !== null, error, refetch }
 }
 
 function parseEventType(event: RawEventResponse): string {
@@ -253,24 +270,9 @@ function parseEventData(event: RawEventResponse): Partial<AgreementEvent> {
       return {}
     }
 
-    // Get the event type from topics
-    const topics = event.topic || []
-    let eventTypeSymbol = 'unknown'
-    if (topics.length > 0) {
-      try {
-        const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
-        if (firstTopic.switch().name === 'scvSymbol') {
-          eventTypeSymbol = firstTopic.sym().toString()
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    const scVal = xdr.ScVal.fromXDR(value, 'base64')
-
     // Parse common fields from event data structure
     // This is simplified - actual parsing depends on contract event schema
+    xdr.ScVal.fromXDR(value, 'base64')
     return {}
   } catch {
     return {}

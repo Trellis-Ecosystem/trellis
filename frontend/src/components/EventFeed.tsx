@@ -112,13 +112,26 @@ function formatEventDescription(event: { type: string; amount?: string; mileston
     case 'work_submitted':
       return `Payee submitted work for milestone${milestone}`
     case 'approved':
+    case 'released':
       return `Milestone${milestone} approved — funds released${amount}`
+    case 'partially_released':
+      return `Milestone${milestone} partially released${amount}`
     case 'disputed':
       return `Dispute raised for milestone${milestone}`
     case 'resolved':
       return `Dispute resolved for milestone${milestone}`
+    case 'cancelled':
+      return `Milestone${milestone} cancelled${amount}`
     case 'refunded':
       return `Milestone${milestone} refunded${amount}`
+    case 'completed':
+      return 'Agreement completed'
+    case 'deadline_set':
+      return `Deadline set for milestone${milestone}`
+    case 'expired':
+      return `Milestone${milestone} expired — refunded${amount}`
+    case 'ttl_extended':
+      return 'Contract storage TTL extended'
     default:
       return `Event: ${event.type}`
   }
@@ -164,6 +177,32 @@ function getEventIcon(type: string): JSX.Element {
           <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
         </svg>
       )
+    case 'cancelled':
+    case 'expired':
+      return (
+        <svg className={iconClass} fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+        </svg>
+      )
+    case 'partially_released':
+      return (
+        <svg className={iconClass} fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0zM5 13a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" clipRule="evenodd" />
+        </svg>
+      )
+    case 'completed':
+      return (
+        <svg className={iconClass} fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+        </svg>
+      )
+    case 'deadline_set':
+    case 'ttl_extended':
+      return (
+        <svg className={iconClass} fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+        </svg>
+      )
     default:
       return (
         <svg className={iconClass} fill="currentColor" viewBox="0 0 20 20">
@@ -189,6 +228,18 @@ function getEventColor(type: string): string {
       return 'bg-purple-500'
     case 'refunded':
       return 'bg-gray-500'
+    case 'cancelled':
+      return 'bg-orange-500'
+    case 'partially_released':
+      return 'bg-emerald-500'
+    case 'completed':
+      return 'bg-green-600'
+    case 'deadline_set':
+      return 'bg-indigo-500'
+    case 'expired':
+      return 'bg-red-400'
+    case 'ttl_extended':
+      return 'bg-slate-500'
     default:
       return 'bg-navy-600'
   }

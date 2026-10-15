@@ -1,48 +1,47 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import EventFeed from './EventFeed'
-import { ThemeProvider } from '../context/ThemeContext'
 
-const renderEventFeed = (agreementId?: string) => {
-  return render(
-    <ThemeProvider>
-      <EventFeed agreementId={agreementId} />
-    </ThemeProvider>
-  )
-}
+const ALL_TYPES = [
+  'created',
+  'locked',
+  'work_submitted',
+  'released',
+  'disputed',
+  'resolved',
+  'cancelled',
+  'partially_released',
+  'completed',
+  'deadline_set',
+  'expired',
+  'ttl_extended',
+]
+
+vi.mock('../hooks/useAgreementEvents', () => ({
+  useAgreementEvents: () => ({
+    events: ALL_TYPES.map((type, i) => ({
+      type,
+      ledger: 500_000 + i,
+      txHash: `hash${i}`,
+      timestamp: '2026-01-01T00:00:00Z',
+      agreementId: 'a'.repeat(64),
+    })),
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}))
 
 describe('<EventFeed />', () => {
-  it('renders event feed component', () => {
-    renderEventFeed()
+  it('renders a real description for every contract event type', () => {
+    render(<EventFeed agreementId={'a'.repeat(64)} />)
 
-    expect(screen.getByText(/event|history|activity/i)).toBeInTheDocument()
-  })
-
-  it('renders without crashing', () => {
-    expect(() => {
-      renderEventFeed()
-    }).not.toThrow()
-  })
-
-  it('handles missing agreement ID gracefully', () => {
-    renderEventFeed()
-
-    expect(screen.getByText(/event|history|activity|no events/i)).toBeInTheDocument()
-  })
-
-  it('renders with valid agreement ID', () => {
-    const agreementId = 'a'.repeat(64)
-    renderEventFeed(agreementId)
-
-    expect(screen.getByText(/event|history|activity|loading/i)).toBeInTheDocument()
-  })
-
-  it('displays loading state when fetching events', () => {
-    const agreementId = 'a'.repeat(64)
-    renderEventFeed(agreementId)
-
-    // May show loading or events depending on data
-    const container = screen.getByText(/event|history|activity|loading|no event/i)
-    expect(container).toBeInTheDocument()
+    // The fallback renders 'Event: <type>' — every mapped type must have a
+    // proper description instead.
+    expect(screen.queryByText(/^Event: /)).not.toBeInTheDocument()
+    expect(screen.getByText('Agreement created')).toBeInTheDocument()
+    expect(screen.getByText('Agreement completed')).toBeInTheDocument()
+    expect(screen.getByText('Contract storage TTL extended')).toBeInTheDocument()
   })
 })
