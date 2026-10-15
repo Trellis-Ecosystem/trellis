@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Account, Contract, TransactionBuilder, rpc, xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 
@@ -37,6 +37,11 @@ export function useContractRead<T = unknown>(
   const [status, setStatus] = useState<ReadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [refetchTrigger, setRefetchTrigger] = useState(0)
+  // Tracks the identity of the last query so a refetch (which only bumps
+  // refetchTrigger) keeps its data, while a genuinely different method/args
+  // clears it — otherwise a failed lookup would render the previous result
+  // under the new query.
+  const lastQueryRef = useRef<{ method: string; args: xdr.ScVal[] } | null>(null)
 
   const refetch = useCallback(() => {
     setRefetchTrigger((prev) => prev + 1)
@@ -44,6 +49,11 @@ export function useContractRead<T = unknown>(
 
   useEffect(() => {
     if (!enabled) return
+
+    if (lastQueryRef.current?.method !== method || lastQueryRef.current.args !== args) {
+      lastQueryRef.current = { method, args }
+      setData(null)
+    }
 
     // AbortController for this specific request — aborted on cleanup/unmount.
     const controller = new AbortController()

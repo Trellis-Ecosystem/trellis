@@ -28,15 +28,21 @@ export function useAgreement(agreementId: string | null) {
   const args = useMemo(() => {
     if (!agreementId) return []
 
-    // Convert agreement ID (hex string) to ScVal bytes
-    const idBytes = hexToBytes(agreementId)
-    return [nativeToScVal(idBytes, { type: 'bytes' })]
+    // Convert agreement ID (hex string) to ScVal bytes. A malformed id yields
+    // empty args so the contract call fails through the normal error path
+    // instead of throwing during render and crashing the consumer.
+    try {
+      const idBytes = hexToBytes(agreementId)
+      return [nativeToScVal(idBytes, { type: 'bytes' })]
+    } catch {
+      return []
+    }
   }, [agreementId])
 
   const { data, status, loading, error, refetch: _refetch } = useContractRead<xdr.ScVal>(
     'get_agreement',
     args,
-    !!agreementId,
+    args.length > 0,
   )
 
   // Auto-retry on transient failures before surfacing the error to the UI.
