@@ -19,7 +19,10 @@
 //! Both variants share [`deploy`], so the token/contract wiring can never
 //! diverge between them.
 
-use soroban_sdk::{testutils::Address as _, token, vec, Address, BytesN, Env, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, EnvTestConfig},
+    token, vec, Address, BytesN, Env, Vec,
+};
 
 use crate::{
     types::{EscrowStatus, Milestone},
@@ -129,7 +132,13 @@ pub fn setup_mocked() -> (
     Address,
     TrellisContractClient<'static>,
 ) {
-    let env = Env::default();
+    // Generated suites run hundreds of cases per test; capturing a ledger
+    // snapshot for each one produced thousands of tracked JSON files that
+    // every PR touched and conflicted on (#602). Their invariants are checked
+    // by assertions, so snapshot capture is disabled here.
+    let env = Env::new_with_config(EnvTestConfig {
+        capture_snapshot_at_drop: false,
+    });
     // Installed before `deploy` so it covers the SAC mint below.
     env.mock_all_auths();
     deploy(env, FUZZ_MINT)
