@@ -533,7 +533,7 @@ in the repository settings:
 | Name | Kind | Value |
 |---|---|---|
 | `TRELLIS_KEEPER_SECRET_KEY` | Secret | `S…` secret key of a funded testnet account that pays the rent |
-| `TRELLIS_KEEPER_ADDRESS` | Variable | The matching `G…` public address (recorded as `caller`) |
+| `TRELLIS_KEEPER_ADDRESS` | Variable | The matching `G…` public address (recorded as `caller`; the contract requires it to sign, so it must match the secret key) |
 | `TRELLIS_CONTRACT_ID` | Variable (optional) | Contract to target; defaults to the [Live Contract](#live-contract) |
 
 Use a dedicated low-balance account — never a payer, payee or resolver key.

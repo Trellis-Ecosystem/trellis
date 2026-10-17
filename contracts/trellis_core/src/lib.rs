@@ -193,12 +193,17 @@ impl TrellisContract {
     /// `agreement.token`.
     ///
     /// The milestone must be `Pending`; any other status returns
-    /// [`TrellisError::InvalidStateTransition`].
+    /// [`TrellisError::InvalidStateTransition`]. If a deadline was set via
+    /// [`Self::set_milestone_deadline`] it must not have passed yet: funding a
+    /// milestone that is already expirable would let anyone call
+    /// [`Self::expire_milestone`] and pull the escrow straight back.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
     /// - [`TrellisError::InvalidStateTransition`] – milestone not `Pending`.
+    /// - [`TrellisError::DeadlinePassed`] – the milestone's deadline is
+    ///   strictly before the current ledger timestamp.
     pub fn lock_funds(
         env: Env,
         agreement_id: BytesN<32>,
@@ -217,6 +222,7 @@ impl TrellisContract {
         if milestone.status != EscrowStatus::Pending {
             return Err(TrellisError::InvalidStateTransition);
         }
+        ensure_deadline_not_passed(&env, &agreement_id, milestone_id)?;
 
         // Mutate the milestone value and persist it back to storage before any
         // external calls (checks-effects-interactions pattern).
@@ -491,6 +497,9 @@ impl TrellisContract {
     /// funds is accounted for exactly once. Passing the whole remainder to one
     /// side reproduces [`Self::resolve_dispute`]'s all-or-nothing behaviour.
     ///
+    /// If this ruling settles the agreement's last non-terminal milestone,
+    /// `agreement_completed` is emitted after `milestone_resolved`.
+    ///
     /// # Auth
     /// `agreement.dispute_resolver.require_auth()` — see
     /// [`Self::resolve_dispute`] for why that alone is sufficient.
@@ -572,7 +581,22 @@ impl TrellisContract {
             );
         }
 
-        events::milestone_resolved(&env, agreement_id, milestone_id, payer_amount, payee_amount);
+        events::milestone_resolved(
+            &env,
+            agreement_id.clone(),
+            milestone_id,
+            payer_amount,
+            payee_amount,
+        );
+        // A ruling moves the milestone into a terminal state, so it can be the
+        // transition that settles the whole agreement — mirror
+        // `approve_and_release` and emit `agreement_completed` after the
+        // milestone-level event.
+        emit_if_agreement_completed(
+            &env,
+            &agreement_id,
+            &storage::read_agreement(&env, &agreement_id)?,
+        );
 
         Ok(())
     }
@@ -588,6 +612,9 @@ impl TrellisContract {
     /// `trellis resolve --refund-to-payer <bool>`, which is why its name and
     /// arguments must not change. For a genuine partial outcome use
     /// [`Self::resolve_dispute_split`], which expresses what this one cannot.
+    ///
+    /// If this ruling settles the agreement's last non-terminal milestone,
+    /// `agreement_completed` is emitted after `milestone_resolved`.
     ///
     /// # Auth
     /// `agreement.dispute_resolver.require_auth()` is the sole enforcement
@@ -645,10 +672,17 @@ impl TrellisContract {
         // one leg is the full remainder, the other is zero.
         events::milestone_resolved(
             &env,
-            agreement_id,
+            agreement_id.clone(),
             milestone_id,
             if refund_to_payer { amount } else { 0 },
             if refund_to_payer { 0 } else { amount },
+        );
+        // See `resolve_dispute_split`: a ruling can settle the last
+        // non-terminal milestone, so check for agreement completion.
+        emit_if_agreement_completed(
+            &env,
+            &agreement_id,
+            &storage::read_agreement(&env, &agreement_id)?,
         );
 
         Ok(())
@@ -868,6 +902,8 @@ impl TrellisContract {
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
     /// - [`TrellisError::InvalidMilestone`] – any ID in `milestone_ids` is out of range.
     /// - [`TrellisError::InvalidStateTransition`] – any milestone is not `Pending`.
+    /// - [`TrellisError::DeadlinePassed`] – any milestone's deadline has
+    ///   already passed (see [`Self::lock_funds`]).
     pub fn batch_lock_funds(
         env: Env,
         agreement_id: BytesN<32>,
@@ -898,6 +934,7 @@ impl TrellisContract {
             if milestone.status != EscrowStatus::Pending {
                 return Err(TrellisError::InvalidStateTransition);
             }
+            ensure_deadline_not_passed(&env, &agreement_id, milestone_id)?;
 
             let amount = milestone.amount;
             total = total
@@ -963,9 +1000,14 @@ impl TrellisContract {
     /// expire. This entrypoint exists so an external keeper service can renew
     /// it on a schedule.
     ///
-    /// No auth is required: extending a TTL cannot alter agreement state and
-    /// the caller pays the rent, so there is nothing to gate. Requiring a
-    /// signature would only stop third-party keepers from doing useful work.
+    /// Still permissionless — any address, including a third-party keeper,
+    /// may renew any agreement — but `caller` must authorise its own call
+    /// (`caller.require_auth()`). `caller` is published in the `ttl_extended`
+    /// event as an audit trail of keeper activity, so without the check anyone
+    /// could log an arbitrary address as the keeper. A keeper already signs
+    /// the transaction it submits, so this costs it nothing, and it matches
+    /// [`Self::expire_milestone`], which authenticates its `caller` for the
+    /// same reason.
     ///
     /// # Errors
     /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
@@ -974,6 +1016,10 @@ impl TrellisContract {
         agreement_id: BytesN<32>,
         caller: Address,
     ) -> Result<(), TrellisError> {
+        // Authenticate before the TTL bump so the emitted `caller` is
+        // guaranteed to be the real signer.
+        caller.require_auth();
+
         storage::extend_agreement_ttl(&env, &agreement_id)?;
         events::ttl_extended(&env, agreement_id, caller);
         Ok(())
@@ -1049,10 +1095,15 @@ impl TrellisContract {
     /// milestone's state, not by who calls.
     ///
     /// Covered stalled states, once `env.ledger().timestamp() > deadline`:
-    /// - `Pending` (never funded) → `Refunded`. No tokens move; this is the
-    ///   automatic equivalent of [`Self::cancel_unfunded_milestone`].
+    /// - `Pending` (never funded) → `Cancelled`. No tokens move; this is the
+    ///   automatic equivalent of [`Self::cancel_unfunded_milestone`], and
+    ///   writes the same status it does.
     /// - `Funded` (payee never submitted work) → `Refunded`, and the locked
     ///   `amount` is returned to the payer.
+    ///
+    /// The split mirrors the rest of the contract: `Refunded` always means
+    /// escrowed tokens really went back to the payer, while `Cancelled` marks a
+    /// milestone that was closed before anything was ever locked.
     ///
     /// Deliberately **not** covered:
     /// - `WorkSubmitted` — the payee has delivered, so an unresponsive payer
@@ -1060,7 +1111,7 @@ impl TrellisContract {
     ///   [`Self::raise_dispute`].
     /// - `Disputed` — the resolver owns the outcome; a timeout would let
     ///   either party run out the clock on arbitration.
-    /// - `Completed` / `Refunded` — already terminal.
+    /// - `Completed` / `Refunded` / `Cancelled` — already terminal.
     ///
     /// All of these return [`TrellisError::InvalidStateTransition`].
     ///
@@ -1088,9 +1139,12 @@ impl TrellisContract {
             _ => return Err(TrellisError::DeadlineNotReached),
         }
 
-        let refunded_amount = match milestone.status {
-            EscrowStatus::Pending => 0,
-            EscrowStatus::Funded => milestone.amount,
+        // A never-funded milestone is `Cancelled` (no tokens moved), exactly as
+        // `cancel_unfunded_milestone` would leave it; `Refunded` is reserved
+        // for the case where escrowed funds really go back to the payer.
+        let (refunded_amount, new_status) = match milestone.status {
+            EscrowStatus::Pending => (0, EscrowStatus::Cancelled),
+            EscrowStatus::Funded => (milestone.amount, EscrowStatus::Refunded),
             _ => return Err(TrellisError::InvalidStateTransition),
         };
 

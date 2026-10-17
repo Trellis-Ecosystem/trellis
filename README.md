@@ -488,10 +488,10 @@ Trellis is a monorepo with three layers:
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `batch_lock_funds` | Payer | Funds multiple milestones atomically in one transaction |
 | `get_milestone` | Anyone | Returns a single milestone's state, or none if the agreement or milestone does not exist (read-only) |
-| `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+| `extend_agreement_ttl` | Anyone (`caller` must sign) | Renews an agreement's ledger TTL to avoid archival; the signing `caller` is recorded in the event |
 | `set_milestone_deadline` | Payer | Sets an optional deadline (ledger timestamp) on a still-`Pending` milestone |
 | `get_milestone_deadline` | Anyone | Returns a milestone's deadline, if one is set (read-only) |
-| `expire_milestone` | Anyone | After the deadline, closes a stalled `Pending` or `Funded` milestone as `Refunded`, returning any locked funds to the payer |
+| `expire_milestone` | Anyone | After the deadline, closes a stalled milestone: a never-funded `Pending` one becomes `Cancelled`, a `Funded` one becomes `Refunded` with the locked funds returned to the payer |
 
 <details>
 <summary>🧬 <strong>Native ScVal Encoding</strong></summary>
@@ -502,8 +502,8 @@ The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
 <br />
-Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent. Use <code>trellis extend-ttl</code> for a one-off renewal; the scheduled TTL keeper described in <a href="./DEPLOYMENT.md#agreement-ttl-keeper">DEPLOYMENT.md</a> renews tracked agreements weekly.
-Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically, and the view functions (<code>get_agreement</code>, <code>get_milestone</code>, <code>get_total_amount</code>) renew it as well whenever a read finds the remaining TTL below the threshold — so a read is not strictly side-effect free, and the caller pays for the extension. Reading keeps a watched agreement alive between transitions rather than leaving it to expire. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent.
+Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it — `caller` must sign its own call — and the caller pays the rent. Use <code>trellis extend-ttl</code> for a one-off renewal; the scheduled TTL keeper described in <a href="./DEPLOYMENT.md#agreement-ttl-keeper">DEPLOYMENT.md</a> renews tracked agreements weekly.
+Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically, and the view functions (<code>get_agreement</code>, <code>get_milestone</code>, <code>get_total_amount</code>) renew it as well whenever a read finds the remaining TTL below the threshold — so a read is not strictly side-effect free, and the caller pays for the extension. Reading keeps a watched agreement alive between transitions rather than leaving it to expire. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it — `caller` must sign its own call — and the caller pays the rent.
 </details>
 
 <details>

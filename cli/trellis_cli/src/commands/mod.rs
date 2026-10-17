@@ -1181,9 +1181,10 @@ fn run_cancel_milestone(
 ///   --agreement-id <hex> --caller <G|C>
 /// ```
 ///
-/// The contract requires no auth — `caller` is only recorded in the
-/// `ttl_extended` event — but the call is still a fee-paying transaction, so
-/// it goes through the same confirmation prompt as other submitting commands.
+/// The contract requires `caller` to authorise the call (it is recorded in the
+/// `ttl_extended` event, so it must be the real signer); pass the source
+/// account's own address. The call is a fee-paying transaction, so it goes
+/// through the same confirmation prompt as other submitting commands.
 fn run_extend_ttl(
     config: &Config,
     agreement_id: String,

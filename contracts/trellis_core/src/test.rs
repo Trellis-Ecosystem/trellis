@@ -1784,9 +1784,9 @@ fn test_extend_ttl_success() {
         &dispute_resolver,
     );
 
-    // extend_agreement_ttl has no require_auth() gate — it's a permissionless
-    // keeper entrypoint — so no auth mock is needed here. It reports the
-    // keeper address in `ttl_extended`, so pass the caller explicitly.
+    // extend_agreement_ttl is permissionless but authenticates `caller`, which
+    // the blanket auth mock from `setup` satisfies. It reports the keeper
+    // address in `ttl_extended`, so pass the caller explicitly.
     let result = client.try_extend_agreement_ttl(&id, &payer);
     assert_eq!(
         result,
@@ -1801,7 +1801,7 @@ fn test_extend_ttl_nonexistent_agreement() {
     let (env, payer, _payee, _dispute_resolver, _token_address, client) = setup();
     let id = agreement_id(&env, 99);
 
-    // No auth mock needed — see comment above test_extend_ttl_success.
+    // `caller` auth is satisfied by the blanket mock from `setup`.
     let result = client.try_extend_agreement_ttl(&id, &payer);
     assert_eq!(
         result,
@@ -2283,7 +2283,8 @@ fn test_set_milestone_deadline_wrong_role_fails() {
 }
 
 /// Unfunded milestone past its deadline: a third-party keeper can close it
-/// as `Refunded` with no token movement.
+/// as `Cancelled` (not `Refunded`) with no token movement — the same status
+/// `cancel_unfunded_milestone` writes, since nothing was ever escrowed.
 #[test]
 fn test_expire_unfunded_milestone_after_deadline() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
@@ -2310,9 +2311,15 @@ fn test_expire_unfunded_milestone_after_deadline() {
 
     assert_eq!(
         client.get_milestone(&id, &0u32).map(|m| m.status),
-        Some(EscrowStatus::Refunded)
+        Some(EscrowStatus::Cancelled),
+        "expiring a never-funded milestone must write Cancelled, not Refunded"
     );
     assert_eq!(token_client.balance(&payer), payer_balance);
+    // Terminal: it cannot be expired a second time.
+    assert_eq!(
+        client.try_expire_milestone(&keeper, &id, &0u32),
+        Err(Ok(TrellisError::InvalidStateTransition))
+    );
     // The milestone left `Pending`, so it can no longer be funded.
     assert_eq!(
         client.try_lock_funds(&id, &0u32),
@@ -2346,7 +2353,8 @@ fn test_expire_funded_milestone_refunds_payer() {
     assert_eq!(token_client.balance(&payee), 0);
     assert_eq!(
         client.get_milestone(&id, &0u32).map(|m| m.status),
-        Some(EscrowStatus::Refunded)
+        Some(EscrowStatus::Refunded),
+        "expiring a funded milestone returns real tokens, so it stays Refunded"
     );
     // Terminal: a second expiry cannot pay out twice.
     assert_eq!(
