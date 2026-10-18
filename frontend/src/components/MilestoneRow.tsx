@@ -1,5 +1,7 @@
 import type { Milestone, Agreement } from '../lib/soroban';
+import MilestoneAmount from './MilestoneAmount';
 import { getStatusBadgeColor, useMilestoneActions } from '../hooks/useMilestoneActions';
+import ProofLink from './ProofLink';
 
 interface WalletLike {
   connected: boolean;
@@ -30,7 +32,9 @@ export default function MilestoneRow({ milestone, agreement, wallet }: Milestone
   return (
     <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200 hover:bg-navy-700/50 dark:hover:bg-navy-700/50 light:hover:bg-gray-100">
       <td className="py-3 px-4 text-white dark:text-white light:text-gray-900 font-mono text-sm">{milestone.id}</td>
-      <td className="py-3 px-4 text-white dark:text-white light:text-gray-900 text-sm">{milestone.amount}</td>
+      <td className="py-3 px-4 text-white dark:text-white light:text-gray-900 text-sm">
+        <MilestoneAmount milestone={milestone} />
+      </td>
       <td className="py-3 px-4">
         <span
           className={`${getStatusBadgeColor(
@@ -42,14 +46,11 @@ export default function MilestoneRow({ milestone, agreement, wallet }: Milestone
       </td>
       <td className="py-3 px-4">
         {milestone.proof_uri ? (
-          <a
-            href={milestone.proof_uri}
-            target="_blank"
-            rel="noopener noreferrer"
+          <ProofLink
+            uri={milestone.proof_uri}
+            label="View"
             className="text-cyan-400 dark:text-cyan-400 light:text-cyan-600 hover:text-cyan-300 text-sm"
-          >
-            View
-          </a>
+          />
         ) : (
           <span className="text-gray-500 dark:text-gray-500 light:text-gray-600 text-sm">-</span>
         )}
