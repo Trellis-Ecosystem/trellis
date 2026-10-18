@@ -9,7 +9,6 @@ import { ExplorerLink } from '../components/ExplorerLink';
 import MilestoneRow from '../components/MilestoneRow';
 import MilestoneCard from '../components/MilestoneCard';
 import LastUpdated from '../components/LastUpdated';
-import { ExplorerLink } from '../components/ExplorerLink';
 import { AgreementCardSkeleton } from '../components/skeletons';
 
 export default function StatusPage() {

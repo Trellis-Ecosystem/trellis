@@ -140,7 +140,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
       await invoke('lock_funds', args, wallet.publicKey, fee)
       toast.success({ title: 'Funds locked successfully' })
       setShowConfirm(null)
-      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -165,7 +164,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
       setShowProofInput(false)
       setProofUri('')
       setShowConfirm(null)
-      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -187,7 +185,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
       await invoke('approve_and_release', args, wallet.publicKey, fee)
       toast.success({ title: 'Milestone approved and funds released' })
       setShowConfirm(null)
-      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -211,7 +208,6 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
       await invoke('raise_dispute', args, wallet.publicKey, fee)
       toast.success({ title: 'Dispute raised' })
       setShowConfirm(null)
-      setRetryCount(0)
       pendingAction.current = null
       onSuccess?.()
     } catch (err) {
@@ -553,7 +549,7 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
           />
           <div className="flex gap-2">
             <button
-              onClick={handleSubmitWork}
+              onClick={() => handleSubmitWork()}
               disabled={isLoading}
               className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-white dark:text-white light:text-gray-900 text-xs rounded disabled:opacity-50"
             >

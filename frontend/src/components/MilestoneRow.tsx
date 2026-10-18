@@ -17,7 +17,7 @@ interface MilestoneRowProps {
 }
 
 /** Desktop table row — paired with `MilestoneCard` for the mobile layout. */
-export default function MilestoneRow({ milestone, agreement, wallet }: MilestoneRowProps) {
+export default function MilestoneRow({ milestone, agreement, wallet, onUpdate }: MilestoneRowProps) {
   const {
     availableActions,
     actionLoading,

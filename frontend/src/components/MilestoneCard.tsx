@@ -6,7 +6,6 @@ import ProofLink from './ProofLink';
 interface WalletLike {
   connected: boolean;
   publicKey: string | null;
-  loading: boolean;
   error: string | null;
 }
 
