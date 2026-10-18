@@ -32,6 +32,14 @@ const WalletContext = createContext<WalletContextValue | null>(null);
 
 const STORAGE_KEY = 'trellis_wallet_connected';
 const ACCOUNT_POLL_INTERVAL_MS = 3_000;
+const DISCONNECTED_POLL_INTERVAL_MS = 15_000;
+const MAX_POLL_INTERVAL_MS = 60_000;
+const BACKOFF_MULTIPLIER = 2;
+const POLL_INTERVAL_MS: Partial<Record<WalletStatus, number>> = {
+  connected: ACCOUNT_POLL_INTERVAL_MS,
+  disconnected: DISCONNECTED_POLL_INTERVAL_MS,
+  unavailable: DISCONNECTED_POLL_INTERVAL_MS,
+};
 const PASSPHRASE_RETRY_ATTEMPTS = 3;
 const PASSPHRASE_RETRY_DELAY_MS = 500;
 const PASSPHRASE_FETCH_TIMEOUT_MS = 5_000;
@@ -185,29 +193,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // While connected, poll for the active Freighter account and network so
   // switching accounts or networks in the extension (which fires no event
   // Freighter exposes) is reflected here instead of silently going stale.
-  // While disconnected, poll much less aggressively just to notice the
-  // extension becoming available. Nothing is polled while unavailable,
-  // detecting, or connecting — those phases resolve on their own.
+  // While disconnected or unavailable, poll much less aggressively just to
+  // notice the extension becoming available. Nothing is polled while
+  // detecting or connecting — those phases resolve on their own.
   useEffect(() => {
-    const baseInterval = POLL_INTERVAL_MS[status];
-    if (!baseInterval) return;
+    const configured = POLL_INTERVAL_MS[status];
+    if (!configured) return;
+    const baseInterval: number = configured;
 
     let mounted = true;
     let failureCount = 0;
     let intervalId: ReturnType<typeof setInterval>;
 
-    const intervalId = setInterval(() => {
-      void (async () => {
-        const [address, passphrase] = await Promise.all([
-          getPublicKey(),
-          fetchNetworkPassphraseWithRetry(),
-        ]);
+    function reschedule(delay: number) {
+      clearInterval(intervalId);
+      intervalId = setInterval(runPoll, delay);
+    }
 
     async function runPoll() {
       try {
         if (status === 'connected') {
           const [address, passphrase] = await Promise.all([getPublicKey(), getNetworkPassphrase()]);
-
           if (!mounted) return;
 
           if (!address) {
@@ -233,11 +239,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       } catch {
         if (!mounted) return;
         failureCount += 1;
-        const backoffMs = Math.min(
-          baseInterval * BACKOFF_MULTIPLIER ** failureCount,
-          MAX_POLL_INTERVAL_MS,
-        );
-        reschedule(backoffMs);
+        reschedule(Math.min(baseInterval * BACKOFF_MULTIPLIER ** failureCount, MAX_POLL_INTERVAL_MS));
       }
     }
 

@@ -8,7 +8,6 @@ import type { Milestone, Agreement, EscrowStatus } from '../lib/soroban';
 interface WalletLike {
   connected: boolean;
   publicKey: string | null;
-  loading: boolean;
   error: string | null;
 }
 
