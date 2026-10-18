@@ -535,6 +535,9 @@ diff <(grep -o "VITE_[A-Z_]*" frontend/src/lib/config.ts | sort -u) \
 Reviewers: please confirm this for any PR that touches either file.
 
 ## 16. Getting Help
+
+> **Cross-layer changes:** read [docs/data-flow.md](docs/data-flow.md) first. If you change `Milestone`, `Agreement` or `EscrowStatus`, run `make check-types`; for changes spanning layers, run `make smoke-test` too.
+
 ## 17. Getting Help
 
 Use the right channel for the question:

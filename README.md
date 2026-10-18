@@ -912,8 +912,8 @@ Trellis is built in the open and welcomes contributors of all experience levels 
 5. **Verify:** run `cargo test` in `contracts/trellis_core`
 6. **PR:** open a PR referencing the issue with `Closes #X`
 
-> New to Soroban? Start with the [official Soroban docs](https://developers.stellar.org/docs/build/smart-contracts/overview).  
-> New to React + Stellar? Read through `frontend/src/lib/config.ts` and the [Stellar SDK docs](https://stellar.github.io/js-stellar-sdk/).
+> New to Soroban? Start with the [official Soroban docs](https://developers.stellar.org/docs/build/smart-contracts/overview), then see how data moves through all three layers in [docs/data-flow.md](docs/data-flow.md).  
+> New to React + Stellar? Read through `frontend/src/lib/config.ts` and the [Stellar SDK docs](https://stellar.github.io/js-stellar-sdk/), plus [docs/data-flow.md](docs/data-flow.md) for the contract → CLI → frontend path.
 
 ---
 

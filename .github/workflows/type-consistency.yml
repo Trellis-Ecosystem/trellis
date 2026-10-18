@@ -1,0 +1,26 @@
+name: Type consistency
+
+# Fails when the contract's Milestone/Agreement/EscrowStatus fields drift from
+# the CLI and frontend copies (#503). See docs/data-flow.md for limitations.
+on:
+  push:
+    branches: [master, main]
+    paths: &paths
+      - 'contracts/trellis_core/src/types.rs'
+      - 'cli/trellis_cli/src/commands/mod.rs'
+      - 'frontend/src/lib/soroban.ts'
+      - 'scripts/check-type-consistency.py'
+      - '.github/workflows/type-consistency.yml'
+  pull_request:
+    paths: *paths
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Cross-layer type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 scripts/check-type-consistency.py

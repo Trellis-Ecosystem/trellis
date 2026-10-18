@@ -5,7 +5,7 @@
 .PHONY: build-contract build-cli build-frontend
 .PHONY: test-contract test-cli test-snapshots-update test-frontend
 .PHONY: lint-contract lint-frontend typecheck-frontend
-.PHONY: changelog deploy-mainnet dev-up
+.PHONY: changelog deploy-mainnet dev-up smoke-test check-types
 
 help: ## list all targets
 	@echo "Trellis Protocol — Build Targets"
@@ -111,6 +111,12 @@ deploy-mainnet: ## deploy contract to MAINNET (real funds; see DEPLOYMENT.md#mai
 
 dev-up: ## start local stack: Stellar node + contract + frontend (docker compose)
 	docker compose up
+
+smoke-test: ## deploy + run a full CLI lifecycle and verify the final state (NETWORK=testnet|local)
+	./scripts/smoke-test.sh
+
+check-types: ## fail if contract, CLI and frontend type definitions drift apart
+	python3 scripts/check-type-consistency.py
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 
