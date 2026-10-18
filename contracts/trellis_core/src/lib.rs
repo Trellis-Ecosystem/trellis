@@ -767,7 +767,7 @@ impl TrellisContract {
         milestone_id: u32,
     ) -> Result<(), TrellisError> {
         // #401: header + single milestone only — O(1) reads and one write.
-        let header = storage::read_header(&env, &agreement_id)?;
+        let mut header = storage::read_header(&env, &agreement_id)?;
         header.payer.require_auth();
 
         let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
@@ -799,8 +799,11 @@ impl TrellisContract {
             header.payer,
             amount,
         );
-        // `Cancelled` is not a settled state, so the milestone stays counted in
-        // `open_milestones` and this transition can never complete the agreement.
+        // `Cancelled` is terminal: it no longer counts as open, so cancelling
+        // the last open milestone completes the agreement.
+        close_milestone(&mut header, false);
+        storage::write_header(&env, &agreement_id, &header);
+        emit_if_agreement_completed(&env, &agreement_id, &header);
 
         Ok(())
     }
@@ -935,17 +938,9 @@ impl TrellisContract {
     /// milestones.
     ///
     /// # Return type
-    /// Like its siblings [`Self::get_agreement`] and [`Self::get_total_amount`],
-    /// this returns [`Result`], so the two failure modes stay distinguishable:
-    ///
-    /// - [`TrellisError::AgreementNotFound`] – no agreement exists for the
-    ///   given `agreement_id`.
-    /// - `Ok(None)` – the agreement exists but `milestone_id` is out of range.
-    ///
-    /// Returning a bare `Option<Milestone>` would collapse those two very
-    /// different situations into a single `None`, forcing every caller to
-    /// handle this one entrypoint differently from its siblings for no
-    /// functional benefit.
+    /// Returns `None` when the agreement does not exist **or** `milestone_id`
+    /// is out of range; the two cases are not distinguished. Use
+    /// [`Self::get_agreement`] to tell an unknown agreement apart.
     pub fn get_milestone(
         env: Env,
         agreement_id: BytesN<32>,
@@ -1090,7 +1085,7 @@ impl TrellisContract {
 
         let refunded_amount = match milestone.status {
             EscrowStatus::Pending => 0,
-            EscrowStatus::Funded => milestone.amount,
+            EscrowStatus::Funded => remaining_amount(&header, milestone_id, &milestone),
             _ => return Err(TrellisError::InvalidStateTransition),
         };
 
@@ -1109,7 +1104,14 @@ impl TrellisContract {
             );
         }
 
-        events::milestone_expired(&env, agreement_id, milestone_id, refunded_amount, caller);
+        events::milestone_expired(
+            &env,
+            agreement_id.clone(),
+            milestone_id,
+            refunded_amount,
+            caller,
+        );
+        emit_if_agreement_completed(&env, &agreement_id, &header);
 
         Ok(())
     }
