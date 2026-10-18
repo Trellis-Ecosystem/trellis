@@ -36,3 +36,28 @@
 
 # --- Documentation and governance files ------------------------------------------
 /*.md                               @ALLEN-AYODEJI
+
+# --- Supply-chain sensitive paths (PolinRider hardening) -------------------------
+# Editor/devcontainer configs, package manifests (lifecycle scripts), build-tool
+# configs and binary/font assets are where the PolinRider malware hides its
+# code. Keep these rules LAST so they override the broader owners above and
+# always require the maintainer's own review.
+/.vscode/                           @ALLEN-AYODEJI
+/.devcontainer/                     @ALLEN-AYODEJI
+**/package.json                     @ALLEN-AYODEJI
+**/package-lock.json                @ALLEN-AYODEJI
+**/*.config.js                      @ALLEN-AYODEJI
+**/*.config.cjs                     @ALLEN-AYODEJI
+**/*.config.mjs                     @ALLEN-AYODEJI
+**/*.config.ts                      @ALLEN-AYODEJI
+**/build.rs                         @ALLEN-AYODEJI
+*.woff                              @ALLEN-AYODEJI
+*.woff2                             @ALLEN-AYODEJI
+*.eot                               @ALLEN-AYODEJI
+*.ttf                               @ALLEN-AYODEJI
+*.otf                               @ALLEN-AYODEJI
+*.bat                               @ALLEN-AYODEJI
+*.cmd                               @ALLEN-AYODEJI
+*.exe                               @ALLEN-AYODEJI
+*.dll                               @ALLEN-AYODEJI
+*.wasm                              @ALLEN-AYODEJI
