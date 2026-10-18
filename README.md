@@ -473,6 +473,8 @@ Trellis is a monorepo with three layers:
 
 ### Contract Entrypoints
 
+The contract exposes 18 public entrypoints. CI (`scripts/check-readme-entrypoints.sh`) fails if a `pub fn` in `contracts/trellis_core/src/lib.rs` is missing from this table.
+
 | Function | Caller | Effect |
 |---|---|---|
 | `init` | Payer | Creates a new agreement with one or more milestones (each `amount` must be strictly positive) |
@@ -482,16 +484,17 @@ Trellis is a monorepo with three layers:
 | `release_partial` | Payer | Releases part of a `Funded`/`WorkSubmitted` milestone's escrowed funds as a progress payment; the milestone completes once fully released |
 | `raise_dispute` | Payer or Payee | Flags a milestone for resolver review |
 | `resolve_dispute` | Dispute Resolver | Rules on a dispute — refunds payer or pays payee |
+| `resolve_dispute_split` | Dispute Resolver | Settles a dispute with an explicit split: `payer_amount` and `payee_amount` must be non-negative and sum exactly to the milestone's still-escrowed remainder (after any `release_partial`) |
 | `rotate_resolver` | Payer and Payee | Replaces the dispute resolver when the incumbent is lost, compromised or unresponsive; the outgoing resolver does not have to sign |
 | `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded — status becomes `Cancelled`, never `Refunded` (reserved for dispute refunds) |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `batch_lock_funds` | Payer | Funds multiple milestones atomically in one transaction |
 | `get_milestone` | Anyone | Returns a single milestone's state, or none if the agreement or milestone does not exist (read-only) |
-| `extend_agreement_ttl` | Anyone | Renews an agreement's ledger TTL to avoid archival |
+| `extend_agreement_ttl` | Anyone (`caller` must sign) | Renews an agreement's ledger TTL to avoid archival; the signing `caller` is recorded in the event |
 | `set_milestone_deadline` | Payer | Sets an optional deadline (ledger timestamp) on a still-`Pending` milestone |
 | `get_milestone_deadline` | Anyone | Returns a milestone's deadline, if one is set (read-only) |
-| `expire_milestone` | Anyone | After the deadline, closes a stalled `Pending` or `Funded` milestone as `Refunded`, returning any locked funds to the payer |
+| `expire_milestone` | Anyone | After the deadline, closes a stalled milestone: a never-funded `Pending` one becomes `Cancelled`, a `Funded` one becomes `Refunded` with the locked funds returned to the payer |
 
 <details>
 <summary>🧬 <strong>Native ScVal Encoding</strong></summary>
@@ -502,8 +505,8 @@ The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of 
 <details>
 <summary>📦 <strong>Storage Lifetime</strong></summary>
 <br />
-Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent. Use <code>trellis extend-ttl</code> for a one-off renewal; the scheduled TTL keeper described in <a href="./DEPLOYMENT.md#agreement-ttl-keeper">DEPLOYMENT.md</a> renews tracked agreements weekly.
-Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically, and the view functions (<code>get_agreement</code>, <code>get_milestone</code>, <code>get_total_amount</code>) renew it as well whenever a read finds the remaining TTL below the threshold — so a read is not strictly side-effect free, and the caller pays for the extension. Reading keeps a watched agreement alive between transitions rather than leaving it to expire. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it, and the caller pays the rent.
+Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it — `caller` must sign its own call — and the caller pays the rent. Use <code>trellis extend-ttl</code> for a one-off renewal; the scheduled TTL keeper described in <a href="./DEPLOYMENT.md#agreement-ttl-keeper">DEPLOYMENT.md</a> renews tracked agreements weekly.
+Soroban archives persistent ledger entries once their TTL expires, so an agreement that is never touched would eventually be lost. Every state-mutating entrypoint renews the agreement's TTL to ~30 days automatically, and the view functions (<code>get_agreement</code>, <code>get_milestone</code>, <code>get_total_amount</code>) renew it as well whenever a read finds the remaining TTL below the threshold — so a read is not strictly side-effect free, and the caller pays for the extension. Reading keeps a watched agreement alive between transitions rather than leaving it to expire. Agreements that stay idle longer than that — a long delivery window, a stalled dispute — need <code>extend_agreement_ttl</code> called before the TTL runs out; any address may call it — `caller` must sign its own call — and the caller pays the rent.
 </details>
 
 <details>
@@ -693,9 +696,16 @@ trellis lock-funds --agreement-id <hex-id> --milestone-id 0
 
 # Fund several milestones atomically in one transaction
 trellis batch-lock-funds --agreement-id <hex-id> --milestone-ids "0,1,2"
+
+# Set a milestone deadline (Unix seconds or RFC 3339; must be in the future)
+trellis deadline set --agreement-id <hex-id> --milestone-id 0 --deadline 2026-01-01T00:00:00Z
+trellis deadline get --agreement-id <hex-id> --milestone-id 0
+
+# Close a stalled milestone once its deadline has passed
+trellis expire --agreement-id <hex-id> --milestone-id 0 --caller <your-address>
 ```
 
-All **11 CLI commands** are implemented — `init`, `lock-funds`, `batch-lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `extend-ttl`, `status`, and `total-amount`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
+All **11 CLI commands** are implemented — `init`, `lock-funds`, `batch-lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `extend-ttl`, `deadline set|get`, `expire`, `status`, and `total-amount`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 All **9 escrow commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `status`, and `milestone-status`. The CLI also provides two utility commands: `completion` (see [Shell Completions](#shell-completions)) and `keys` (manage secret keys in the OS keychain). See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 
 `trellis health` checks the configured RPC endpoint natively (`getHealth` + `getLatestLedger` over HTTP). It needs only an RPC URL, with no `stellar` binary, contract ID or source key, and it supports `--json` / `--human-readable` / `--quiet` / `--dry-run`.
@@ -864,7 +874,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 ### ✅ Complete
 
-- Core Soroban escrow contract - all 13 entrypoints implemented and tested
+- Core Soroban escrow contract - all 18 entrypoints implemented and tested
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Contract test suite - 89 tests in the Soroban sandbox
 - Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes

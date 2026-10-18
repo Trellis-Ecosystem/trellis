@@ -96,6 +96,8 @@ fn bump_agreement_ttls(env: &Env, id: &BytesN<32>, milestone_count: u32) {
     for milestone_id in 0..milestone_count {
         bump_ttl(env, &DataKey::Milestone(id.clone(), milestone_id));
     }
+
+    bump_ttl(env, &DataKey::Deadlines(id.clone()));
 }
 
 /// Persist a freshly-initialised [`Agreement`] as one header entry plus one
@@ -306,8 +308,6 @@ pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u
     deadlines.set(milestone_id, deadline);
     env.storage().persistent().set(&key, &deadlines);
 
-    // The deadline entry was just written, so its TTL is already fresh; the
-    // agreement header is the entry that can go stale, so that is what the
-    // bump renews alongside it.
+    bump_ttl(env, &key);
     bump_ttl(env, &DataKey::Agreement(id.clone()));
 }
