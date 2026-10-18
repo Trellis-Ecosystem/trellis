@@ -50,6 +50,33 @@ signature alongside every WASM/CLI binary artifact.
 
 ---
 
+## Coordinated Releases
+
+A release tag `vX.Y.Z` ships all three layers together. `release.yml` refuses to
+build unless `contracts/trellis_core/Cargo.toml`, `cli/trellis_cli/Cargo.toml`
+and `frontend/package.json` all equal `X.Y.Z`, then attaches to one GitHub
+Release: the contract WASM, the CLI binaries, `trellis-frontend-X.Y.Z.tar.gz`,
+and `release-manifest.json` (version, commit, and artifact name per layer).
+
+To pair a frontend with a contract: use the frontend and WASM from the **same
+release**, and deploy that WASM. Build the frontend with `VITE_CONTRACT_ID` set
+to your deployment of that WASM. `release-manifest.json` is the source of truth
+for which versions were built and verified together.
+
+---
+
+## End-to-End Smoke Test
+
+`make smoke-test` (`scripts/smoke-test.sh`) deploys a fresh contract, runs
+init → lock-funds → submit-work → approve-release for two milestones with the
+CLI, and reads the final state back with `trellis status` (the same
+`get_agreement` read the frontend uses), asserting every milestone is
+`Completed`. Needs `stellar` and `cargo`; `NETWORK=local make smoke-test` targets
+a local node (`make dev-up`), the default is testnet (identities are funded via
+friendbot). Run it before cutting a release and after cross-layer changes.
+
+---
+
 ## Deploying Your Own Instance
 
 ### Prerequisites
