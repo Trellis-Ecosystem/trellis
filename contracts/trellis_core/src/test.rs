@@ -946,12 +946,19 @@ fn test_batch_lock_funds_single_summed_transfer() {
             .expect("event topic 0 must decode as a Symbol");
         if contract_id == token_address && topic0 == transfer {
             let moved = i128::try_from_val(&env, &data).expect("transfer data is the amount");
-            assert_eq!(moved, AMOUNT * COUNT as i128, "the transfer must carry the summed total");
+            assert_eq!(
+                moved,
+                AMOUNT * COUNT as i128,
+                "the transfer must carry the summed total"
+            );
             transfers += 1;
         } else if contract_id == client.address && topic0 == symbol_short!("trls_lckd") {
             let (milestone_id, amount): (u32, i128) = <(u32, i128)>::try_from_val(&env, &data)
                 .expect("trls_lckd data must be (milestone_id, amount)");
-            assert_eq!(milestone_id, locked, "trls_lckd events must follow batch order");
+            assert_eq!(
+                milestone_id, locked,
+                "trls_lckd events must follow batch order"
+            );
             assert_eq!(amount, AMOUNT);
             locked += 1;
         }
@@ -2302,11 +2309,13 @@ fn test_expire_unfunded_milestone_after_deadline() {
 
     env.ledger().set_timestamp(DEADLINE_T0 + 101);
     client.expire_milestone(&keeper, &id, &0u32);
+    // The agreement's only milestone is now terminal, so the agreement
+    // completes in the same invocation.
     assert_trellis_topics(
         &env,
         &client.address,
-        &[symbol_short!("trls_expd")],
-        "expire_milestone must emit trls_expd",
+        &[symbol_short!("trls_expd"), symbol_short!("trls_cmpl")],
+        "expire_milestone must emit trls_expd, then trls_cmpl for the last milestone",
     );
 
     assert_eq!(
@@ -3265,8 +3274,14 @@ fn test_release_partial_happy_path() {
     );
     let (event_milestone, event_amount, event_remaining): (u32, i128, i128) =
         trellis_event_data(&env, &client.address, symbol_short!("trls_prtl"));
-    assert_eq!(event_milestone, 0, "trls_prtl must name the released milestone");
-    assert_eq!(event_amount, 300, "trls_prtl must carry the released amount");
+    assert_eq!(
+        event_milestone, 0,
+        "trls_prtl must name the released milestone"
+    );
+    assert_eq!(
+        event_amount, 300,
+        "trls_prtl must carry the released amount"
+    );
     assert_eq!(event_remaining, 700, "trls_prtl must carry the remainder");
 
     assert_eq!(remaining, 700, "release_partial must return the remainder");
@@ -3288,7 +3303,11 @@ fn test_release_partial_happy_path() {
 
     let agreement = client.get_agreement(&id);
     assert_eq!(
-        agreement.milestones.get(0).expect("milestone 0 must exist").status,
+        agreement
+            .milestones
+            .get(0)
+            .expect("milestone 0 must exist")
+            .status,
         EscrowStatus::Funded,
         "a partially released milestone must stay Funded"
     );
@@ -3315,8 +3334,14 @@ fn test_release_partial_happy_path() {
     );
     let (event_milestone, event_amount, event_remaining): (u32, i128, i128) =
         trellis_event_data(&env, &client.address, symbol_short!("trls_prtl"));
-    assert_eq!(event_milestone, 0, "trls_prtl must name the released milestone");
-    assert_eq!(event_amount, 450, "trls_prtl must carry the released amount");
+    assert_eq!(
+        event_milestone, 0,
+        "trls_prtl must name the released milestone"
+    );
+    assert_eq!(
+        event_amount, 450,
+        "trls_prtl must carry the released amount"
+    );
     assert_eq!(event_remaining, 250, "trls_prtl must carry the remainder");
 
     assert_eq!(remaining, 250, "release_partial must return the remainder");
@@ -3334,12 +3359,20 @@ fn test_release_partial_happy_path() {
 
     let agreement = client.get_agreement(&id);
     assert_eq!(
-        agreement.milestones.get(0).expect("milestone 0 must exist").status,
+        agreement
+            .milestones
+            .get(0)
+            .expect("milestone 0 must exist")
+            .status,
         EscrowStatus::WorkSubmitted,
         "a partially released milestone must keep its WorkSubmitted status"
     );
     assert_eq!(
-        agreement.milestones.get(1).expect("milestone 1 must exist").status,
+        agreement
+            .milestones
+            .get(1)
+            .expect("milestone 1 must exist")
+            .status,
         EscrowStatus::Pending,
         "a partial release must not affect other milestones"
     );

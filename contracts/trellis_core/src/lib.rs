@@ -595,7 +595,7 @@ impl TrellisContract {
         emit_if_agreement_completed(
             &env,
             &agreement_id,
-            &storage::read_agreement(&env, &agreement_id)?,
+            &storage::read_header(&env, &agreement_id)?,
         );
 
         Ok(())
@@ -682,7 +682,7 @@ impl TrellisContract {
         emit_if_agreement_completed(
             &env,
             &agreement_id,
-            &storage::read_agreement(&env, &agreement_id)?,
+            &storage::read_header(&env, &agreement_id)?,
         );
 
         Ok(())
@@ -830,7 +830,7 @@ impl TrellisContract {
             agreement_id.clone(),
             milestone_id,
             header.payer.clone(),
-            header.payer,
+            header.payer.clone(),
             amount,
         );
         // `Cancelled` is terminal: it no longer counts as open, so cancelling
@@ -1145,7 +1145,7 @@ impl TrellisContract {
 
         // Checks-effects-interactions: persist the terminal state before any
         // token transfer.
-        milestone.status = EscrowStatus::Refunded;
+        milestone.status = new_status;
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
         close_milestone(&mut header, true);
         storage::write_header(&env, &agreement_id, &header);
@@ -1183,6 +1183,23 @@ impl TrellisContract {
 /// vector just to learn one number.
 fn remaining_amount(header: &AgreementHeader, milestone_id: u32, milestone: &Milestone) -> i128 {
     milestone.amount - header.released_amounts.get(milestone_id).unwrap_or(0)
+}
+
+/// Reject funding a milestone whose deadline has already passed.
+///
+/// Shared by `lock_funds` and `batch_lock_funds`. Uses the same boundary as
+/// `expire_milestone` (`timestamp > deadline`), so a milestone is fundable
+/// exactly as long as it is not yet expirable. A milestone with no deadline is
+/// always fundable.
+fn ensure_deadline_not_passed(
+    env: &Env,
+    agreement_id: &BytesN<32>,
+    milestone_id: u32,
+) -> Result<(), TrellisError> {
+    match storage::read_deadline(env, agreement_id, milestone_id) {
+        Some(deadline) if env.ledger().timestamp() > deadline => Err(TrellisError::DeadlinePassed),
+        _ => Ok(()),
+    }
 }
 
 /// Record that one milestone reached a settled state (`Completed` or

@@ -589,6 +589,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "open_milestones"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "payee"
                       },
                       "val": {
@@ -601,6 +609,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "refunded_milestones"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
@@ -1203,6 +1219,36 @@
                     "hi": 0,
                     "lo": 500
                   }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "trls_cmpl"
+              },
+              {
+                "bytes": "8686868686868686868686868686868686868686868686868686868686868686"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "u32": 1
+                },
+                {
+                  "u32": 0
                 }
               ]
             }
