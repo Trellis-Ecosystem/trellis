@@ -23,7 +23,10 @@
 // [`deterministic_config`] needs `std::env` to read proptest's variables.
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, token, vec, Address, BytesN, Env, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, EnvTestConfig},
+    token, vec, Address, BytesN, Env, Vec,
+};
 
 use crate::{
     types::{EscrowStatus, Milestone},

@@ -163,4 +163,17 @@ pub enum TrellisError {
     ///
     /// Appended as discriminant `19` per the stability rule above.
     TransferShortfall = 19,
+
+    /// `lock_funds` or `batch_lock_funds` was called on a milestone whose
+    /// deadline (set via `set_milestone_deadline`) has already passed
+    /// (`env.ledger().timestamp() > deadline`).
+    ///
+    /// Funding it would flip the milestone to `Funded` while it is already
+    /// expirable, so any account could immediately call `expire_milestone`
+    /// and pull the escrow back to the payer — possibly after the payee has
+    /// seen `Funded` and started work. Funding at or before the deadline is
+    /// still accepted.
+    ///
+    /// Appended as discriminant `20` per the stability rule above.
+    DeadlinePassed = 20,
 }

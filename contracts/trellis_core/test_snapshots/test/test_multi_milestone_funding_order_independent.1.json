@@ -738,6 +738,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "open_milestones"
+                      },
+                      "val": {
+                        "u32": 2
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "payee"
                       },
                       "val": {
@@ -750,6 +758,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "refunded_milestones"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
