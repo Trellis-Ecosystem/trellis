@@ -16,6 +16,7 @@
 # Exit codes:
 #   0   healthy — the agreement resolved
 #   10  reset suspected — the contract or agreement no longer exists on-chain
+#   2   misconfigured — a required env var is unset; exits before probing
 #   1   inconclusive — the probe failed for another reason (RPC outage,
 #       misconfiguration, …); NOT treated as a reset, so a flaky RPC never
 #       raises a false alarm
@@ -24,6 +25,13 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+for var in TRELLIS_CONTRACT_ID TRELLIS_SOURCE_KEY; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "error: $var must be set" >&2
+    exit 2
+  fi
+done
 
 AGREEMENT_ID="${1:-0101010101010101010101010101010101010101010101010101010101010101}"
 TRELLIS_BIN="${TRELLIS_BIN:-trellis}"
