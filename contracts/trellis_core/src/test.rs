@@ -3382,3 +3382,277 @@ fn test_release_partial_happy_path() {
         "released_amounts must hold the cumulative total of both releases"
     );
 }
+
+/// #614: after a partial release, `approve_and_release` must pay out only the
+/// remainder, not the full milestone amount.
+///
+/// `remaining_amount` is what keeps a partially released milestone from paying
+/// out more than was locked; a regression to `milestone.amount` would overpay
+/// from the pooled contract balance. Exact balances are asserted so that
+/// regression fails here.
+#[test]
+fn test_approve_and_release_after_partial_release_pays_only_remainder() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 140);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.submit_work(&id, &0u32, &None);
+
+    assert_eq!(
+        client.release_partial(&id, &0u32, &400i128),
+        600,
+        "a partial release must leave the remainder escrowed"
+    );
+    assert_eq!(token_client.balance(&payee), 400);
+    assert_eq!(token_client.balance(&client.address), 600);
+
+    client.approve_and_release(&id, &0u32);
+
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
+        "approve_and_release after a partial release must emit funds_released \
+         then agreement_completed",
+    );
+    let (event_milestone, event_amount): (u32, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_rlsd"));
+    assert_eq!(event_milestone, 0, "trls_rlsd must name the milestone");
+    assert_eq!(
+        event_amount, 600,
+        "trls_rlsd must carry only the remainder after a partial release"
+    );
+
+    assert_eq!(
+        token_client.balance(&payee),
+        amount,
+        "the payee must end up with exactly the milestone amount in total"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "the contract must be drained of exactly the remainder"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        10_000 - amount,
+        "the payer must not be touched by the release"
+    );
+    assert_eq!(
+        client.get_milestone(&id, &0u32).map(|m| m.status),
+        Some(EscrowStatus::Completed),
+        "the milestone must complete once the remainder is released"
+    );
+}
+
+/// #614: after a partial release, `raise_dispute` must report the remainder as
+/// the disputed amount, not the full milestone amount.
+#[test]
+fn test_raise_dispute_after_partial_release_reports_remainder() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 141);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.submit_work(&id, &0u32, &None);
+
+    assert_eq!(
+        client.release_partial(&id, &0u32, &250i128),
+        750,
+        "a partial release must leave the remainder escrowed"
+    );
+
+    client.raise_dispute(&payee, &id, &0u32, &None);
+
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_dspt")],
+        "raise_dispute must emit exactly one trls_dspt event",
+    );
+    let (event_milestone, event_amount): (u32, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
+    assert_eq!(event_milestone, 0, "trls_dspt must name the milestone");
+    assert_eq!(
+        event_amount, 750,
+        "trls_dspt must carry only the remainder after a partial release"
+    );
+
+    assert_eq!(
+        client.get_milestone(&id, &0u32).map(|m| m.status),
+        Some(EscrowStatus::Disputed),
+        "the milestone must be Disputed after the dispute is raised"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        750,
+        "raising a dispute must not move any funds"
+    );
+    assert_eq!(token_client.balance(&payee), 250);
+}
+
+/// #614: after a partial release, the legacy bool `resolve_dispute` must
+/// distribute only the remainder in both directions.
+#[test]
+fn test_resolve_dispute_after_partial_release_distributes_only_remainder() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let amount: i128 = 1_000;
+
+    // ── refund_to_payer = true: the payer gets back only the remainder ────
+    let refund_id = agreement_id(&env, 142);
+    client.init(
+        &refund_id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&refund_id, &0u32);
+    client.submit_work(&refund_id, &0u32, &None);
+    assert_eq!(client.release_partial(&refund_id, &0u32, &300i128), 700);
+    client.raise_dispute(&payee, &refund_id, &0u32, &None);
+
+    client.resolve_dispute(&refund_id, &0u32, &true);
+
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - 300,
+        "a refund after a partial release must return only the remainder"
+    );
+    assert_eq!(
+        token_client.balance(&payee),
+        300,
+        "the payee must keep the amount already released"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "the escrow must drain to zero after the refund"
+    );
+
+    // ── refund_to_payer = false: the payee gets only the remainder ────────
+    let award_id = agreement_id(&env, 143);
+    client.init(
+        &award_id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    let payer_before = token_client.balance(&payer);
+    let payee_before = token_client.balance(&payee);
+    client.lock_funds(&award_id, &0u32);
+    client.submit_work(&award_id, &0u32, &None);
+    assert_eq!(client.release_partial(&award_id, &0u32, &300i128), 700);
+    client.raise_dispute(&payer, &award_id, &0u32, &None);
+
+    client.resolve_dispute(&award_id, &0u32, &false);
+
+    assert_eq!(
+        token_client.balance(&payee),
+        payee_before + 700,
+        "an award after a partial release must pay only the remainder"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount,
+        "the payer must not be refunded on an award"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "the escrow must drain to zero after the award"
+    );
+}
+
+/// #614: after a partial release, `resolve_dispute_split` must distribute only
+/// the remainder, and a split summing to the original milestone amount must be
+/// rejected with `InvalidSplitAmounts`.
+#[test]
+fn test_resolve_dispute_split_after_partial_release_uses_remainder() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let token_client = token::TokenClient::new(&env, &token_address);
+    let id = agreement_id(&env, 144);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    let payer_before = token_client.balance(&payer);
+    client.lock_funds(&id, &0u32);
+    client.submit_work(&id, &0u32, &None);
+    assert_eq!(
+        client.release_partial(&id, &0u32, &400i128),
+        600,
+        "a partial release must leave the remainder escrowed"
+    );
+    client.raise_dispute(&payee, &id, &0u32, &None);
+
+    // A split summing to the original amount overpays by the released part.
+    assert_eq!(
+        client.try_resolve_dispute_split(&id, &0u32, &400i128, &600i128),
+        Err(Ok(TrellisError::InvalidSplitAmounts)),
+        "a split summing to the original amount must be rejected after a partial release"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        600,
+        "a rejected split must not move any funds"
+    );
+
+    // A split summing to the remainder is accepted and moves exactly that.
+    let (to_payer, to_payee) = (200i128, 400i128);
+    client.resolve_dispute_split(&id, &0u32, &to_payer, &to_payee);
+
+    let event: (u32, i128, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_rslv"));
+    assert_eq!(
+        event,
+        (0u32, to_payer, to_payee),
+        "the resolved event must carry the split of the remainder"
+    );
+
+    assert_eq!(
+        token_client.balance(&payee),
+        400 + to_payee,
+        "the payee must receive the released amount plus its leg of the remainder"
+    );
+    assert_eq!(
+        token_client.balance(&payer),
+        payer_before - amount + to_payer,
+        "the payer must be refunded exactly its leg of the remainder"
+    );
+    assert_eq!(
+        token_client.balance(&client.address),
+        0,
+        "a split resolution must leave nothing stranded in escrow"
+    );
+}

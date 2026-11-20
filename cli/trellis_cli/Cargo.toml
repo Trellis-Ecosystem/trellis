@@ -17,6 +17,11 @@ path = "src/main.rs"
 # `reqwest`'s blocking client, which drives its own internal runtime — so no
 # direct `tokio` dependency is needed. Only rustls is enabled, keeping the
 # build free of a system OpenSSL requirement.
+#
+# Transaction signing is now done natively: the transaction hash is signed
+# with `ed25519-dalek` using the secret key decoded via the strkey codec,
+# producing a `DecoratedSignature` attached to the envelope. The `stellar`
+# binary is no longer required for signing.
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
@@ -34,6 +39,9 @@ serde = { version = "1", features = ["derive"] }
 
 stellar-xdr = "22.1"
 stellar-strkey = "0.0.9"
+
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # Local HTTP server for asserting native JSON-RPC request shape / response
