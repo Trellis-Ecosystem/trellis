@@ -99,6 +99,43 @@ stellar contract deploy \
 
 This returns a `C...` contract address. Save it — you'll need it for all CLI commands.
 
+### Step 3b — Set the contract admin
+
+The contract has no admin until one is set. The first call to `set_admin` must
+be signed by the address that will own upgrades (normally the deployer
+identity), and it can only be called once — a second call fails with
+`AdminAlreadySet`. Do this immediately after deploying, before any agreement
+is created:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+ADMIN_ADDRESS="$(stellar keys address trellis-deployer)"
+stellar contract invoke \
+  --id <your contract ID> \
+  --source trellis-deployer \
+  --network testnet \
+  -- set_admin \
+  --admin "$ADMIN_ADDRESS"
+```
+
+Verify it took effect:
+
+```bash
+stellar contract invoke \
+  --id <your contract ID> \
+  --source trellis-deployer \
+  --network testnet \
+  -- get_admin
+```
+
+> **Admin model tradeoff:** a single admin address is the simplest scheme that
+> makes bugfixes shippable before mainnet, but it is a single point of trust —
+> whoever holds that key can replace the contract's logic for every agreement
+> at once. Keep the admin key offline/hardware-backed, never reuse a payer,
+> payee or resolver identity for it, and plan to move to a multisig or
+> governance-controlled admin before mainnet. See
+> [Upgrading a deployed contract](#upgrading-a-deployed-contract).
+
 ### Step 4 — Set environment variables
 
 ```bash
@@ -213,6 +250,69 @@ trellis total-amount --agreement-id <hex>
 > milestone amounts (an `i128` in the token's base unit, printed as a quoted
 > string). The frontend's agreement status page shows the same value as
 > **Total** in the Milestones header.
+
+### List agreements for an address
+
+```bash
+stellar contract invoke \
+  --id "$TRELLIS_CONTRACT_ID" \
+  --source trellis-deployer \
+  --network testnet \
+  -- get_agreements_for \
+  --address <payer or payee G... address>
+```
+
+> Read-only; no signature or confirmation needed (the `--source` account only
+> simulates the call). Returns a JSON array of 32-byte agreement IDs in the
+> order they were created. The contract maintains two on-chain indexes —
+> `PayerAgreements(Address)` and `PayeeAgreements(Address)` — appended to on
+> every `init`, so callers no longer need to remember agreement IDs or rely on
+> client-side `localStorage` history. The frontend uses this to populate
+> agreement history.
+>
+> **Storage growth:** each agreement adds one 32-byte entry to the payer's
+> index and one to the payee's, and the whole `Vec` is rewritten on every
+> append. An address involved in many agreements pays proportionally more rent
+> and its `init` calls get more expensive; this is acceptable at current
+> volumes but would need paging or a linked-list layout if a single address
+> ever accumulates thousands of agreements.
+
+### Multi-token agreements
+
+Each milestone carries its own `token` address, so a single agreement can mix
+tokens (e.g. milestone 0 in USDC, milestone 1 in XLM). `init` still takes a
+`--token` flag, which is used as the default for every milestone:
+
+```bash
+trellis --as payer init \
+  --agreement-id <hex> \
+  --payer <payer G... address> \
+  --payee <payee G... address> \
+  --token <default token SAC address> \
+  --resolver <resolver G... address> \
+  --milestones "1000,2000"
+```
+
+To override the token for individual milestones, pass a comma-separated list
+of token addresses to `--milestone-tokens`, positionally matching
+`--milestones`:
+
+```bash
+trellis --as payer init \
+  --agreement-id <hex> \
+  --payer <payer G... address> \
+  --payee <payee G... address> \
+  --token <USDC SAC address> \
+  --resolver <resolver G... address> \
+  --milestones "1000,2000" \
+  --milestone-tokens "<USDC SAC address>,<XLM SAC address>"
+```
+
+> `--milestone-tokens` is optional; when omitted every milestone uses
+> `--token`. When given it must have exactly one entry per milestone. Each
+> milestone's `lock_funds`, `approve_and_release` and `resolve_dispute` move
+> funds in that milestone's own token, so the payer must hold a balance of
+> each token used. `trellis status` reports the token per milestone.
 
 ### Fund a milestone
 
@@ -387,6 +487,59 @@ make deploy-mainnet MAINNET_IDENTITY=trellis-mainnet-deployer
 `.github/workflows/deploy-mainnet.yml` is the manual, `environment: mainnet`-gated deploy workflow.
 
 Any workflow that targets mainnet must declare `environment: mainnet`. In **Settings → Environments → New environment → `mainnet`**, enable *Required reviewers* (at least two maintainers), restrict deployment to tags/`master`, and store mainnet secrets only as environment secrets. Jobs then pause until a reviewer manually approves.
+
+---
+
+## Upgrading a Deployed Contract
+
+The contract exposes an admin-gated `upgrade` entrypoint that replaces the
+deployed WASM in place via `env.deployer().update_current_contract_wasm(...)`.
+Existing agreements, balances and indexes are untouched — only the code
+changes — so an upgrade does not require migrating agreement state or handing
+out a new contract ID.
+
+### Procedure
+
+1. Build and verify the new WASM (see
+   [Verifying Release Artifacts](#verifying-release-artifacts)). Record its
+   sha256.
+2. Install the new WASM on-chain to get its hash:
+   ```bash
+   cd "$(git rev-parse --show-toplevel)"
+   NEW_WASM_HASH=$(stellar contract upload \
+     --wasm target/wasm32-unknown-unknown/release/trellis_core.wasm \
+     --source trellis-deployer \
+     --network testnet)
+   echo "$NEW_WASM_HASH"
+   ```
+3. Call the upgrade entrypoint as the admin. The call must be signed by the
+   admin address set in [Step 3b](#step-3b--set-the-contract-admin):
+   ```bash
+   stellar contract invoke \
+     --id "$TRELLIS_CONTRACT_ID" \
+     --source trellis-deployer \
+     --network testnet \
+     -- upgrade \
+     --new_wasm_hash "$NEW_WASM_HASH"
+   ```
+   A call from any other address fails with `Unauthorized`; calling before an
+   admin is set fails with `AdminNotSet`.
+4. Smoke-test the upgraded contract: `trellis status` on a known agreement,
+   then `trellis health`. If the new code changed storage layout, run the
+   migration steps documented in that release's notes.
+
+### Notes
+
+- **Irreversible in practice:** an upgrade changes logic for every existing
+  agreement at once. Dry-run on testnet first, and have a second reviewer
+  confirm the WASM hash before invoking `upgrade` on mainnet.
+- **Admin key custody:** the admin key can replace contract logic, so treat it
+  as the most sensitive key in the system — hardware-backed, never in `.env`
+  or CI variables, never shared with payer/payee/resolver identities.
+- **Single-admin tradeoff:** this project stage uses one admin address for
+  simplicity and fast incident response. That is a deliberate centralization
+  risk; a multisig or governance-controlled admin is the intended follow-up
+  before mainnet. Until then, the admin is trusted not to upgrade maliciously.
 
 ---
 
@@ -579,6 +732,9 @@ network:
 | `resolve-dispute` | ✅ Verified on testnet (both paths) | Resolves to both Refunded (payer) and Completed (payee) states (Issue #9) |
 | `cancel-milestone` | ✅ Implemented | Cancels unfunded milestones |
 | `extend-ttl` | ✅ Implemented | Renews an agreement's ledger TTL; used by the TTL keeper (Issue #494) |
+| `get_agreements_for` | ✅ Implemented | Read-only on-chain index of agreement IDs by payer/payee address (Issue #458) |
+| `set_admin` / `get_admin` | ✅ Implemented | One-time admin assignment for upgrades (Issue #459) |
+| `upgrade` | ✅ Implemented | Admin-gated in-place WASM update (Issue #459) |
 
 ---
 
@@ -772,6 +928,15 @@ See [indexer/README.md](indexer/README.md) for every option and endpoint.
 - **WASM build target:** Use `wasm32-unknown-unknown` via `cargo rustc` rather
   than `stellar contract build` until the project upgrades to a toolchain that
   fully supports `wasm32v1-none`.
+
+- **Upgrades:** the contract can be upgraded in place by its admin (see
+  [Upgrading a Deployed Contract](#upgrading-a-deployed-contract)). A single
+  admin address controls upgrades at this stage — a known centralization
+  tradeoff, not a bug.
+
+- **Multi-token agreements:** each milestone stores its own token, so one
+  agreement can pay out in several assets. `--token` on `init` is the default;
+  `--milestone-tokens` overrides per milestone.
 
 - **Windows paths:** On Windows Git Bash, use the full path to the binary:
   `C:\Users\<you>\Documents\Trellis\target\release\trellis.exe`

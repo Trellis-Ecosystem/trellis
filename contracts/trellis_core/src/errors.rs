@@ -176,4 +176,27 @@ pub enum TrellisError {
     ///
     /// Appended as discriminant `20` per the stability rule above.
     DeadlinePassed = 20,
+
+    /// An admin-gated entrypoint (`upgrade`) was called by an address that is
+    /// not the contract admin recorded at deployment.
+    ///
+    /// Kept distinct from [`TrellisError::Unauthorized`] so an integrator can
+    /// tell "you are not a party to this agreement" from "you are not the
+    /// contract admin" — the latter is a protocol-level privilege, not an
+    /// agreement-level one.
+    ///
+    /// Appended as discriminant `21` per the stability rule above.
+    NotAdmin = 21,
+
+    /// A milestone's per-milestone token override is not a valid token
+    /// contract, or the agreement has no token to fall back to.
+    ///
+    /// Every milestone settles in exactly one token: its own override when
+    /// one is set, otherwise the agreement-level default. An override that
+    /// fails the liveness probe (or an agreement with no default and no
+    /// override) would leave the milestone unfundable and unpayable, so it is
+    /// rejected up front rather than at lock time.
+    ///
+    /// Appended as discriminant `22` per the stability rule above.
+    InvalidMilestoneToken = 22,
 }

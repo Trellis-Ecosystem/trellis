@@ -134,6 +134,29 @@ where
     found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
 }
 
+/// Return the topics vector of the single Trellis event named `name` from the
+/// most recent top-level invocation.
+///
+/// Used by tests that assert an event's topic content (e.g. that a caller
+/// address is carried in a topic) rather than only its data payload.
+fn trellis_event_topics(env: &Env, contract: &Address, name: Symbol) -> Vec<soroban_sdk::Val> {
+    let all_events = env.events().all();
+    let mut found: Option<Vec<soroban_sdk::Val>> = None;
+    for i in 0..all_events.len() {
+        let (contract_id, topics, _data) = all_events.get_unchecked(i);
+        if contract_id != *contract {
+            continue;
+        }
+        let topic0 = Symbol::try_from_val(env, &topics.get_unchecked(0))
+            .expect("event topic 0 must decode as a Symbol");
+        if topic0 == name {
+            assert!(found.is_none(), "event {name:?} emitted more than once");
+            found = Some(topics);
+        }
+    }
+    found.unwrap_or_else(|| panic!("event {name:?} was not emitted"))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -202,6 +225,19 @@ fn test_happy_path() {
         &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
         "approve_and_release on the only milestone must emit funds_released \
          followed by agreement_completed",
+    );
+
+    // Direct content assertion on `funds_released`: the event must carry the
+    // released milestone id and amount, not just the right topic name.
+    let (released_milestone, released_amount): (u32, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_rlsd"));
+    assert_eq!(
+        released_milestone, 0,
+        "funds_released must name the released milestone"
+    );
+    assert_eq!(
+        released_amount, amount,
+        "funds_released must carry the released amount"
     );
 
     assert_eq!(
@@ -667,6 +703,25 @@ fn test_cancel_unfunded_milestone() {
 
     // First cancel — must succeed (milestone is still Pending).
     client.cancel_unfunded_milestone(&id, &0u32);
+
+    // Direct content assertion on `milestone_cancelled`: the event must carry
+    // the cancelled milestone id and its proposed amount, not just the topic.
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_cncl")],
+        "cancel_unfunded_milestone must emit exactly one milestone_cancelled event",
+    );
+    let (cancelled_milestone, cancelled_amount): (u32, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_cncl"));
+    assert_eq!(
+        cancelled_milestone, 0,
+        "milestone_cancelled must name the cancelled milestone"
+    );
+    assert_eq!(
+        cancelled_amount, 300,
+        "milestone_cancelled must carry the milestone's proposed amount"
+    );
 
     // The stored status must be `Cancelled`, not `Refunded` — a reader of
     // get_agreement/get_milestone must be able to distinguish a never-funded
@@ -1844,6 +1899,101 @@ fn test_dispute_raised_by_payer() {
         milestone.expect("milestone 0 must still exist").status,
         EscrowStatus::Disputed,
         "milestone should transition to Disputed when payer raises dispute"
+    );
+}
+
+/// The `dispute_raised` event must carry the disputing caller's address, so an
+/// indexer can attribute a dispute to the party that actually opened it.
+///
+/// `raise_dispute` accepts either the payer or the payee, and the caller is not
+/// otherwise recoverable from the agreement — the milestone only records that
+/// it is `Disputed`. The `caller` field added to the event is therefore the
+/// sole on-chain record of who raised it, and this test pins its content.
+#[test]
+fn test_dispute_raised_event_includes_caller() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 140);
+    let amount: i128 = 2_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+
+    // The payee raises the dispute — a known, non-payer caller so a regression
+    // that hard-codes the payer into the event cannot pass.
+    client.raise_dispute(&payee, &id, &0u32, &None);
+
+    // Events must be inspected straight after the call (see
+    // `assert_trellis_topics`).
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_dspt")],
+        "raise_dispute must emit exactly one dispute_raised event",
+    );
+
+    // The event data must carry the disputing caller's address alongside the
+    // milestone id, amount and reason_uri.
+    let (event_milestone, event_caller, event_amount, event_reason): (
+        u32,
+        Address,
+        i128,
+        Option<String>,
+    ) = trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
+    assert_eq!(
+        event_milestone, 0,
+        "dispute_raised must name the disputed milestone"
+    );
+    assert_eq!(
+        event_caller, payee,
+        "dispute_raised must record the disputing caller's address"
+    );
+    assert_eq!(
+        event_amount, amount,
+        "dispute_raised must carry the disputed amount"
+    );
+    assert_eq!(
+        event_reason, None,
+        "dispute_raised must carry the reason_uri that was passed"
+    );
+
+    // Adjacent case: the payer raising a dispute on a second milestone must
+    // record the payer, not the payee — proving the caller field tracks the
+    // actual disputant rather than a fixed role.
+    let id2 = agreement_id(&env, 141);
+    client.init(
+        &id2,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id2, &0u32);
+    let reason = Some(String::from_str(&env, "ipfs://dispute-reason"));
+    client.raise_dispute(&payer, &id2, &0u32, &reason);
+
+    let (event_milestone, event_caller, event_amount, event_reason): (
+        u32,
+        Address,
+        i128,
+        Option<String>,
+    ) = trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
+    assert_eq!(event_milestone, 0);
+    assert_eq!(
+        event_caller, payer,
+        "dispute_raised must record the payer when the payer raises the dispute"
+    );
+    assert_eq!(event_amount, amount);
+    assert_eq!(
+        event_reason, reason,
+        "dispute_raised must carry the reason_uri that was passed"
     );
 }
 
