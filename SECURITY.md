@@ -21,14 +21,11 @@ fixes. Older major versions are considered end-of-life.
 Publicly disclosing a vulnerability before a fix is available puts funds
 held by the live contract at risk.
 
-Instead, report it privately using one of these channels:
-
-1. **Preferred:** Use GitHub's private vulnerability reporting for this
-   repository — go to the **Security** tab → **Report a vulnerability**.
-   This opens a private advisory visible only to maintainers.
-2. **Email:** if you cannot use GitHub's reporting tool, send an encrypted
-   email to the security team. PGP key fingerprint available at
-   https://github.com/trellisorg/trellis/security
+Instead, report it privately using GitHub's private vulnerability reporting
+for this repository: go to the
+[**Security** tab](https://github.com/Trellis-Ecosystem/trellis/security) →
+**Report a vulnerability**. This opens a private advisory visible only to
+maintainers.
 
 Please include as much of the following as you can:
 
