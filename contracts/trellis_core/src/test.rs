@@ -216,6 +216,119 @@ fn test_happy_path() {
     );
 }
 
+/// #622: `agreement_completed` must fire exactly once, on the final terminal
+/// transition of a multi-milestone agreement, and its `(completed_count,
+/// refunded_count)` payload must be exact.
+///
+/// The one-milestone happy path only checks the topic, so a regression that
+/// emitted the event after every milestone — or reported the wrong counts —
+/// would pass it. Here three milestones are completed one by one: no
+/// `trls_cmpl` may appear until the last, and the final payload must be
+/// `(3, 0)`.
+#[test]
+fn test_agreement_completed_fires_once_with_exact_counts() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 141);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones_from_amounts(&env, &[100, 200, 300]),
+        &dispute_resolver,
+    );
+    for milestone_id in 0..3u32 {
+        client.lock_funds(&id, &milestone_id);
+    }
+
+    // The first two milestones are not the final terminal transition, so no
+    // `trls_cmpl` may be emitted for them.
+    for milestone_id in 0..2u32 {
+        client.submit_work(&id, &milestone_id, &None);
+        client.approve_and_release(&id, &milestone_id);
+        assert_trellis_topics(
+            &env,
+            &client.address,
+            &[symbol_short!("trls_rlsd")],
+            "a non-final milestone must emit only funds_released, not agreement_completed",
+        );
+    }
+
+    // The last milestone completes the agreement.
+    client.submit_work(&id, &2u32, &None);
+    client.approve_and_release(&id, &2u32);
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
+        "the final milestone must emit funds_released followed by agreement_completed",
+    );
+    let (completed_count, refunded_count): (u32, u32) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_cmpl"));
+    assert_eq!(
+        completed_count, 3,
+        "agreement_completed must report all three milestones as completed"
+    );
+    assert_eq!(
+        refunded_count, 0,
+        "agreement_completed must report no refunded milestones"
+    );
+}
+
+/// #622: `agreement_completed` must count a dispute refund in
+/// `refunded_count`, and still fire exactly once.
+///
+/// One milestone is refunded to the payer via `resolve_dispute` and another is
+/// completed via `approve_and_release`. The event must appear only once the
+/// last milestone reaches a terminal state, with payload `(1, 1)`.
+#[test]
+fn test_agreement_completed_counts_refunded_milestones() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 142);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &milestones_from_amounts(&env, &[500, 700]),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.lock_funds(&id, &1u32);
+
+    // Milestone 0 is refunded to the payer via the dispute path.
+    client.raise_dispute(&payee, &id, &0u32, &None);
+    client.resolve_dispute(&id, &0u32, &true);
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_rslv")],
+        "a non-final dispute refund must not emit agreement_completed",
+    );
+
+    // Milestone 1 completes the agreement.
+    client.submit_work(&id, &1u32, &None);
+    client.approve_and_release(&id, &1u32);
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_rlsd"), symbol_short!("trls_cmpl")],
+        "the final milestone must emit funds_released followed by agreement_completed",
+    );
+    let (completed_count, refunded_count): (u32, u32) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_cmpl"));
+    assert_eq!(
+        completed_count, 1,
+        "agreement_completed must count the completed milestone"
+    );
+    assert_eq!(
+        refunded_count, 1,
+        "agreement_completed must count the dispute-refunded milestone"
+    );
+}
+
 /// Exploit path (#382): `init` must reject a milestone pre-set to any status
 /// other than `Pending`.
 ///
@@ -685,6 +798,57 @@ fn test_cancel_unfunded_milestone() {
         result,
         Err(Ok(TrellisError::InvalidStateTransition)),
         "second cancel on an already-Cancelled milestone must return InvalidStateTransition"
+    );
+}
+
+/// #621: `cancel_unfunded_milestone` must emit a `trls_cncl` event whose full
+/// payload — `(milestone_id, payer, cancelled_by, amount)` — is asserted here.
+///
+/// The event is the only record of who cancelled and for how much, so a
+/// regression that dropped a field, swapped `payer` and `cancelled_by`, or
+/// emitted a zero amount would otherwise pass unnoticed.
+#[test]
+fn test_cancel_unfunded_milestone_emits_full_event_payload() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 140);
+    let amount: i128 = 300;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    client.cancel_unfunded_milestone(&id, &0u32);
+
+    // Events must be inspected straight after the call (see
+    // `assert_trellis_topics`).
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_cncl")],
+        "cancel_unfunded_milestone must emit exactly one trls_cncl event",
+    );
+    let (milestone_id, event_payer, cancelled_by, event_amount): (u32, Address, Address, i128) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_cncl"));
+    assert_eq!(
+        milestone_id, 0,
+        "trls_cncl must name the cancelled milestone"
+    );
+    assert_eq!(
+        event_payer, payer,
+        "trls_cncl must carry the agreement's payer"
+    );
+    assert_eq!(
+        cancelled_by, payer,
+        "trls_cncl must record the payer as the canceller"
+    );
+    assert_eq!(
+        event_amount, amount,
+        "trls_cncl must carry the milestone's proposed amount"
     );
 }
 
@@ -1800,6 +1964,20 @@ fn test_extend_ttl_success() {
         Ok(Ok(())),
         "extend_agreement_ttl should succeed on existing agreement"
     );
+
+    // #621: the `trls_ttle` payload is `(caller,)` — the keeper that extended
+    // the TTL. Events must be inspected straight after the call.
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_ttle")],
+        "extend_agreement_ttl must emit exactly one trls_ttle event",
+    );
+    let (caller,): (Address,) = trellis_event_data(&env, &client.address, symbol_short!("trls_ttle"));
+    assert_eq!(
+        caller, payer,
+        "trls_ttle must record the caller that extended the TTL"
+    );
 }
 
 /// Test extend_agreement_ttl on non-existent agreement fails gracefully.
@@ -2318,6 +2496,23 @@ fn test_expire_unfunded_milestone_after_deadline() {
         "expire_milestone must emit trls_expd, then trls_cmpl for the last milestone",
     );
 
+    // #621: the `trls_expd` payload is `(milestone_id, refunded_amount, caller)`.
+    // Nothing was ever escrowed, so the refunded amount must be zero.
+    let (event_milestone, refunded_amount, caller): (u32, i128, Address) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_expd"));
+    assert_eq!(
+        event_milestone, 0,
+        "trls_expd must name the expired milestone"
+    );
+    assert_eq!(
+        refunded_amount, 0,
+        "expiring a never-funded milestone must refund nothing"
+    );
+    assert_eq!(
+        caller, keeper,
+        "trls_expd must record the keeper that expired the milestone"
+    );
+
     assert_eq!(
         client.get_milestone(&id, &0u32).map(|m| m.status),
         Some(EscrowStatus::Cancelled),
@@ -2356,6 +2551,29 @@ fn test_expire_funded_milestone_refunds_payer() {
 
     env.ledger().set_timestamp(DEADLINE_T0 + 101);
     client.expire_milestone(&payer, &id, &0u32);
+
+    // #621: the `trls_expd` payload is `(milestone_id, refunded_amount, caller)`.
+    // The milestone was funded, so the full amount must be reported as refunded.
+    assert_trellis_topics(
+        &env,
+        &client.address,
+        &[symbol_short!("trls_expd"), symbol_short!("trls_cmpl")],
+        "expire_milestone must emit trls_expd, then trls_cmpl for the last milestone",
+    );
+    let (event_milestone, refunded_amount, caller): (u32, i128, Address) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_expd"));
+    assert_eq!(
+        event_milestone, 0,
+        "trls_expd must name the expired milestone"
+    );
+    assert_eq!(
+        refunded_amount, 2_000,
+        "expiring a funded milestone must report the full amount as refunded"
+    );
+    assert_eq!(
+        caller, payer,
+        "trls_expd must record the caller that expired the milestone"
+    );
 
     assert_eq!(token_client.balance(&payer), payer_balance_before_lock);
     assert_eq!(token_client.balance(&client.address), 0);

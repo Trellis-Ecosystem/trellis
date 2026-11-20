@@ -4,7 +4,7 @@
 .PHONY: help build test lint fmt deploy clean setup
 .PHONY: build-contract build-cli build-frontend
 .PHONY: test-contract test-cli test-snapshots-update test-frontend
-.PHONY: lint-contract lint-frontend typecheck-frontend
+.PHONY: lint-contract lint-frontend typecheck-frontend fmt-check
 .PHONY: changelog deploy-mainnet dev-up
 
 help: ## list all targets
@@ -53,17 +53,19 @@ test-frontend: ## run only frontend tests
 
 # ── Lint ───────────────────────────────────────────────────────────────────
 
-lint: lint-contract lint-frontend ## run all linters (clippy + oxlint)
+lint: fmt-check lint-contract lint-frontend typecheck-frontend ## run all linters (fmt + clippy + oxlint + typecheck)
 
-lint-contract: ## run only clippy on contract and CLI
-	cargo clippy --frozen --manifest-path contracts/trellis_core/Cargo.toml -- -D warnings
-	cargo clippy --frozen --manifest-path cli/trellis_cli/Cargo.toml -- -D warnings
+lint-contract: ## run clippy on the whole workspace, including tests and benches
+	cargo clippy --frozen --workspace --all-targets -- -D warnings
 
 lint-frontend: ## run only oxlint on frontend
 	cd frontend && npm ci && npm run lint
 
 fmt: ## run cargo fmt on the workspace
 	cargo fmt --all
+
+fmt-check: ## check formatting without modifying files (matches CI)
+	cargo fmt --all -- --check
 
 typecheck-frontend: ## run tsc typecheck on the frontend
 	cd frontend && npm run typecheck
