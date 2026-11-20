@@ -32,7 +32,8 @@ use types::{Agreement, AgreementHeader, EscrowStatus, Milestone};
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_MILESTONES: u32 = 50;
+/// Maximum number of milestones an agreement may be initialised with.
+pub const MAX_MILESTONES: u32 = 50;
 
 /// Maximum length, in bytes, of the `proof_uri` accepted by `submit_work`.
 ///

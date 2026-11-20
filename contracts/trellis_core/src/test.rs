@@ -8,7 +8,7 @@ use crate::{
     errors::TrellisError,
     test_utils::{agreement_id, milestones_from_amounts, one_milestone},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
+    TrellisContract, TrellisContractClient, MAX_MILESTONES, MAX_PROOF_URI_LEN,
 };
 
 // ---------------------------------------------------------------------------
@@ -784,6 +784,51 @@ fn test_submit_work_proof_uri_length_bounds() {
         stored.len(),
         MAX_PROOF_URI_LEN,
         "the accepted proof must be stored verbatim at the cap length"
+    );
+}
+
+/// Pins both sides of the `MAX_MILESTONES` limit: exactly the cap is accepted,
+/// one more is rejected with `MilestoneCountExceeded` and stores nothing.
+#[test]
+fn test_init_milestone_count_boundary() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    // Exactly at the cap — accepted and stored in full.
+    let at_limit_id = agreement_id(&env, 70);
+    let at_limit = milestones_from_amounts(&env, &[1i128; MAX_MILESTONES as usize]);
+    client.init(
+        &at_limit_id,
+        &payer,
+        &payee,
+        &token_address,
+        &at_limit,
+        &dispute_resolver,
+    );
+    assert_eq!(
+        client.get_agreement(&at_limit_id).milestones.len(),
+        MAX_MILESTONES,
+        "exactly MAX_MILESTONES milestones must be accepted"
+    );
+
+    // One over the cap — rejected, and no agreement is left behind.
+    let over_id = agreement_id(&env, 71);
+    let over = milestones_from_amounts(&env, &[1i128; MAX_MILESTONES as usize + 1]);
+    let result = client.try_init(
+        &over_id,
+        &payer,
+        &payee,
+        &token_address,
+        &over,
+        &dispute_resolver,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(TrellisError::MilestoneCountExceeded)),
+        "MAX_MILESTONES + 1 milestones must be rejected"
+    );
+    assert!(
+        client.try_get_agreement(&over_id).is_err(),
+        "a rejected init must not store an agreement"
     );
 }
 
