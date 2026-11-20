@@ -16,6 +16,14 @@ jobs:
     name: Weekly dependency vulnerability scan
     runs-on: ubuntu-latest
 
+    env:
+      # cargo-audit is installed as a binary and does not compile the
+      # workspace, so run it under the latest stable rustc. Without this,
+      # rustup honours the rust-toolchain.toml pin (1.86), which current
+      # cargo-audit releases reject (they require rustc >= 1.88). Mirrors the
+      # supply-chain job in contract-ci.yml.
+      RUSTUP_TOOLCHAIN: stable
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -29,10 +37,11 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install --locked cargo-audit
 
       - name: Run cargo audit
-        run: cargo audit
+        # Same ignore list as contract-ci.yml's supply-chain job.
+        run: cargo audit --config .cargo/audit.toml
 
       - name: Report findings
         if: failure()

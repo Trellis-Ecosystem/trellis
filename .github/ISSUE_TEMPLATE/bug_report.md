@@ -31,6 +31,11 @@ What actually happened. Include error messages, stack traces, or transaction has
 - Rust / Node version:
 - Network: (testnet / mainnet / futurenet / custom)
 - Commit or version:
+- `trellis --version` output (if using the CLI; paste the full multi-line output):
+- `stellar --version` output (if applicable):
+- Contract ID (if applicable):
+- Agreement ID (if applicable):
+- Transaction hash (if applicable):
 
 ## Additional context
 

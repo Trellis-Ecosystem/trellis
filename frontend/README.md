@@ -48,6 +48,46 @@ The app runs at `http://localhost:5173` by default. Freighter must be installed 
 | `npm test` | Run the Vitest suite once. |
 | `npm run test:watch` | Run Vitest in watch mode. |
 | `npm run test:coverage` | Run Vitest with coverage report. |
+| `npm run test:e2e` | Run the Playwright end-to-end suite in `e2e/` (needs a deployed contract and `E2E_*` env vars; see [End-to-end tests](#end-to-end-tests)). |
+
+### End-to-end tests
+
+The Playwright suite in [`e2e/`](./e2e) drives a real Chromium browser through the full user journey (creating an agreement through the UI with a mocked Freighter wallet, then checking the status page) against a contract deployed to a local Soroban devnet.
+
+The easiest way to run it is the wrapper script, run from the repository root:
+
+```bash
+bash tests/e2e/run.sh
+```
+
+**Prerequisites:** Docker, the `stellar` CLI (26.x+) on `PATH`, the `wasm32-unknown-unknown` Rust target, and Node/npm.
+
+[`tests/e2e/run.sh`](../tests/e2e/run.sh) then:
+
+1. Starts the local devnet container (`stellar container start local`) if it isn't already healthy.
+2. Generates and funds `payer`, `payee` and `resolver` identities.
+3. Builds `trellis_core` to wasm, resolves the native XLM SAC as the test token and deploys the contract.
+4. Writes a temporary `frontend/.env` pointing at the devnet (your existing `.env` is backed up and restored on exit).
+5. Runs `npm install`, installs Playwright's Chromium if missing, and starts `npm run dev` on port 5173.
+6. Runs `npm run test:e2e` with the `E2E_*` variables below set.
+
+To run `npm run test:e2e` directly against your own deployment, set these yourself:
+
+| Variable | Description |
+|---|---|
+| `E2E_BASE_URL` | URL of the running frontend. Optional; defaults to `http://localhost:5173` (see `playwright.config.ts`). |
+| `E2E_PAYER_ADDRESS` | Payer account public key (`G...`). |
+| `E2E_PAYER_SECRET` | Payer secret key (`S...`), used by the mocked Freighter wallet to sign. |
+| `E2E_PAYEE_ADDRESS` | Payee account public key. |
+| `E2E_PAYEE_SECRET` | Payee secret key (used by `full-lifecycle.spec.ts`). |
+| `E2E_RESOLVER_ADDRESS` | Dispute resolver account public key. |
+| `E2E_TOKEN_ADDRESS` | Token contract address used for escrow. |
+| `E2E_RPC_URL` | Soroban RPC endpoint, e.g. `http://localhost:8000/soroban/rpc`. |
+| `E2E_NETWORK_PASSPHRASE` | Network passphrase, e.g. `Standalone Network ; February 2017`. |
+
+The frontend under test must also be built with `VITE_CONTRACT_ID`, `VITE_RPC_URL` and `VITE_NETWORK_PASSPHRASE` pointing at the same deployment. Only use throwaway devnet/testnet keys here.
+
+**CI:** the `e2e` job in [`.github/workflows/frontend-ci.yml`](../.github/workflows/frontend-ci.yml) runs `tests/e2e/run.sh`, but only on a manual `workflow_dispatch` of the Frontend CI workflow. It does not run on pushes or PRs. On failure it uploads `frontend/test-results` as the `playwright-report` artifact.
 
 ### Building for production
 
