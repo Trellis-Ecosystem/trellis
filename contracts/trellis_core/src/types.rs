@@ -60,6 +60,24 @@ pub struct Milestone {
     /// representation of "no proof" — an empty `Some("")` is not a sentinel
     /// and callers should not construct one.
     pub proof_uri: Option<String>,
+    /// Per-milestone token override.
+    ///
+    /// `None` means this milestone settles in the agreement-level default
+    /// token ([`Agreement::token`] / [`AgreementHeader::token`]). `Some(addr)`
+    /// lets a single agreement mix tokens — e.g. one milestone in USDC and
+    /// another in XLM — by settling this milestone in `addr` instead.
+    ///
+    /// Every entrypoint that moves funds for a milestone (`lock_funds`,
+    /// `approve_and_release`, `release_partial`, `resolve_dispute`,
+    /// `resolve_dispute_split`, `expire_milestone`) resolves the token through
+    /// [`Milestone::settlement_token`] rather than reading the agreement-level
+    /// default directly, so a milestone's funds are always locked and released
+    /// in the same token.
+    ///
+    /// `init` probes every distinct token used by the agreement (the default
+    /// plus each override) for liveness and rejects a dead one with
+    /// [`crate::errors::TrellisError::InvalidToken`].
+    pub token: Option<Address>,
     // NOTE: a `split: Option<MilestoneSplit>` field was briefly added here to
     // record a partial dispute outcome on the milestone itself. It was removed
     // because `Option<T>` over a `#[contracttype]` struct does not satisfy the
@@ -71,6 +89,20 @@ pub struct Milestone {
     // indexer can reconstruct a partial outcome from the event log without
     // reading contract state. Reintroducing the field would mean changing how
     // the split is surfaced, not just adding it back.
+}
+
+impl Milestone {
+    /// Token this milestone settles in, given the agreement-level default.
+    ///
+    /// Returns the per-milestone override when set, otherwise `default_token`.
+    /// Every fund-moving entrypoint must resolve the token through this helper
+    /// so a milestone is always locked and released in the same token.
+    pub fn settlement_token(&self, default_token: &Address) -> Address {
+        match &self.token {
+            Some(token) => token.clone(),
+            None => default_token.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +122,10 @@ pub struct Agreement {
     pub payer: Address,
     /// The party delivering work and receiving funds (contractor / seller).
     pub payee: Address,
-    /// SAC or custom token contract used for payments.
+    /// Default SAC or custom token contract used for payments.
+    ///
+    /// Applies to every milestone whose [`Milestone::token`] is `None`; a
+    /// milestone may override it to settle in a different token.
     pub token: Address,
     /// Ordered list of milestones that make up this agreement.
     ///
@@ -157,7 +192,10 @@ pub struct AgreementHeader {
     pub payer: Address,
     /// The party delivering work and receiving funds (contractor / seller).
     pub payee: Address,
-    /// SAC or custom token contract used for payments.
+    /// Default SAC or custom token contract used for payments.
+    ///
+    /// Applies to every milestone whose [`Milestone::token`] is `None`; a
+    /// milestone may override it to settle in a different token.
     pub token: Address,
     /// Trusted third-party address authorised to resolve disputes.
     pub dispute_resolver: Address,

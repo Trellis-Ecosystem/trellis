@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, BytesN, Env, Map, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Map, Vec};
 
 use crate::errors::TrellisError;
 use crate::types::{Agreement, AgreementHeader, Milestone};
@@ -29,6 +29,32 @@ pub enum DataKey {
     /// `get_agreement` / `get_milestone` return types stay unchanged for
     /// existing callers.
     Deadlines(BytesN<32>),
+    /// Persistent storage key for the index of agreement IDs in which the
+    /// given address is the *payer*.
+    ///
+    /// The value is a `Vec<BytesN<32>>` appended to on every `init`. It backs
+    /// the read-only `get_agreements_for` entrypoint so callers can enumerate
+    /// "all agreements where I am payer" from contract state alone, instead of
+    /// relying on client-side `localStorage` history (#458).
+    ///
+    /// # Storage growth
+    /// One entry per distinct payer address, whose size grows linearly with
+    /// the number of agreements that address has created. An address involved
+    /// in many agreements therefore pays rent proportional to that count, and
+    /// every `init` rewrites the whole vector (an O(n) write for that payer).
+    /// This is acceptable for the expected per-address agreement counts; if a
+    /// single address ever accumulates thousands of agreements, a paged or
+    /// bucketed index would be needed. The entry's TTL is renewed on every
+    /// append, so an active payer's index never expires.
+    PayerAgreements(Address),
+    /// Persistent storage key for the index of agreement IDs in which the
+    /// given address is the *payee*. Mirrors [`DataKey::PayerAgreements`],
+    /// including its storage-growth characteristics.
+    PayeeAgreements(Address),
+    /// Persistent storage key for the contract admin address, set once at
+    /// deployment. Gates privileged entrypoints such as the WASM upgrade
+    /// (#459). Absent until an admin is configured.
+    Admin,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +171,83 @@ pub fn write_agreement(
         write_milestone(env, id, milestone_id, &milestone);
     }
 
+    // Populate the payer/payee discovery indexes (#458). Done last so a
+    // malformed agreement fails before it is ever indexed.
+    append_to_index(env, &DataKey::PayerAgreements(header.payer.clone()), id);
+    append_to_index(env, &DataKey::PayeeAgreements(header.payee.clone()), id);
+
     Ok(())
+}
+
+/// Append `id` to the agreement-ID index stored under `key`, if not already
+/// present.
+///
+/// Idempotent: re-running `init` for an ID that is already indexed (which the
+/// duplicate-ID guard in `init` rejects anyway) can never create a duplicate
+/// entry. The whole vector is rewritten on each append, so the cost of this
+/// call grows with the number of agreements already indexed for the address —
+/// see the [`DataKey::PayerAgreements`] storage-growth notes.
+fn append_to_index(env: &Env, key: &DataKey, id: &BytesN<32>) {
+    let mut ids: Vec<BytesN<32>> = env
+        .storage()
+        .persistent()
+        .get(key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    for existing in ids.iter() {
+        if &existing == id {
+            // Already indexed; just keep the entry alive.
+            bump_ttl(env, key);
+            return;
+        }
+    }
+
+    ids.push_back(id.clone());
+    env.storage().persistent().set(key, &ids);
+    bump_ttl(env, key);
+}
+
+/// Return the agreement IDs in which `address` is the payer, in the order the
+/// agreements were initialised.
+///
+/// Returns an empty vector when the address has never created an agreement.
+/// This is a pure read: it does not bump the TTL, so querying an index does
+/// not charge rent.
+pub fn read_payer_agreements(env: &Env, address: &Address) -> Vec<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayerAgreements(address.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Return the agreement IDs in which `address` is the payee, in the order the
+/// agreements were initialised.
+///
+/// Returns an empty vector when the address has never been a payee. Like
+/// [`read_payer_agreements`], this is a pure read and does not bump the TTL.
+pub fn read_payee_agreements(env: &Env, address: &Address) -> Vec<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayeeAgreements(address.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Return the configured contract admin, if any.
+///
+/// Deliberately does not bump the TTL: this is a pure read used by the
+/// admin-gated upgrade entrypoint to authorize the caller.
+pub fn read_admin(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&DataKey::Admin)
+}
+
+/// Persist the contract admin address.
+///
+/// Callers must have already verified that no admin is set (or that the
+/// caller is the current admin); this helper performs no authorization.
+pub fn write_admin(env: &Env, admin: &Address) {
+    let key = DataKey::Admin;
+    env.storage().persistent().set(&key, admin);
+    bump_ttl(env, &key);
 }
 
 /// Read only an agreement's header — one ledger read, regardless of how many

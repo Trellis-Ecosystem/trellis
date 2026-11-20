@@ -179,6 +179,8 @@ impl TrellisContract {
         };
 
         storage::write_agreement(&env, &agreement_id, &agreement)?;
+        storage::append_agreement_for(&env, &payer, &agreement_id);
+        storage::append_agreement_for(&env, &payee, &agreement_id);
         events::agreement_created(&env, agreement_id, payer, payee);
 
         Ok(())
@@ -239,8 +241,10 @@ impl TrellisContract {
         milestone.status = EscrowStatus::Funded;
         storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
 
-        // Transfer tokens from payer → this contract.
-        pull_funds(&env, &header.token, &header.payer, amount, amount)?;
+        // Transfer tokens from payer → this contract, in the milestone's own
+        // token (falling back to the agreement-level default).
+        let token = resolve_token(&env, &agreement_id, &header, &milestone);
+        pull_funds(&env, &token, &header.payer, amount, amount)?;
 
         events::funds_locked(&env, agreement_id, milestone_id, amount);
 
@@ -337,7 +341,8 @@ impl TrellisContract {
         storage::write_header(&env, &agreement_id, &header);
 
         // Transfer tokens from this contract → payee after state change.
-        token::Client::new(&env, &header.token).transfer(
+        let token = resolve_token(&env, &agreement_id, &header, &milestone);
+        token::Client::new(&env, &token).transfer(
             &env.current_contract_address(),
             &header.payee,
             &amount,
@@ -417,7 +422,8 @@ impl TrellisContract {
         }
 
         // Transfer tokens from this contract → payee after state change.
-        token::Client::new(&env, &header.token).transfer(
+        let token = resolve_token(&env, &agreement_id, &header, &milestone);
+        token::Client::new(&env, &token).transfer(
             &env.current_contract_address(),
             &header.payee,
             &amount,
@@ -574,7 +580,7 @@ impl TrellisContract {
 
         // Settle both legs in a single transaction. Zero-amount legs are
         // skipped so we never issue a no-op transfer to the token contract.
-        let token = token::Client::new(&env, &header.token);
+        let token = token::Client::new(&env, &resolve_token(&env, &agreement_id, &header, &milestone));
         if payer_amount > 0 {
             token.transfer(
                 &env.current_contract_address(),
@@ -667,7 +673,8 @@ impl TrellisContract {
         storage::write_header(&env, &agreement_id, &header);
 
         // Transfer tokens from this contract after the state change.
-        token::Client::new(&env, &header.token).transfer(
+        let token = resolve_token(&env, &agreement_id, &header, &milestone);
+        token::Client::new(&env, &token).transfer(
             &env.current_contract_address(),
             if refund_to_payer {
                 &header.payer
@@ -960,8 +967,19 @@ impl TrellisContract {
         }
 
         // One balance check around the whole batch: the delta must cover every
-        // milestone just marked `Funded`.
-        pull_funds(&env, &header.token, &header.payer, total, total)?;
+        // milestone just marked `Funded`. A batch may span milestones in
+        // different tokens, so each token's share is pulled separately.
+        let mut per_token: Map<Address, i128> = Map::new(&env);
+        for milestone_id in milestone_ids.iter() {
+            let milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
+            let token = resolve_token(&env, &agreement_id, &header, &milestone);
+            let running = per_token.get(token.clone()).unwrap_or(0);
+            per_token.set(token, running + milestone.amount);
+        }
+        for (token, amount) in per_token.iter() {
+            pull_funds(&env, &token, &header.payer, amount, amount)?;
+        }
+        let _ = total;
 
         Ok(funded)
     }
@@ -986,6 +1004,44 @@ impl TrellisContract {
         milestone_id: u32,
     ) -> Option<Milestone> {
         storage::read_milestone(&env, &agreement_id, milestone_id).ok()
+    }
+
+    /// Return every agreement ID `address` is a party to, as payer or payee.
+    ///
+    /// Read-only view — no auth required, no state modified. The index is
+    /// appended to on [`Self::init`], so the result is ordered by creation.
+    ///
+    /// # Storage growth
+    /// The index is a single `Vec<BytesN<32>>` per address, so an address
+    /// involved in many agreements pays rent proportional to that count and
+    /// each `init` rewrites the whole vector. This is acceptable for the
+    /// expected per-address agreement counts; a paginated index would be the
+    /// follow-up if that assumption stops holding.
+    pub fn get_agreements_for(env: Env, address: Address) -> Vec<BytesN<32>> {
+        storage::read_agreements_for(&env, &address)
+    }
+
+    /// Upgrade the contract's WASM to `new_wasm_hash`.
+    ///
+    /// Admin-gated: the stored admin must authorise the call. Any other
+    /// caller gets [`TrellisError::Unauthorized`].
+    ///
+    /// # Errors
+    /// - [`TrellisError::Unauthorized`] – `caller` is not the stored admin.
+    pub fn upgrade(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), TrellisError> {
+        caller.require_auth();
+        let admin = storage::read_admin(&env).ok_or(TrellisError::Unauthorized)?;
+        if caller != admin {
+            return Err(TrellisError::Unauthorized);
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        events::contract_upgraded(&env, caller, new_wasm_hash);
+        Ok(())
     }
 
     /// Renew the ledger TTL of an agreement without changing its state.
@@ -1156,7 +1212,8 @@ impl TrellisContract {
         storage::write_header(&env, &agreement_id, &header);
 
         if refunded_amount > 0 {
-            token::Client::new(&env, &header.token).transfer(
+            let token = resolve_token(&env, &agreement_id, &header, &milestone);
+            token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &header.payer,
                 &refunded_amount,
@@ -1188,6 +1245,26 @@ impl TrellisContract {
 /// vector just to learn one number.
 fn remaining_amount(header: &AgreementHeader, milestone_id: u32, milestone: &Milestone) -> i128 {
     milestone.amount - header.released_amounts.get(milestone_id).unwrap_or(0)
+}
+
+/// Resolve the token a milestone settles in.
+///
+/// A milestone may carry its own `token` override; when it does not, the
+/// agreement-level default on the header applies. Every token-moving path goes
+/// through this helper so the override can never be silently ignored.
+fn resolve_token(
+    env: &Env,
+    agreement_id: &BytesN<32>,
+    header: &AgreementHeader,
+    milestone: &Milestone,
+) -> Address {
+    match &milestone.token {
+        Some(token) => token.clone(),
+        None => match storage::read_agreement(env, agreement_id) {
+            Ok(agreement) => agreement.token,
+            Err(_) => header.token.clone(),
+        },
+    }
 }
 
 /// Reject funding a milestone whose deadline has already passed.
