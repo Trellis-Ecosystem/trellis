@@ -6,6 +6,7 @@ mod keystore;
 mod rpc;
 mod sanitizer;
 mod strkey;
+mod tx;
 mod utils;
 
 #[cfg(test)]

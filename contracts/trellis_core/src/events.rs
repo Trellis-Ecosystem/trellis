@@ -37,7 +37,7 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 // and documented here so indexers can rely on them as stable identifiers.
 //
 // Event schema (topics → data):
-//   1. "created"   → (payer: Address, payee: Address)
+//   1. "created"   → (payer: Address, payee: Address, token: Address, total_amount: i128)
 //   2. "locked"    → (milestone_id: u32, amount: i128)
 //   3. "submitted" → (milestone_id: u32, proof_uri: Option<String>)
 //   4. "released"  → (milestone_id: u32, amount: i128)
@@ -50,6 +50,7 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 //  11. "deadline_set" → (milestone_id: u32, deadline: u64)
 //  12. "expired"   → (milestone_id: u32, refunded_amount: i128, caller: Address)
 //  13. "resolver_rotated" → (old_resolver: Address, new_resolver: Address)
+//  14. "declined"  → (milestone_id: u32, payer: Address, payee: Address, declined_by: Address, amount: i128)
 //
 // Schema changes: the `amount` field on "disputed", "resolved" and
 // "cancelled" was appended as the last tuple element, so an indexer that
@@ -73,16 +74,38 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 // event and `new_resolver` as the one that can sign it *after*, so the pair is
 // the authoritative resolver-history record for an agreement — `get_agreement`
 // only ever exposes the current holder.
+//
+// "trls_crte" carries the agreement's `token` and `total_amount` so an
+// indexer can record the escrow's denomination and total value straight off
+// the creation event, without a follow-up `get_agreement`/`get_total_amount`
+// call. `token` and `total_amount` are appended after `payer`/`payee`, so
+// positional decoders that only read the first two fields keep working.
+//
+// "trls_dcln" mirrors "trls_cncl" for the payee-side withdrawal path: a payee
+// declining a proposed-but-unfunded milestone. Like "trls_cncl" it moves no
+// tokens and carries the proposed `amount` as its trailing field.
 // ---------------------------------------------------------------------------
 
 /// Emitted when a new escrow agreement is created.
 ///
 /// Topics: `("trls_crte", agreement_id)`
-/// Data:   `(payer, payee)`
-pub fn agreement_created(env: &Env, agreement_id: BytesN<32>, payer: Address, payee: Address) {
+/// Data:   `(payer, payee, token, total_amount)`
+///
+/// `token` is the token contract the agreement escrows; `total_amount` is the
+/// sum of all milestone amounts at creation time. Both are included so an
+/// indexer can record the agreement's denomination and total value without a
+/// follow-up state read.
+pub fn agreement_created(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    payer: Address,
+    payee: Address,
+    token: Address,
+    total_amount: i128,
+) {
     env.events().publish(
         (symbol_short!("trls_crte"), agreement_id.clone()),
-        (payer, payee),
+        (payer, payee, token, total_amount),
     );
 }
 
@@ -216,6 +239,40 @@ pub fn milestone_cancelled(
     env.events().publish(
         (symbol_short!("trls_cncl"), agreement_id.clone()),
         (milestone_id, payer, cancelled_by, amount),
+    );
+}
+
+/// Emitted when a payee declines a milestone that was never funded.
+///
+/// This is the payee-side counterpart of [`milestone_cancelled`]: no tokens
+/// move, the milestone simply leaves the `Pending` state without ever having
+/// been escrowed. Indexers should treat this as the payee withdrawing from a
+/// proposal, not as a dispute outcome.
+///
+/// Topics: `("trls_dcln", agreement_id)`
+/// Data:   `(milestone_id, payer, payee, declined_by, amount)`
+///
+/// `payer` is the agreement's payer; `payee` is the agreement's payee;
+/// `declined_by` is the address that authorised the decline. These are the
+/// same address today (only the payee may decline) but are reported
+/// separately so the event stays self-describing if delegated decline is ever
+/// added.
+///
+/// `amount` is the milestone's proposed amount. It was never escrowed, so no
+/// tokens move — it lets an indexer show "a $X milestone was declined"
+/// without a separate query.
+pub fn milestone_declined(
+    env: &Env,
+    agreement_id: BytesN<32>,
+    milestone_id: u32,
+    payer: Address,
+    payee: Address,
+    declined_by: Address,
+    amount: i128,
+) {
+    env.events().publish(
+        (symbol_short!("trls_dcln"), agreement_id.clone()),
+        (milestone_id, payer, payee, declined_by, amount),
     );
 }
 

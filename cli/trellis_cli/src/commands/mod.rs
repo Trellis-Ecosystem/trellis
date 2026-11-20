@@ -352,6 +352,26 @@ pub enum Commands {
         yes: bool,
     },
 
+    /// Decline a milestone that was never funded (status = Pending) as the
+    /// payee, withdrawing from the proposed work.
+    ///
+    /// Payee-side counterpart to `cancel-milestone`: the contract requires the
+    /// caller to be the agreement's payee and only accepts `Pending`
+    /// milestones, so no funds can move.
+    DeclineUnfundedMilestone {
+        /// Agreement ID (hex-encoded, 64 chars).
+        #[arg(long)]
+        agreement_id: String,
+
+        /// Zero-based index of the milestone to decline.
+        #[arg(long)]
+        milestone_id: u32,
+
+        /// Skip the confirmation prompt (for scripting).
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+
     /// Renew an agreement's ledger TTL so an idle agreement is not archived.
     ///
     /// Any address may call this; the source account pays the rent. Intended
@@ -645,6 +665,12 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
             milestone_id,
             yes,
         } => run_cancel_milestone(config, agreement_id, milestone_id, yes, opts),
+
+        Commands::DeclineUnfundedMilestone {
+            agreement_id,
+            milestone_id,
+            yes,
+        } => run_decline_unfunded_milestone(config, agreement_id, milestone_id, yes, opts),
 
         Commands::ExtendTtl {
             agreement_id,
@@ -1252,6 +1278,51 @@ fn run_cancel_milestone(
     ];
 
     execute(config, "cancel_unfunded_milestone", &args, opts)
+}
+
+/// `stellar contract invoke … -- decline_unfunded_milestone …`
+///
+/// Final call signature:
+/// ```
+/// stellar contract invoke … -- decline_unfunded_milestone
+///   --agreement-id <hex> --milestone-id <u32>
+/// ```
+///
+/// Payee-side counterpart to `cancel_unfunded_milestone` (#464): the contract
+/// requires the caller to be the agreement's payee and only accepts `Pending`
+/// milestones, so a payee can withdraw from proposed-but-unfunded work without
+/// the payer's cooperation. No funds move, so no amount argument is needed.
+fn run_decline_unfunded_milestone(
+    config: &Config,
+    agreement_id: String,
+    milestone_id: u32,
+    yes: bool,
+    opts: &OutputOpts,
+) -> Result<(), String> {
+    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+
+    confirm_action(
+        &format!(
+            "This will decline (as payee) milestone {milestone_id} of agreement {agreement_id}."
+        ),
+        yes,
+        opts,
+    )?;
+
+    let args = build_decline_unfunded_milestone_args(agreement_id, milestone_id);
+
+    execute(config, "decline_unfunded_milestone", &args, opts)
+}
+
+/// Argument list for `decline_unfunded_milestone`, split out so its shape can
+/// be unit-tested without touching the network.
+fn build_decline_unfunded_milestone_args(agreement_id: String, milestone_id: u32) -> Vec<String> {
+    vec![
+        "--agreement-id".to_string(),
+        agreement_id,
+        "--milestone-id".to_string(),
+        milestone_id.to_string(),
+    ]
 }
 
 /// `stellar contract invoke … -- extend_agreement_ttl …`
@@ -3942,6 +4013,109 @@ mod tests {
             build_expire_args(id.clone(), 3, caller.clone()),
             vec!["--caller", &caller, "--agreement-id", &id, "--milestone-id", "3"]
         );
+    }
+
+    // --- Payee-side decline of an unfunded milestone (#464) ---
+
+    #[test]
+    fn decline_unfunded_milestone_command_parses() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Commands,
+        }
+
+        let id = "f".repeat(64);
+        let cli = TestCli::try_parse_from([
+            "trellis",
+            "decline-unfunded-milestone",
+            "--agreement-id",
+            &id,
+            "--milestone-id",
+            "2",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::DeclineUnfundedMilestone {
+                agreement_id,
+                milestone_id: 2,
+                yes: false,
+            } => assert_eq!(agreement_id, id),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // --milestone-id and --agreement-id are both required.
+        assert!(TestCli::try_parse_from([
+            "trellis",
+            "decline-unfunded-milestone",
+            "--agreement-id",
+            &id,
+        ])
+        .is_err());
+        assert!(TestCli::try_parse_from([
+            "trellis",
+            "decline-unfunded-milestone",
+            "--milestone-id",
+            "0",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn decline_unfunded_milestone_args_match_contract_signature() {
+        let id = "a".repeat(64);
+        assert_eq!(
+            build_decline_unfunded_milestone_args(id.clone(), 4),
+            vec!["--agreement-id", &id, "--milestone-id", "4"]
+        );
+    }
+
+    #[test]
+    fn decline_unfunded_milestone_dry_run_prints_preview() {
+        // Dry-run must never submit: it prints the assembled command and
+        // returns Ok for every output format, mirroring cancel-milestone.
+        let config = Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: format!("C{}", "A".repeat(55)),
+            source_key: "alice".to_string(),
+            source_key_origin: "TRELLIS_SOURCE_KEY",
+        };
+        let id = "b".repeat(64);
+        for format in [OutputFormat::Raw, OutputFormat::Json, OutputFormat::Human] {
+            let opts = OutputOpts {
+                format,
+                quiet: false,
+                dry_run: true,
+                verbose: 0,
+            };
+            let result = run_decline_unfunded_milestone(&config, id.clone(), 1, true, &opts);
+            assert!(result.is_ok(), "dry-run {format:?} must return Ok: {result:?}");
+        }
+    }
+
+    #[test]
+    fn decline_unfunded_milestone_rejects_injected_agreement_id() {
+        let config = Config {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_id: format!("C{}", "A".repeat(55)),
+            source_key: "alice".to_string(),
+            source_key_origin: "TRELLIS_SOURCE_KEY",
+        };
+        let opts = OutputOpts {
+            format: OutputFormat::Raw,
+            quiet: false,
+            dry_run: true,
+            verbose: 0,
+        };
+        // A non-hex agreement ID must be rejected before any argument is built.
+        assert!(validate_agreement_id("--injected-flag").is_err());
+        assert!(validate_agreement_id(&"z".repeat(64)).is_err());
+        // Sanity: the handler itself is reachable with a valid ID.
+        assert!(run_decline_unfunded_milestone(&config, "c".repeat(64), 0, true, &opts).is_ok());
     }
 
     #[test]

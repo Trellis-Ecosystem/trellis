@@ -1686,6 +1686,331 @@ struct JsonRpcResponse<T> {
     error: Option<JsonRpcError>,
 }
 
+// ---------------------------------------------------------------------------
+// Native account sequence-number lookup (#470)
+// ---------------------------------------------------------------------------
+
+/// Typed result of the Soroban `getLedgerEntries` JSON-RPC method.
+///
+/// Only the fields the CLI needs are modelled: the returned entries (each a
+/// base64 `LedgerEntry` XDR blob) and the latest ledger the RPC knew about.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct LedgerEntriesResult {
+    /// Base64-encoded `LedgerEntry` XDR blobs, one per requested key that
+    /// exists. A key with no entry is simply absent from this list.
+    #[serde(default)]
+    pub entries: Vec<LedgerEntryXdr>,
+    /// Latest ledger known to the RPC at request time.
+    #[serde(default)]
+    pub latest_ledger: Option<u64>,
+}
+
+/// One `LedgerEntry` returned by `getLedgerEntries`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LedgerEntryXdr {
+    /// Base64-encoded `LedgerEntry` XDR.
+    pub xdr: String,
+}
+
+/// Encode a `LedgerKey::Account` for `account_id` as base64 XDR.
+///
+/// `account_id` is a StrKey `G…` account address. The wire layout is:
+///
+/// ```text
+/// LedgerKey::Account = { AccountID accountID }
+/// AccountID          = PublicKey union, ed25519 = 0, 32-byte key
+/// ```
+///
+/// Returns `Err` when `account_id` is not a valid StrKey ed25519 account.
+pub fn encode_account_ledger_key(account_id: &str) -> Result<String, String> {
+    let raw_key = strkey_decode_account(account_id)?;
+    let mut out = Vec::with_capacity(4 + 4 + 4 + 32);
+    // LedgerEntryType::ACCOUNT
+    out.extend_from_slice(&LEDGER_ACCOUNT.to_be_bytes());
+    // PublicKey union discriminant: PUBLIC_KEY_TYPE_ED25519
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&raw_key);
+    Ok(base64_encode(&out))
+}
+
+/// Fetch `account_id`'s current sequence number natively via
+/// `getLedgerEntries` (no `stellar` binary).
+///
+/// Encodes the account's `LedgerKey`, POSTs `getLedgerEntries`, and decodes
+/// the returned `LedgerEntryData` to extract `seqNum`. Returns a clear error
+/// when the account has no ledger entry — i.e. it does not exist or is not
+/// funded — rather than a generic parse failure.
+pub fn get_account_sequence_number(config: &Config, account_id: &str) -> Result<i64, String> {
+    let key_xdr = encode_account_ledger_key(account_id)?;
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getLedgerEntries",
+        "params": { "keys": [key_xdr] },
+    });
+
+    apply_rate_limit();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(NATIVE_RPC_TIMEOUT)
+        .build()
+        .map_err(|e| format!("getLedgerEntries: failed to build HTTP client: {e}"))?;
+
+    let response = client
+        .post(config.rpc_url.as_str())
+        .json(&body)
+        .send()
+        .map_err(|e| format!("getLedgerEntries: request to {} failed: {e}", config.rpc_url))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .map_err(|e| format!("getLedgerEntries: failed to read response body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "getLedgerEntries: HTTP {status} from {}: {}",
+            config.rpc_url,
+            text.trim()
+        ));
+    }
+
+    let result: LedgerEntriesResult = parse_json_rpc_response("getLedgerEntries", &text)?;
+
+    let entry = result.entries.first().ok_or_else(|| {
+        format!(
+            "account {account_id} not found: it does not exist on this network or is not funded"
+        )
+    })?;
+
+    decode_account_seq_num(&entry.xdr).map_err(|e| {
+        format!("getLedgerEntries: failed to decode account entry for {account_id}: {e}")
+    })
+}
+
+/// Decode a base64 `LedgerEntry` XDR blob and return the account's `seqNum`.
+///
+/// The layout (see `Stellar-ledger-entries.x`) is:
+///
+/// ```text
+/// LedgerEntry {
+///     uint32 lastModifiedLedgerSeq;
+///     LedgerEntryData data;   // union, ACCOUNT = 0
+///     union ext;              // LedgerEntryExt, 0 today
+/// }
+/// LedgerEntryData::Account = AccountEntry {
+///     AccountID accountID;
+///     int64 balance;
+///     SequenceNumber seqNum;  // <- what we want
+///     ...
+/// }
+/// ```
+fn decode_account_seq_num(xdr_base64: &str) -> Result<i64, String> {
+    let raw = base64_decode(xdr_base64)
+        .map_err(|e| format!("invalid base64 in ledger entry: {e}"))?;
+    let mut r = XdrReader::new(&raw);
+
+    // lastModifiedLedgerSeq
+    r.read_u32()?;
+
+    let kind = r.read_u32()?;
+    if kind != LEDGER_ACCOUNT {
+        return Err(format!(
+            "expected an ACCOUNT ledger entry, got LedgerEntryType {kind}"
+        ));
+    }
+
+    // AccountEntry.accountID
+    read_account_id(&mut r)?;
+    // AccountEntry.balance
+    r.read_i64()?;
+    // AccountEntry.seqNum
+    r.read_i64()
+}
+
+/// Decode a StrKey `G…` account address into its 32-byte ed25519 key.
+///
+/// StrKey layout: version byte `6 << 3` (ed25519 public key), 32 payload
+/// bytes, then a 2-byte little-endian CRC16-XModem checksum.
+fn strkey_decode_account(account_id: &str) -> Result<[u8; 32], String> {
+    const VERSION_ACCOUNT: u8 = 6 << 3;
+    let decoded = base32_decode(account_id)
+        .map_err(|e| format!("invalid account address {account_id:?}: {e}"))?;
+    if decoded.len() != 35 {
+        return Err(format!(
+            "invalid account address {account_id:?}: expected 35 decoded bytes, got {}",
+            decoded.len()
+        ));
+    }
+    if decoded[0] != VERSION_ACCOUNT {
+        return Err(format!(
+            "invalid account address {account_id:?}: not an ed25519 account (version 0x{:02x})",
+            decoded[0]
+        ));
+    }
+    let payload = &decoded[1..33];
+    let checksum = u16::from_le_bytes([decoded[33], decoded[34]]);
+    let expected = crc16_xmodem(payload);
+    if checksum != expected {
+        return Err(format!(
+            "invalid account address {account_id:?}: checksum mismatch"
+        ));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(payload);
+    Ok(key)
+}
+
+/// Minimal RFC 4648 base32 decoder (uppercase alphabet, `=` padding) so the
+/// CLI can decode StrKey addresses without an extra dependency.
+fn base32_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a'),
+            b'2'..=b'7' => Some(c - b'2' + 26),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(bytes.len() * 5 / 8);
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    for &b in &bytes {
+        let v = val(b).ok_or_else(|| format!("invalid base32 byte 0x{b:02x}"))?;
+        buffer = (buffer << 5) | v as u32;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// CRC16-XModem, the checksum StrKey uses.
+fn crc16_xmodem(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    for &byte in data {
+        crc ^= (byte as u16) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+/// Minimal base64 encoder (standard alphabet, `=` padding), the counterpart
+/// to [`base64_decode`].
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(n >> 18) as usize & 0x3f] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 0x3f] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[(n >> 6) as usize & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[n as usize & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// ScVal encoding helpers (#474 prerequisite)
+// ---------------------------------------------------------------------------
+//
+// Envelope construction needs to encode function arguments as `ScVal` XDR.
+// These are the write-side counterparts to the `read_scval` decoder above and
+// cover the value shapes the Trellis entrypoints take.
+
+/// Encode an `ScVal::Symbol` (a Soroban function name) as raw XDR bytes.
+pub fn encode_scval_symbol(symbol: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + symbol.len());
+    out.extend_from_slice(&15u32.to_be_bytes());
+    encode_xdr_opaque(&mut out, symbol.as_bytes());
+    out
+}
+
+/// Encode an `ScVal::String` as raw XDR bytes.
+pub fn encode_scval_string(value: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + value.len());
+    out.extend_from_slice(&14u32.to_be_bytes());
+    encode_xdr_opaque(&mut out, value.as_bytes());
+    out
+}
+
+/// Encode an `ScVal::U32` as raw XDR bytes.
+pub fn encode_scval_u32(value: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8);
+    out.extend_from_slice(&3u32.to_be_bytes());
+    out.extend_from_slice(&value.to_be_bytes());
+    out
+}
+
+/// Encode an `ScVal::I128` as raw XDR bytes.
+pub fn encode_scval_i128(value: i128) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20);
+    out.extend_from_slice(&10u32.to_be_bytes());
+    out.extend_from_slice(&((value >> 64) as u64).to_be_bytes());
+    out.extend_from_slice(&(value as u64).to_be_bytes());
+    out
+}
+
+/// Encode an `ScVal::Address` wrapping a StrKey `G…` account as raw XDR.
+pub fn encode_scval_account_address(account_id: &str) -> Result<Vec<u8>, String> {
+    let key = strkey_decode_account(account_id)?;
+    let mut out = Vec::with_capacity(4 + 4 + 4 + 32);
+    // SCV_ADDRESS
+    out.extend_from_slice(&18u32.to_be_bytes());
+    // SC_ADDRESS_TYPE_ACCOUNT
+    out.extend_from_slice(&0u32.to_be_bytes());
+    // PUBLIC_KEY_TYPE_ED25519
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&key);
+    Ok(out)
+}
+
+/// Encode an `ScVal::Vec` of already-encoded `ScVal`s as raw XDR bytes.
+pub fn encode_scval_vec(items: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12 + items.iter().map(Vec::len).sum::<usize>());
+    out.extend_from_slice(&16u32.to_be_bytes());
+    // Non-null `SCVec*` presence flag.
+    out.extend_from_slice(&1u32.to_be_bytes());
+    out.extend_from_slice(&(items.len() as u32).to_be_bytes());
+    for item in items {
+        out.extend_from_slice(item);
+    }
+    out
+}
+
+/// Append a length-prefixed, 4-byte-aligned XDR opaque value to `out`.
+fn encode_xdr_opaque(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+    let pad = (4 - (bytes.len() % 4)) % 4;
+    out.extend(std::iter::repeat(0u8).take(pad));
+}
+
 #[derive(serde::Deserialize)]
 struct JsonRpcError {
     code: i64,
@@ -2510,6 +2835,142 @@ mod tests {
             preview.contains(r#""method":"getHealth""#),
             "got: {preview}"
         );
+    }
+
+    // --- #470: native account sequence-number lookup ---
+
+    /// A well-known funded testnet account (StrKey `G…`).
+    const TEST_ACCOUNT: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+    #[test]
+    fn base64_encode_round_trips_with_decoder() {
+        for input in [&b""[..], b"a", b"ab", b"abc", b"abcd", &[0u8, 255, 128, 1, 2]] {
+            let encoded = base64_encode(input);
+            let decoded = base64_decode(&encoded).expect("round trip decodes");
+            assert_eq!(decoded, input, "round trip failed for {input:?}");
+        }
+    }
+
+    #[test]
+    fn encode_account_ledger_key_has_expected_layout() {
+        let encoded = encode_account_ledger_key(TEST_ACCOUNT).expect("valid account");
+        let raw = base64_decode(&encoded).expect("valid base64");
+        // LedgerEntryType::ACCOUNT (0), PublicKey union ed25519 (0), 32 bytes.
+        assert_eq!(raw.len(), 4 + 4 + 32);
+        assert_eq!(&raw[..8], &[0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn encode_account_ledger_key_rejects_non_account_strkey() {
+        // A contract address (`C…`) is not an account key.
+        let err = encode_account_ledger_key(
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        )
+        .unwrap_err();
+        assert!(err.contains("invalid account address"), "got: {err}");
+    }
+
+    #[test]
+    fn get_account_sequence_number_returns_seq_num_when_found() {
+        // LedgerEntry { lastModifiedLedgerSeq: 1, data: Account {
+        //   accountID: ed25519(32 zero bytes), balance: 100, seqNum: 42 } }
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&1u32.to_be_bytes()); // lastModifiedLedgerSeq
+        entry.extend_from_slice(&0u32.to_be_bytes()); // LedgerEntryType::ACCOUNT
+        entry.extend_from_slice(&0u32.to_be_bytes()); // PublicKey ed25519
+        entry.extend_from_slice(&[0u8; 32]); // ed25519 key
+        entry.extend_from_slice(&100i64.to_be_bytes()); // balance
+        entry.extend_from_slice(&42i64.to_be_bytes()); // seqNum
+        let entry_b64 = base64_encode(&entry);
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "entries": [ { "key": "AAAAAA==", "xdr": entry_b64, "lastModifiedLedgerSeq": 1 } ],
+                "latestLedger": 1234,
+            }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let seq = get_account_sequence_number(&cfg, TEST_ACCOUNT).expect("found");
+        assert_eq!(seq, 42);
+
+        handle.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn get_account_sequence_number_errors_when_account_not_found() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "entries": [], "latestLedger": 1234 }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let err = get_account_sequence_number(&cfg, TEST_ACCOUNT).unwrap_err();
+        assert!(err.contains("not found"), "got: {err}");
+        assert!(err.contains("not funded"), "got: {err}");
+
+        handle.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn get_account_sequence_number_surfaces_json_rpc_error() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32602, "message": "invalid key" }
+        })
+        .to_string();
+
+        let (url, handle) = spawn_mock_rpc("200 OK", body);
+        let cfg = cfg_for_url(&url);
+
+        let err = get_account_sequence_number(&cfg, TEST_ACCOUNT).unwrap_err();
+        assert!(err.contains("-32602") && err.contains("invalid key"), "got: {err}");
+
+        handle.join().expect("mock server thread");
+    }
+
+    // --- #474 prerequisite: ScVal encoding helpers ---
+
+    #[test]
+    fn encode_scval_symbol_round_trips_through_decoder() {
+        let raw = encode_scval_symbol("lock_funds");
+        let decoded = parse_scval(&raw).expect("decodes");
+        assert_eq!(decoded, ScVal::Symbol("lock_funds".to_string()));
+    }
+
+    #[test]
+    fn encode_scval_i128_round_trips_through_decoder() {
+        let raw = encode_scval_i128(1_000_000);
+        let decoded = parse_scval(&raw).expect("decodes");
+        assert_eq!(decoded, ScVal::I128(1_000_000));
+    }
+
+    #[test]
+    fn encode_scval_vec_round_trips_through_decoder() {
+        let raw = encode_scval_vec(&[encode_scval_u32(7), encode_scval_symbol("x")]);
+        let decoded = parse_scval(&raw).expect("decodes");
+        assert_eq!(
+            decoded,
+            ScVal::Vec(vec![ScVal::U32(7), ScVal::Symbol("x".to_string())])
+        );
+    }
+
+    #[test]
+    fn encode_scval_account_address_round_trips_through_decoder() {
+        let raw = encode_scval_account_address(TEST_ACCOUNT).expect("valid account");
+        let decoded = parse_scval(&raw).expect("decodes");
+        // The decoder renders addresses as hex of the 32-byte key.
+        assert_eq!(decoded, ScVal::Address(hex_encode(&[0u8; 32])));
     }
 
     #[test]

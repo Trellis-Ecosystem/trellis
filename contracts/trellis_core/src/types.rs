@@ -23,8 +23,9 @@ pub enum EscrowStatus {
     /// deadline without work being submitted.
     Refunded,
     /// Milestone closed while still `Pending`, before any funds were ever
-    /// locked. Written by `cancel_unfunded_milestone` and by
-    /// `expire_milestone` on a never-funded milestone; neither moves tokens.
+    /// locked. Written by `cancel_unfunded_milestone`, by the payee-side
+    /// `decline_unfunded_milestone`, and by `expire_milestone` on a
+    /// never-funded milestone; none of them move tokens.
     /// Kept distinct from [`EscrowStatus::Refunded`] so readers of on-chain
     /// state can tell a never-funded closure apart from a real refund without
     /// replaying the event log.

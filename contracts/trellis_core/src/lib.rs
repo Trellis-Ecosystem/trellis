@@ -171,7 +171,7 @@ impl TrellisContract {
             agreement_id: agreement_id.clone(),
             payer: payer.clone(),
             payee: payee.clone(),
-            token,
+            token: token.clone(),
             milestones,
             dispute_resolver,
             total_amount,
@@ -179,7 +179,7 @@ impl TrellisContract {
         };
 
         storage::write_agreement(&env, &agreement_id, &agreement)?;
-        events::agreement_created(&env, agreement_id, payer, payee);
+        events::agreement_created(&env, agreement_id, payer, payee, token, total_amount);
 
         Ok(())
     }
@@ -843,6 +843,88 @@ impl TrellisContract {
             amount,
         );
         // `Cancelled` is terminal: it no longer counts as open, so cancelling
+        // the last open milestone completes the agreement.
+        close_milestone(&mut header, false);
+        storage::write_header(&env, &agreement_id, &header);
+        emit_if_agreement_completed(&env, &agreement_id, &header);
+
+        Ok(())
+    }
+
+    /// Decline a milestone proposal that was never funded (status = `Pending`).
+    ///
+    /// This is the payee-side counterpart of
+    /// [`Self::cancel_unfunded_milestone`]: a payee who does not want to take
+    /// on a proposed milestone can withdraw from it unilaterally, instead of
+    /// depending on the payer's cooperation to cancel it.
+    ///
+    /// Only the payee may decline, and only while the milestone is still
+    /// `Pending`. Once any funds have been locked the payee must go through
+    /// the dispute flow instead — declining a funded milestone would let the
+    /// payee walk away from escrowed funds without the payer's consent.
+    ///
+    /// # Events
+    /// Emits `("declined", agreement_id)` — **not** the `("cancelled", …)`
+    /// event used by [`Self::cancel_unfunded_milestone`] and **not** the
+    /// `("resolved", …)` event used by [`Self::resolve_dispute`]. No tokens
+    /// move here, so off-chain consumers must not treat a decline as a dispute
+    /// ruling.
+    ///
+    /// The milestone transitions to [`EscrowStatus::Cancelled`] — the same
+    /// status payer-cancellation writes, so a reader of `get_agreement` sees a
+    /// single, unambiguous "closed before anything was ever locked" state
+    /// regardless of which party withdrew. The `declined` event is what
+    /// distinguishes the two paths in the log. `Refunded` is never used here:
+    /// it is reserved for dispute rulings where real funds were locked and
+    /// then returned.
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
+    /// - [`TrellisError::InvalidStateTransition`] – milestone is not `Pending`
+    ///   (i.e. funds exist or the milestone is already resolved). This is a
+    ///   state machine violation, not an economic one — use the dispute flow
+    ///   instead once a milestone has left `Pending`.
+    /// - [`TrellisError::Unauthorized`] – reserved for callers that are not the
+    ///   agreement's payee; the payee's `require_auth()` is the enforcement
+    ///   gate, so a non-payee signature never reaches contract code.
+    pub fn decline_unfunded_milestone(
+        env: Env,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+    ) -> Result<(), TrellisError> {
+        // #401: header + single milestone only — O(1) reads and one write.
+        let mut header = storage::read_header(&env, &agreement_id)?;
+        header.payee.require_auth();
+
+        let mut milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
+
+        if milestone.status != EscrowStatus::Pending {
+            // Funds exist or milestone already resolved — use dispute flow.
+            return Err(TrellisError::InvalidStateTransition);
+        }
+
+        // Mark the milestone closed with no token movement required.
+        //
+        // `Cancelled`, not `Refunded`: this milestone was never funded, so no
+        // tokens ever moved. Using the same status as payer-cancellation keeps
+        // "closed before funding" a single state for readers of
+        // `get_agreement`; the `declined` event records who withdrew.
+        let amount = milestone.amount;
+        milestone.status = EscrowStatus::Cancelled;
+        storage::write_milestone(&env, &agreement_id, milestone_id, &milestone);
+
+        // Emit the dedicated decline event rather than milestone_cancelled:
+        // the payee withdrew, no arbitration happened and no tokens moved, so
+        // indexers must be able to tell this apart from a payer cancellation.
+        events::milestone_declined(
+            &env,
+            agreement_id.clone(),
+            milestone_id,
+            header.payee.clone(),
+            amount,
+        );
+        // `Cancelled` is terminal: it no longer counts as open, so declining
         // the last open milestone completes the agreement.
         close_milestone(&mut header, false);
         storage::write_header(&env, &agreement_id, &header);

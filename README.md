@@ -363,7 +363,7 @@ Trellis models a freelance engagement as an **agreement** made up of one or more
 
 - ✅ **Funds are held by the contract** — not by either party or a platform
 - ✅ **Either party can raise a dispute** — neither can unilaterally freeze funds by going silent
-- ✅ **Unfunded milestones can be cancelled** — walk away cleanly with no cost
+- ✅ **Unfunded milestones can be cancelled or declined** — either party can walk away cleanly with no cost
 - ✅ **Every state transition emits an on-chain event** — off-chain clients track progress in real time without polling
 
 ---
@@ -487,6 +487,7 @@ The contract exposes 18 public entrypoints. CI (`scripts/check-readme-entrypoint
 | `resolve_dispute_split` | Dispute Resolver | Settles a dispute with an explicit split: `payer_amount` and `payee_amount` must be non-negative and sum exactly to the milestone's still-escrowed remainder (after any `release_partial`) |
 | `rotate_resolver` | Payer and Payee | Replaces the dispute resolver when the incumbent is lost, compromised or unresponsive; the outgoing resolver does not have to sign |
 | `cancel_unfunded_milestone` | Payer | Cancels a milestone that was never funded — status becomes `Cancelled`, never `Refunded` (reserved for dispute refunds) |
+| `decline_unfunded_milestone` | Payee | Payee-side equivalent of `cancel_unfunded_milestone`: withdraws from a proposed but never-funded milestone — status becomes `Cancelled` |
 | `get_agreement` | Anyone | Returns the full current state of an agreement (read-only) |
 | `get_total_amount` | Anyone | Returns the agreement's total value — sum of all milestone amounts (read-only) |
 | `batch_lock_funds` | Payer | Funds multiple milestones atomically in one transaction |
@@ -495,6 +496,20 @@ The contract exposes 18 public entrypoints. CI (`scripts/check-readme-entrypoint
 | `set_milestone_deadline` | Payer | Sets an optional deadline (ledger timestamp) on a still-`Pending` milestone |
 | `get_milestone_deadline` | Anyone | Returns a milestone's deadline, if one is set (read-only) |
 | `expire_milestone` | Anyone | After the deadline, closes a stalled milestone: a never-funded `Pending` one becomes `Cancelled`, a `Funded` one becomes `Refunded` with the locked funds returned to the payer |
+
+<details>
+<summary>📣 <strong>Events</strong></summary>
+<br />
+Every state transition emits an on-chain event. The <code>agreement_created</code> event carries the full creation-time context so an indexer does not need a follow-up <code>get_agreement</code> / <code>get_total_amount</code> call:
+
+| Event | Data payload |
+|---|---|
+| `agreement_created` | `payer`, `payee`, `token`, `total_amount` |
+| `milestone_cancelled` | `agreement_id`, `milestone_id`, `caller` — emitted by both `cancel_unfunded_milestone` (payer) and `decline_unfunded_milestone` (payee) |
+| `resolver_rotated` | `agreement_id`, `old_resolver`, `new_resolver` |
+
+<code>total_amount</code> is the sum of all milestone amounts at creation time, and <code>token</code> is the Stellar Asset Contract address the agreement escrows.
+</details>
 
 <details>
 <summary>🧬 <strong>Native ScVal Encoding</strong></summary>
@@ -703,6 +718,9 @@ trellis deadline get --agreement-id <hex-id> --milestone-id 0
 
 # Close a stalled milestone once its deadline has passed
 trellis expire --agreement-id <hex-id> --milestone-id 0 --caller <your-address>
+
+# As the payee, decline a proposed but unfunded milestone
+trellis --as payee decline-milestone --agreement-id <hex-id> --milestone-id 0
 ```
 
 All **11 CLI commands** are implemented — `init`, `lock-funds`, `batch-lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `extend-ttl`, `deadline set|get`, `expire`, `status`, and `total-amount`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
@@ -734,6 +752,18 @@ required for these commands. The decoded result is rendered through the same
 `render_json`/`render_human` paths as every other command, so `--json`,
 `--human-readable`, and `--quiet` all behave identically whether or not the
 Stellar CLI is installed.
+
+Native account sequence-number lookup is implemented in
+`cli/trellis_cli/src/rpc.rs`: the account's ledger key is encoded and fetched
+via `getLedgerEntries`, and the returned `AccountEntry` is decoded to its
+current sequence number. An account that does not exist (or is not yet funded)
+is reported as a clear, typed error rather than a generic RPC failure.
+
+Native transaction-envelope construction lives in `cli/trellis_cli/src/tx.rs`.
+Given the fetched sequence number, the network passphrase and
+`config.contract_id`, it assembles a `TransactionV1Envelope` containing an
+`InvokeHostFunctionOp` for the encoded function name and arguments. All eight
+mutating entrypoints are supported, each with its own argument shape.
 
 Native transaction simulation is implemented in
 `cli/trellis_cli/src/rpc.rs` (`RpcClient::simulate_transaction`) against the
