@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 
 export interface MilestoneInput {
   amount: string
@@ -11,84 +11,81 @@ interface MilestoneBuilderProps {
   onValidationChange?: (isValid: boolean) => void
 }
 
+// Same strict amount format as amountToStroops / CreateAgreementPage submit check.
+const AMOUNT_PATTERN = /^\d+(\.\d{1,7})?$/
+
+export interface MilestoneValidation {
+  errors: (string | undefined)[]
+  duplicates: Set<number>
+  isValid: boolean
+}
+
+export function validateMilestones(milestones: MilestoneInput[]): MilestoneValidation {
+  const errors: (string | undefined)[] = new Array(milestones.length)
+  const duplicates = new Set<number>()
+  const amountMap = new Map<string, number[]>()
+  let hasErrors = false
+
+  milestones.forEach((milestone, index) => {
+    const raw = milestone.amount.trim()
+
+    if (raw === '') {
+      hasErrors = true
+      return
+    }
+
+    if (!AMOUNT_PATTERN.test(raw) || Number(raw) <= 0) {
+      errors[index] = 'Amount must be a positive number with up to 7 decimals'
+      hasErrors = true
+      return
+    }
+
+    // Track valid amounts for duplicate detection
+    const key = Number(raw).toString()
+    if (!amountMap.has(key)) {
+      amountMap.set(key, [])
+    }
+    amountMap.get(key)!.push(index)
+  })
+
+  amountMap.forEach((indices) => {
+    if (indices.length > 1) {
+      indices.forEach((index) => duplicates.add(index))
+      hasErrors = true
+    }
+  })
+
+  const isValid = !hasErrors && milestones.length > 0
+
+  return { errors, duplicates, isValid }
+}
+
 export default function MilestoneBuilder({ milestones, onChange, onValidationChange }: MilestoneBuilderProps) {
-  const [errors, setErrors] = useState<Record<number, string>>({})
-  const [duplicates, setDuplicates] = useState<Set<number>>(new Set())
+  // Errors and duplicates are derived from the current array on every render,
+  // so they stay attached to the correct row after a remove or reorder.
+  const { errors, duplicates, isValid } = useMemo(
+    () => validateMilestones(milestones),
+    [milestones],
+  )
 
-  // Check for duplicate amounts and invalid values
-  const validationStatus = useMemo(() => {
-    const amountMap = new Map<string, number[]>()
-    const newDuplicates = new Set<number>()
-    let hasErrors = false
-
-    milestones.forEach((milestone, index) => {
-      const numValue = parseFloat(milestone.amount)
-
-      // Check for individual validation errors
-      if (milestone.amount && (isNaN(numValue) || numValue <= 0)) {
-        hasErrors = true
-      }
-
-      // Track amounts for duplicate detection
-      if (milestone.amount && !isNaN(numValue) && numValue > 0) {
-        const key = numValue.toString()
-        if (!amountMap.has(key)) {
-          amountMap.set(key, [])
-        }
-        amountMap.get(key)!.push(index)
-      }
-    })
-
-    // Mark duplicates
-    amountMap.forEach((indices) => {
-      if (indices.length > 1) {
-        indices.forEach(index => newDuplicates.add(index))
-        hasErrors = true
-      }
-    })
-
-    setDuplicates(newDuplicates)
-    const isValid = !hasErrors && milestones.length > 0 && milestones.every(m => m.amount.trim() !== '')
-
+  useEffect(() => {
     if (onValidationChange) {
       onValidationChange(isValid)
     }
-
-    return { isValid, hasErrors }
-  }, [milestones, onValidationChange])
+  }, [isValid, onValidationChange])
 
   const addMilestone = () => {
     onChange([...milestones, { amount: '', description: '' }])
   }
 
   const removeMilestone = (index: number) => {
-    const updated = milestones.filter((_, i) => i !== index)
-    onChange(updated)
-    
-    // Clean up error for removed milestone
-    const updatedErrors = { ...errors }
-    delete updatedErrors[index]
-    setErrors(updatedErrors)
+    onChange(milestones.filter((_, i) => i !== index))
   }
 
   const updateMilestone = (index: number, field: keyof MilestoneInput, value: string) => {
     const updated = [...milestones]
     updated[index] = { ...updated[index], [field]: value }
     onChange(updated)
-
-    // Validate amount
-    if (field === 'amount') {
-      const updatedErrors = { ...errors }
-      const numValue = parseFloat(value)
-      
-      if (value && (isNaN(numValue) || numValue <= 0)) {
-        updatedErrors[index] = 'Amount must be greater than 0'
-      } else {
-        delete updatedErrors[index]
-      }
-      
-      setErrors(updatedErrors)
-    }
   }
 
   const moveMilestone = (index: number, direction: 'up' | 'down') => {

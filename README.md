@@ -906,11 +906,11 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
 - Core Soroban escrow contract - all 18 entrypoints implemented and tested
 - Full state machine — happy path, dispute resolution, and cancellation paths
-- Contract test suite - 89 tests in the Soroban sandbox
-- Full CLI — all 8 commands wired end-to-end with JSON, dry-run, and human-readable output modes
+- Contract test suite - 83 tests in the Soroban sandbox (see the [contract test badge](.github/badges/contract-tests.json))
+- Full CLI — all 9 escrow commands wired end-to-end with JSON, dry-run, and human-readable output modes
 - Native ScVal encoding — scalar arguments and the `Vec<Milestone>` argument to `init` are built directly in Rust
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
-- Frontend dashboard — 5 pages, 28 components, 12 custom hooks, animated particle network background
+- Frontend dashboard — 5 pages, 28 components, 10 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states
 - Event feed — real-time on-chain event history per agreement (limited to the last ~100k ledgers, ~6 days, that RPC providers retain; full history awaits an event-indexing service, #496)
 - Shell completions — bash, zsh, fish, elvish, powershell
@@ -925,7 +925,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 | Frontend — Milestone actions       | lock, submit, approve, dispute button workflows            | Intermediate |
 | Frontend — Event feed enhancements | Real-time updates, filtering, pagination                   | Intermediate |
 | Native RPC client                  | Replace stellar CLI shell-out with native Rust HTTP client | Advanced     |
-| Documentation                      | CONTRIBUTING.md and contributor onboarding guide           | Beginner     |
+| Documentation                      | Expand [CONTRIBUTING.md](./CONTRIBUTING.md) with worked examples and troubleshooting tips | Beginner     |
 
 See [Issues](../../issues) for the full task list — each issue has exact requirements, acceptance criteria, a suggested branch name, and a timeframe.
 

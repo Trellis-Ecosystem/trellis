@@ -59,6 +59,124 @@ pub struct InvokeOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Native transaction signing (#475)
+// ---------------------------------------------------------------------------
+
+/// A typed failure from [`sign_transaction_hash`] / [`attach_signature`].
+///
+/// Signing is a pure, local operation: unlike the RPC calls in this module
+/// there is no transport to fail, so the only failure modes are a malformed
+/// key and (defensively) a signature that does not verify against the key it
+/// was produced from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SigningError {
+    /// The decoded secret key is not a valid ed25519 seed. `ed25519-dalek`
+    /// accepts any 32-byte seed, so this is reserved for callers that hand in
+    /// a key of the wrong length before decoding.
+    InvalidKeyLength {
+        /// The length that was supplied.
+        got: usize,
+        /// The length ed25519 requires (always 32).
+        expected: usize,
+    },
+    /// The produced signature did not verify against the derived public key.
+    /// This should be unreachable for a well-formed key; it is surfaced
+    /// rather than ignored so a broken build can never emit a bad signature.
+    SigningFailed(String),
+}
+
+impl std::fmt::Display for SigningError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SigningError::InvalidKeyLength { got, expected } => {
+                write!(f, "invalid secret key length: got {got} bytes, expected {expected}")
+            }
+            SigningError::SigningFailed(msg) => {
+                write!(f, "failed to sign transaction hash: {msg}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SigningError {}
+
+/// Sign a 32-byte transaction hash with an ed25519 secret key and return the
+/// correctly-shaped [`stellar_xdr::DecoratedSignature`].
+///
+/// `secret_key` is the raw 32-byte ed25519 seed (the payload of an `S…`
+/// StrKey, after the version byte and CRC have been stripped by the strkey
+/// codec). `tx_hash` is the 32-byte hash the network will verify — for a
+/// Soroban transaction that is `sha256(network_id ‖ envelope_type ‖
+/// transaction)`, not the envelope bytes themselves.
+///
+/// The returned `DecoratedSignature` carries:
+///
+/// * `hint` — the last 4 bytes of the derived public key, which is how the
+///   network selects the signer for the envelope.
+/// * `signature` — the 64-byte ed25519 signature, wrapped in the XDR
+///   `Signature` opaque type.
+///
+/// The signature is verified against the derived public key before being
+/// returned, so a caller can never attach a signature that would be rejected
+/// on-chain.
+pub fn sign_transaction_hash(
+    secret_key: &[u8; 32],
+    tx_hash: &[u8; 32],
+) -> Result<stellar_xdr::DecoratedSignature, SigningError> {
+    use ed25519_dalek::Signer;
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(secret_key);
+    let verifying_key = signing_key.verifying_key();
+
+    let signature = signing_key.sign(tx_hash);
+
+    // Defensive self-check: a signature that does not verify against its own
+    // key must never reach the network.
+    verifying_key
+        .verify_strict(tx_hash, &signature)
+        .map_err(|e| SigningError::SigningFailed(e.to_string()))?;
+
+    let public_key_bytes = verifying_key.to_bytes();
+    let hint: [u8; 4] = public_key_bytes[28..32]
+        .try_into()
+        .expect("public key is 32 bytes, so the last 4 always fit");
+
+    Ok(stellar_xdr::DecoratedSignature {
+        hint: stellar_xdr::SignatureHint(hint),
+        signature: stellar_xdr::Signature(
+            signature
+                .to_bytes()
+                .to_vec()
+                .try_into()
+                .expect("ed25519 signatures are exactly 64 bytes"),
+        ),
+    })
+}
+
+/// Attach a [`stellar_xdr::DecoratedSignature`] to a transaction envelope's
+/// signature vector.
+///
+/// Only the v1 envelope carries signatures today; any other envelope variant
+/// is rejected rather than silently left unsigned. The signature is appended
+/// (not replaced) so multi-signer envelopes keep their existing signatures.
+pub fn attach_signature(
+    envelope: &mut stellar_xdr::TransactionEnvelope,
+    signature: stellar_xdr::DecoratedSignature,
+) -> Result<(), SigningError> {
+    match envelope {
+        stellar_xdr::TransactionEnvelope::Tx(v1) => {
+            v1.signatures
+                .push(signature)
+                .map_err(|e| SigningError::SigningFailed(format!("{e:?}")))?;
+            Ok(())
+        }
+        other => Err(SigningError::SigningFailed(format!(
+            "unsupported transaction envelope variant for signing: {other:?}"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Native transaction simulation (#476)
 // ---------------------------------------------------------------------------
 
@@ -3321,5 +3439,120 @@ mod tests {
         let line = RpcClient::preview(&cfg_with_source(&seed), "lock_funds", &[]);
         assert!(!line.contains(&seed), "verbose trace leaked the seed: {line}");
         assert!(line.contains("<redacted>"));
+    }
+
+    // --- #475: native transaction signing ---
+
+    /// RFC 8032 §7.1 test vector 1: the seed and the public key it derives.
+    const RFC8032_SEED: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c,
+        0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae,
+        0x7f, 0x60,
+    ];
+    const RFC8032_PUBLIC_KEY: [u8; 32] = [
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07,
+        0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07,
+        0x51, 0x1a,
+    ];
+
+    fn fixed_tx_hash() -> [u8; 32] {
+        // A deterministic, non-zero 32-byte hash.
+        let mut hash = [0u8; 32];
+        for (i, b) in hash.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        hash
+    }
+
+    #[test]
+    fn sign_transaction_hash_produces_verifiable_signature() {
+        use ed25519_dalek::Verifier;
+
+        let tx_hash = fixed_tx_hash();
+        let decorated = sign_transaction_hash(&RFC8032_SEED, &tx_hash)
+            .expect("signing a fixed hash with a known key must succeed");
+
+        // The hint is the last 4 bytes of the public key.
+        assert_eq!(
+            decorated.hint.0,
+            RFC8032_PUBLIC_KEY[28..32],
+            "hint must be the last 4 bytes of the public key"
+        );
+
+        // The signature is exactly 64 bytes and verifies against the public key.
+        let sig_bytes: [u8; 64] = decorated
+            .signature
+            .0
+            .as_slice()
+            .try_into()
+            .expect("signature must be 64 bytes");
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&RFC8032_PUBLIC_KEY)
+            .expect("known public key parses");
+
+        verifying_key
+            .verify(&tx_hash, &signature)
+            .expect("signature must verify against the corresponding public key");
+    }
+
+    #[test]
+    fn sign_transaction_hash_signature_does_not_verify_for_a_different_hash() {
+        use ed25519_dalek::Verifier;
+
+        let tx_hash = fixed_tx_hash();
+        let decorated = sign_transaction_hash(&RFC8032_SEED, &tx_hash).expect("signs");
+
+        let sig_bytes: [u8; 64] = decorated.signature.0.as_slice().try_into().unwrap();
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&RFC8032_PUBLIC_KEY).unwrap();
+
+        let mut other_hash = tx_hash;
+        other_hash[0] ^= 0xff;
+
+        assert!(
+            verifying_key.verify(&other_hash, &signature).is_err(),
+            "a signature for one hash must not verify against another"
+        );
+    }
+
+    #[test]
+    fn sign_transaction_hash_is_deterministic() {
+        let tx_hash = fixed_tx_hash();
+        let a = sign_transaction_hash(&RFC8032_SEED, &tx_hash).expect("signs");
+        let b = sign_transaction_hash(&RFC8032_SEED, &tx_hash).expect("signs");
+        assert_eq!(a, b, "ed25519 signing is deterministic");
+    }
+
+    #[test]
+    fn attach_signature_appends_to_v1_envelope() {
+        use stellar_xdr::{
+            Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction, TransactionEnvelope,
+            TransactionExt, TransactionV1Envelope, Uint256,
+        };
+
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: Vec::new().try_into().unwrap(),
+            ext: TransactionExt::V0,
+        };
+        let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: Vec::new().try_into().unwrap(),
+        });
+
+        let decorated = sign_transaction_hash(&RFC8032_SEED, &fixed_tx_hash()).expect("signs");
+        attach_signature(&mut envelope, decorated.clone()).expect("attach succeeds");
+
+        match envelope {
+            TransactionEnvelope::Tx(v1) => {
+                assert_eq!(v1.signatures.len(), 1);
+                assert_eq!(v1.signatures[0], decorated);
+            }
+            other => panic!("expected a v1 envelope, got {other:?}"),
+        }
     }
 }

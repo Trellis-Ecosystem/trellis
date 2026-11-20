@@ -25,6 +25,15 @@ dist
 
 # Test coverage output
 coverage
+lcov.info
+
+# Benchmark / gas cost artefacts
+gas_costs.json
+baseline.json
+current.json
+
+# E2E generated env (written by tests/e2e/run.sh)
+.env.e2e-generated
 
 # Playwright E2E output (#143)
 test-results

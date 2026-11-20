@@ -135,6 +135,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reproducible builds and release version validation (034c05c)
 
+- Fix compilation error, error propagation, address validation, and tx hash extraction (ea9e5db)
+
+- Enforce payer != payee invariant during agreement initialization (6ab2c9c)
+
+- Cap maximum milestone count to prevent unbounded storage and gas cost (30c7ddd)
+
+- Normalize empty-string proof_uri to None in submit_work to eliminate semantic ambiguity (731f3f3)
+
+- Replace module-level env validation with lazy initialization to prevent app-wide crash on missing env vars (7491b71)
+
+- Add missing ExplorerLink import in StatusPage to resolve compilation error (49bf88f)
+
+- Define APP_VERSION global in vite.config.ts to resolve undefined version at runtime (f13ebb3)
+
+- Replace Buffer.from hex decoding with browser-compatible hexToBytes utility across 6 call sites (acddf8a)
+
+- Define skeleton-shimmer CSS, pause NetworkBackground on tab hide, remove QR privacy leak, fix handleRetry promise handling (86da722)
+
+- Fix event polling, abort signals, toast re-renders, and hook loading states (8199f8b)
+
+- Fix verbatimModuleSyntax, CSS class space, hex validation, and wallet null assertion (c25f6d9)
+
+- Adaptive wallet polling, tab-visibility-aware stats polling, QR canvas fallback, and StrictMode ref-cleanup hygiene (17f94bb)
+
 
 ### CI
 
@@ -268,37 +292,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump reqwest from 0.11.27 to 0.13.4 (92b86ff)
 
 
-### Ix
-
-- Fix compilation error, error propagation, address validation, and tx hash extraction (ea9e5db)
-
-- Enforce payer != payee invariant during agreement initialization (6ab2c9c)
-
-- Cap maximum milestone count to prevent unbounded storage and gas cost (30c7ddd)
-
-- Normalize empty-string proof_uri to None in submit_work to eliminate semantic ambiguity (731f3f3)
-
-- Replace module-level env validation with lazy initialization to prevent app-wide crash on missing env vars (7491b71)
-
-- Add missing ExplorerLink import in StatusPage to resolve compilation error (49bf88f)
-
-- Define APP_VERSION global in vite.config.ts to resolve undefined version at runtime (f13ebb3)
-
-- Replace Buffer.from hex decoding with browser-compatible hexToBytes utility across 6 call sites (acddf8a)
-
-- Define skeleton-shimmer CSS, pause NetworkBackground on tab hide, remove QR privacy leak, fix handleRetry promise handling (86da722)
-
-- Fix event polling, abort signals, toast re-renders, and hook loading states (8199f8b)
-
-- Fix verbatimModuleSyntax, CSS class space, hex validation, and wallet null assertion (c25f6d9)
-
-- Adaptive wallet polling, tab-visibility-aware stats polling, QR canvas fallback, and StrictMode ref-cleanup hygiene (17f94bb)
-
-
 ### Security
 
 - Add key management, SAST scanning, audit workflow, and RPC rate limiting (770bd78)
 
 - Add dependency scanning, input limits, RPC URL validation, and panic-boundary tests (3ec7dcc)
+
+
+### Style
+
+- Apply consistent formatting across frontend components (placeholder)
 
 

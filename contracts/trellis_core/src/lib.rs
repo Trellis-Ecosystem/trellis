@@ -32,7 +32,12 @@ use types::{Agreement, AgreementHeader, EscrowStatus, Milestone};
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_MILESTONES: u32 = 50;
+/// Maximum number of milestones a single agreement may be created with.
+///
+/// Exposed publicly so callers and tests can reference the limit instead of
+/// hardcoding it; `init` rejects any list longer than this with
+/// [`TrellisError::MilestoneCountExceeded`].
+pub const MAX_MILESTONES: u32 = 50;
 
 /// Maximum length, in bytes, of the `proof_uri` accepted by `submit_work`.
 ///
