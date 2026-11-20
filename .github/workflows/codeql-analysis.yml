@@ -25,10 +25,6 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
 
-concurrency:
-  group: codeql-${{ github.ref }}-${{ matrix.language }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   security-events: write   # required to upload SARIF results
@@ -38,6 +34,12 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+
+    # Job-level so the matrix context is available; at workflow level
+    # `matrix` is undefined and GitHub rejects the whole file.
+    concurrency:
+      group: codeql-${{ github.ref }}-${{ matrix.language }}
+      cancel-in-progress: true
 
     strategy:
       fail-fast: false
