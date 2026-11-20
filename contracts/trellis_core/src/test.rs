@@ -8,7 +8,7 @@ use crate::{
     errors::TrellisError,
     test_utils::{agreement_id, milestones_from_amounts, one_milestone},
     types::{EscrowStatus, Milestone},
-    TrellisContract, TrellisContractClient, MAX_PROOF_URI_LEN,
+    TrellisContract, TrellisContractClient, MAX_MILESTONES, MAX_PROOF_URI_LEN,
 };
 
 // ---------------------------------------------------------------------------
@@ -784,6 +784,299 @@ fn test_submit_work_proof_uri_length_bounds() {
         stored.len(),
         MAX_PROOF_URI_LEN,
         "the accepted proof must be stored verbatim at the cap length"
+    );
+}
+
+/// #617: the `MAX_MILESTONES` boundary is pinned on both sides.
+///
+/// Exactly `MAX_MILESTONES` milestones must be accepted and stored verbatim;
+/// one more must be rejected with `MilestoneCountExceeded` and leave no
+/// agreement behind. Without this, the `>` in the length check could become
+/// `>=` — or the constant could be altered — and the suite would stay green.
+#[test]
+fn test_init_milestone_count_boundary() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    // ── Exactly at the cap: accepted ──────────────────────────────────────
+    let at_limit_id = agreement_id(&env, 140);
+    let mut at_limit: Vec<Milestone> = Vec::new(&env);
+    for _ in 0..MAX_MILESTONES {
+        at_limit.push_back(Milestone {
+            amount: 1,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        });
+    }
+    assert_eq!(
+        client.try_init(
+            &at_limit_id,
+            &payer,
+            &payee,
+            &token_address,
+            &at_limit,
+            &dispute_resolver,
+        ),
+        Ok(Ok(())),
+        "init with exactly MAX_MILESTONES milestones must succeed"
+    );
+    assert_eq!(
+        client.get_agreement(&at_limit_id).milestones.len(),
+        MAX_MILESTONES,
+        "every milestone at the cap must be stored"
+    );
+
+    // ── One over the cap: rejected, nothing stored ────────────────────────
+    let over_limit_id = agreement_id(&env, 141);
+    let mut over_limit: Vec<Milestone> = Vec::new(&env);
+    for _ in 0..MAX_MILESTONES + 1 {
+        over_limit.push_back(Milestone {
+            amount: 1,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        });
+    }
+    assert_eq!(
+        client.try_init(
+            &over_limit_id,
+            &payer,
+            &payee,
+            &token_address,
+            &over_limit,
+            &dispute_resolver,
+        ),
+        Err(Ok(TrellisError::MilestoneCountExceeded)),
+        "init with MAX_MILESTONES + 1 milestones must return MilestoneCountExceeded"
+    );
+    assert_eq!(
+        client.try_get_agreement(&over_limit_id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected over-limit init must not persist an agreement"
+    );
+}
+
+/// #618: `init` must reject a payer that is also the payee.
+///
+/// An agreement with `payer == payee` has no counterparty, so every escrow
+/// guarantee the contract provides is vacuous for it.
+#[test]
+fn test_init_payer_equals_payee_rejected() {
+    let (env, payer, _payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 142);
+
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payer, // payer doubles as the payee
+            &token_address,
+            &one_milestone(&env, 500),
+            &dispute_resolver,
+        ),
+        Err(Ok(TrellisError::PayerEqualsPayee)),
+        "init with payer == payee must return PayerEqualsPayee"
+    );
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected payer-equals-payee init must not persist an agreement"
+    );
+}
+
+/// #618: the milestone amounts are summed with `checked_add`, so an agreement
+/// whose total overflows `i128` must be rejected with `TotalAmountOverflow`
+/// rather than wrapping to a small or negative `total_amount`.
+#[test]
+fn test_init_total_amount_overflow_rejected() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 143);
+
+    // Two amounts that individually fit in i128 but sum past i128::MAX.
+    let half_plus_one = i128::MAX / 2 + 1;
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: half_plus_one,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+        Milestone {
+            amount: half_plus_one,
+            status: EscrowStatus::Pending,
+            proof_uri: None,
+        },
+    ];
+
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &token_address,
+            &milestones,
+            &dispute_resolver,
+        ),
+        Err(Ok(TrellisError::TotalAmountOverflow)),
+        "init whose milestone amounts overflow i128 must return TotalAmountOverflow"
+    );
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected overflowing init must not persist an agreement"
+    );
+}
+
+/// #619: the token liveness probe in `init` maps a host trap from
+/// `try_symbol()` to `InvalidToken`.
+///
+/// A freshly generated account address has no contract deployed at it, so the
+/// cross-contract call traps and `init` must surface `InvalidToken`.
+#[test]
+fn test_init_rejects_token_with_no_contract() {
+    let (env, payer, payee, dispute_resolver, _token_address, client) = setup();
+    let id = agreement_id(&env, 144);
+    let not_a_contract = Address::generate(&env);
+
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &not_a_contract,
+            &one_milestone(&env, 500),
+            &dispute_resolver,
+        ),
+        Err(Ok(TrellisError::InvalidToken)),
+        "init with a token address that has no contract must return InvalidToken"
+    );
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected invalid-token init must not persist an agreement"
+    );
+}
+
+/// #619: the other failure mode of the token liveness probe — a contract that
+/// exists but does not implement the token interface, so `try_symbol()`
+/// returns a value that fails to decode.
+///
+/// The Trellis contract itself is such a contract: it is deployed, but has no
+/// `symbol` entrypoint.
+#[test]
+fn test_init_rejects_non_token_contract() {
+    let (env, payer, payee, dispute_resolver, _token_address, client) = setup();
+    let id = agreement_id(&env, 145);
+    let non_token = client.address.clone();
+
+    assert_eq!(
+        client.try_init(
+            &id,
+            &payer,
+            &payee,
+            &non_token,
+            &one_milestone(&env, 500),
+            &dispute_resolver,
+        ),
+        Err(Ok(TrellisError::InvalidToken)),
+        "init with a contract that is not a token must return InvalidToken"
+    );
+    assert_eq!(
+        client.try_get_agreement(&id),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "a rejected non-token init must not persist an agreement"
+    );
+}
+
+/// #620: an empty-string `proof_uri` is normalised to `None` both in storage
+/// and in the `trls_sbmt` event payload, so indexers never see `""`.
+#[test]
+fn test_submit_work_empty_proof_uri_normalised_to_none() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 146);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+
+    let empty = Some(String::from_str(&env, ""));
+    client.submit_work(&id, &0u32, &empty);
+
+    // The event must be inspected straight after the call (see
+    // `assert_trellis_topics`).
+    let (event_milestone, event_proof): (u32, Option<String>) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_sbmt"));
+    assert_eq!(event_milestone, 0, "trls_sbmt must name the milestone");
+    assert_eq!(
+        event_proof, None,
+        "an empty proof_uri must be emitted as None, never as an empty string"
+    );
+
+    let agreement = client.get_agreement(&id);
+    let m0 = agreement.milestones.get(0).expect("milestone 0 must exist");
+    assert_eq!(
+        m0.status,
+        EscrowStatus::WorkSubmitted,
+        "the submission itself must still advance the milestone"
+    );
+    assert_eq!(
+        m0.proof_uri, None,
+        "an empty proof_uri must be stored as None, never as an empty string"
+    );
+}
+
+/// #620: `raise_dispute` normalises an empty-string `reason_uri` to `None` in
+/// the `trls_dspt` event, while a real reason is carried through verbatim.
+#[test]
+fn test_raise_dispute_reason_uri_normalisation() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+
+    // ── Empty string → None ───────────────────────────────────────────────
+    let empty_id = agreement_id(&env, 147);
+    client.init(
+        &empty_id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&empty_id, &0u32);
+    client.raise_dispute(&payee, &empty_id, &0u32, &Some(String::from_str(&env, "")));
+
+    let (event_milestone, event_reason): (u32, Option<String>) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
+    assert_eq!(event_milestone, 0, "trls_dspt must name the milestone");
+    assert_eq!(
+        event_reason, None,
+        "an empty reason_uri must be emitted as None, never as an empty string"
+    );
+
+    // ── Real reason → carried through verbatim ────────────────────────────
+    let reason_id = agreement_id(&env, 148);
+    client.init(
+        &reason_id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 500),
+        &dispute_resolver,
+    );
+    client.lock_funds(&reason_id, &0u32);
+    let reason = String::from_str(&env, "ipfs://reason");
+    client.raise_dispute(&payee, &reason_id, &0u32, &Some(reason.clone()));
+
+    let (event_milestone, event_reason): (u32, Option<String>) =
+        trellis_event_data(&env, &client.address, symbol_short!("trls_dspt"));
+    assert_eq!(event_milestone, 0, "trls_dspt must name the milestone");
+    assert_eq!(
+        event_reason,
+        Some(reason),
+        "a non-empty reason_uri must be carried through to the trls_dspt event"
     );
 }
 
