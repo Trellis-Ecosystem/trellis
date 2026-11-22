@@ -45,10 +45,9 @@ function AgreementStatusPage() {
     navigate(`/agreement/${trimmed}`)
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSearch()
-    }
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    handleSearch()
   }
 
   return (
@@ -59,23 +58,26 @@ function AgreementStatusPage() {
       </p>
 
       {/* Search Input */}
-      <div className="mt-6 flex gap-2">
+      <form onSubmit={handleSubmit} className="mt-6 flex gap-2">
+        <label htmlFor="agreement-search" className="sr-only">
+          Agreement ID
+        </label>
         <input
+          id="agreement-search"
           type="text"
           value={searchId}
           onChange={(e) => { setSearchId(e.target.value); setValidationError(null) }}
-          onKeyPress={handleKeyPress}
           placeholder="Enter agreement ID (hex)"
           className="flex-1 px-4 py-3 bg-navy-800 border border-navy-700 text-white rounded-lg focus:outline-none focus:border-cyan-400"
         />
         <button
-          onClick={handleSearch}
+          type="submit"
           disabled={!searchId.trim()}
           className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-navy-900 font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Search
         </button>
-      </div>
+      </form>
       {validationError && (
         <p className="mt-2 text-red-400 text-sm">{validationError}</p>
       )}
