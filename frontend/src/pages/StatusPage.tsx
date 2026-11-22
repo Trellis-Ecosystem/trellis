@@ -143,7 +143,7 @@ export default function StatusPage() {
 
             {/* Agreement Details */}
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-cyan-400 mb-6">Agreement Details</h2>
+              <h2 className="text-xl font-semibold text-cyan-400 light:text-cyan-700 mb-6">Agreement Details</h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
@@ -175,76 +175,12 @@ export default function StatusPage() {
 
             {/* Milestones Table */}
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-cyan-400 mb-6">Milestones</h2>
+              <h2 className="text-xl font-semibold text-cyan-400 light:text-cyan-700 mb-6">Milestones</h2>
 
               {/* Desktop: full table. Mobile: single-column cards (#120) — a
                   scrollable table is hard to read and hard to tap on a phone. */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-navy-700 dark:border-navy-700 light:border-gray-200">
-                      <th className="text-left py-3 px-4 text-gray-400 dark:text-gray-400 light:text-gray-600 font-semibold text-sm">ID</th>
-                      <th className="text-left py-3 px-4 text-gray-400 dark:text-gray-400 light:text-gray-600 font-semibold text-sm">Amount</th>
-                      <th className="text-left py-3 px-4 text-gray-400 dark:text-gray-400 light:text-gray-600 font-semibold text-sm">Status</th>
-                      <th className="text-left py-3 px-4 text-gray-400 dark:text-gray-400 light:text-gray-600 font-semibold text-sm">Proof</th>
-                      <th className="text-left py-3 px-4 text-gray-400 dark:text-gray-400 light:text-gray-600 font-semibold text-sm">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {agreement.milestones.map((milestone, idx) => (
-                      <MilestoneRow
-                        key={idx}
-                        milestone={milestone}
-                        agreement={agreement}
-                        wallet={wallet}
-                        onUpdate={refetch}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+  
 
-              <div className="md:hidden space-y-3">
-                {agreement.milestones.map((milestone) => (
-                  <MilestoneCard
-                    key={milestone.id}
-                    milestone={milestone}
-                    agreement={agreement}
-                    wallet={wallet}
-                    onUpdate={refetch}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Event Feed */}
-            <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6">
-              <h2 className="text-xl font-semibold text-cyan-400 mb-6">Event History</h2>
-
-              {eventsError ? (
-                <p className="text-red-400 text-sm">{eventsError}</p>
-              ) : eventsLoading && events.length === 0 ? (
-                <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">Loading events…</p>
-              ) : events.length === 0 ? (
-                <p className="text-gray-400 dark:text-gray-400 light:text-gray-600">No events yet</p>
-              ) : (
-                <div className="space-y-4">
-                  {events.map((event, idx) => (
-                    <div key={idx} className="border-l-4 border-cyan-400 pl-4 py-2">
-                      <p className="text-cyan-400 font-semibold text-sm">{event.type}</p>
-                      <p className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm">Ledger: {event.ledger}</p>
-                      <p className="text-gray-400 dark:text-gray-400 light:text-gray-600 text-sm">
-                        {new Date(event.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
+/* … truncated 3246 chars — edit only what you need near the top … */
