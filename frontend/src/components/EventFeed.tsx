@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type JSX } from 'react'
 import { useAgreementEvents } from '../hooks/useAgreementEvents'
 import { ExplorerLink } from './ExplorerLink'
 
@@ -7,7 +7,7 @@ interface EventFeedProps {
 }
 
 export default function EventFeed({ agreementId }: EventFeedProps) {
-  const { events, isLoading, error } = useAgreementEvents(agreementId)
+  const { events, isLoading, error, refetch } = useAgreementEvents(agreementId)
 
   const eventDescriptions = useMemo(() => {
     return events.map((event) => ({
@@ -44,6 +44,9 @@ export default function EventFeed({ agreementId }: EventFeedProps) {
         <div className="text-center py-8">
           <p className="text-red-400 mb-2">Failed to load events</p>
           <p className="text-sm text-gray-500 dark:text-gray-500 light:text-gray-600">{error}</p>
+          <button type="button" onClick={refetch} className="mt-4 rounded-lg border border-cyan-500 px-4 py-2 text-cyan-500">
+            Retry
+          </button>
         </div>
       </div>
     )

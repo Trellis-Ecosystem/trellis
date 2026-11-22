@@ -7,6 +7,7 @@ import { useToastActions } from '../hooks/useToast'
 import MilestoneBuilder, { type MilestoneInput } from '../components/MilestoneBuilder'
 import { AgreementIdGenerator } from '../components/AgreementIdGenerator'
 import { agreementIdToScVal, milestoneToScVal } from '../lib/soroban'
+import { getDefaultTokenId } from '../lib/config'
 import { generateAgreementId } from '../lib/agreementId'
 
 export interface FormData {
@@ -99,7 +100,7 @@ function CreateAgreementPage() {
     payer: '',
     payee: '',
     resolver: '',
-    token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC', // Default testnet USDC
+    token: getDefaultTokenId(),
   })
 
   const [milestones, setMilestones] = useState<MilestoneInput[]>([])
@@ -115,7 +116,7 @@ function CreateAgreementPage() {
     if (!trimmed) return `${field} is required`
 
     if (trimmed.startsWith('C')) {
-      return StrKey.isValidContractKey(trimmed)
+      return StrKey.isValidContract(trimmed)
         ? undefined
         : `${field} must be a valid contract address (starts with C)`
     }
@@ -313,7 +314,6 @@ function CreateAgreementPage() {
               } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
             />
             {errors.token && <p className="mt-1 text-xs text-red-400">{errors.token}</p>}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-500 light:text-gray-600">Default: Testnet USDC</p>
           </div>
         </div>
 

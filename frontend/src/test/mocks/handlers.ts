@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { RPC_URL } from '../../lib/config'
+import { CONTRACT_ID, RPC_URL } from '../../lib/config'
 
 /**
  * Mock handlers for Soroban RPC endpoints used in tests.
@@ -29,7 +29,7 @@ export const handlers = [
               type: 'contract',
               ledger: 1000,
               ledgerClosedAt: '2024-01-01T00:00:00Z',
-              contractId: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+              contractId: CONTRACT_ID,
               id: '0001',
               pagingToken: '0001',
               topic: ['AAAADwAAAAdjcmVhdGVk'],
@@ -43,7 +43,7 @@ export const handlers = [
               type: 'contract',
               ledger: 1001,
               ledgerClosedAt: '2024-01-01T00:01:00Z',
-              contractId: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+              contractId: CONTRACT_ID,
               id: '0002',
               pagingToken: '0002',
               topic: ['AAAADwAAAAZsb2NrZWQ='],
