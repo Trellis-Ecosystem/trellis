@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: 255 255 255;
+    --color-fg: 15 23 42;
+    --color-muted: 100 116 139;
+    --color-border: 226 232 240;
+    --color-card: 248 250 252;
+    --color-accent: 79 70 229;
+  }
+
+  .dark {
+    --color-bg: 2 6 23;
+    --color-fg: 226 232 240;
+    --color-muted: 148 163 184;
+    --color-border: 30 41 59;
+    --color-card: 15 23 42;
+    --color-accent: 129 140 248;
+  }
+
+  body {
+    background-color: rgb(var(--color-bg));
+    color: rgb(var(--color-fg));
+  }
+}
+
+@layer utilities {
+  .text-muted {
+    color: rgb(var(--color-muted));
+  }
+
+  .border-default {
+    border-color: rgb(var(--color-border));
+  }
+
+  .bg-card {
+    background-color: rgb(var(--color-card));
+  }
+
+  .text-accent {
+    color: rgb(var(--color-accent));
+  }
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: rgb(var(--color-card));
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(148, 163, 184, 0.25),
+    transparent
+  );
+  animation: skeleton-shimmer 1.6s infinite;
+}
+
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-ping,
+  .animate-spin,
+  .animate-fade-in {
+    animation: none !important;
+  }
+
+  .skeleton-shimmer::after {
+    animation: none !important;
+    display: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
