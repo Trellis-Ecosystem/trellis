@@ -110,6 +110,10 @@ function CreateAgreementPage() {
   // other value would fail on-chain after signing.
   const payer = wallet.publicKey ?? ''
 
+  // Only treat the hook as busy while a transaction is actually in flight.
+  // Terminal states ('error'/'success') must not keep the button disabled.
+  const isInFlight = status === 'building' || status === 'signing' || status === 'submitting'
+
   const validateAddress = (address: string, field: string): string | undefined => {
     const trimmed = address.trim()
     if (!trimmed) return `${field} is required`
@@ -231,125 +235,91 @@ function CreateAgreementPage() {
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            strokeWidth={2}
           >
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span>
-            Agreement ID generated. Share it with your counterparty so they can track the agreement.
-          </span>
+          <span>Agreement ID: <span className="font-mono text-white dark:text-white light:text-gray-900">{agreementId}</span></span>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="mt-10 space-y-6">
-        {/* Party Addresses */}
-        <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-white dark:text-white light:text-gray-900">Agreement Parties</h2>
+        {/* Payer (connected wallet) */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
+            Payer (your connected wallet)
+          </label>
+          <input
+            type="text"
+            value={payer}
+            readOnly
+            placeholder="Connect your wallet"
+            className="w-full px-4 py-3 bg-navy-800 dark:bg-navy-800 light:bg-gray-50 border border-navy-600 dark:border-navy-600 light:border-gray-300 rounded-lg text-gray-400 dark:text-gray-400 light:text-gray-600 font-mono text-sm cursor-not-allowed"
+          />
+          {errors.payer && <p className="mt-1 text-sm text-red-400">{errors.payer}</p>}
+        </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
-              Payer Address <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={payer}
-              readOnly
-              disabled
-              placeholder="Connect your wallet"
-              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
-                errors.payer ? 'border-red-500' : 'border-navy-600'
-              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
-            />
-            {errors.payer && <p className="mt-1 text-xs text-red-400">{errors.payer}</p>}
-          </div>
+        {/* Payee */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
+            Payee Address
+          </label>
+          <input
+            type="text"
+            value={formData.payee}
+            onChange={(e) => handleInputChange('payee', e.target.value)}
+            placeholder="G... or C..."
+            className="w-full px-4 py-3 bg-navy-800 dark:bg-navy-800 light:bg-gray-50 border border-navy-600 dark:border-navy-600 light:border-gray-300 rounded-lg text-white dark:text-white light:text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          />
+          {errors.payee && <p className="mt-1 text-sm text-red-400">{errors.payee}</p>}
+        </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
-              Payee Address <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={formData.payee}
-              onChange={(e) => handleInputChange('payee', e.target.value)}
-              placeholder="G..."
-              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
-                errors.payee ? 'border-red-500' : 'border-navy-600'
-              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
-            />
-            {errors.payee && <p className="mt-1 text-xs text-red-400">{errors.payee}</p>}
-          </div>
+        {/* Resolver */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
+            Dispute Resolver Address
+          </label>
+          <input
+            type="text"
+            value={formData.resolver}
+            onChange={(e) => handleInputChange('resolver', e.target.value)}
+            placeholder="G... or C..."
+            className="w-full px-4 py-3 bg-navy-800 dark:bg-navy-800 light:bg-gray-50 border border-navy-600 dark:border-navy-600 light:border-gray-300 rounded-lg text-white dark:text-white light:text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          />
+          {errors.resolver && <p className="mt-1 text-sm text-red-400">{errors.resolver}</p>}
+        </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
-              Dispute Resolver Address <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={formData.resolver}
-              onChange={(e) => handleInputChange('resolver', e.target.value)}
-              placeholder="G..."
-              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
-                errors.resolver ? 'border-red-500' : 'border-navy-600'
-              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
-            />
-            {errors.resolver && <p className="mt-1 text-xs text-red-400">{errors.resolver}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">
-              Token Contract Address <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={formData.token}
-              onChange={(e) => handleInputChange('token', e.target.value)}
-              placeholder="C..."
-              className={`w-full px-4 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
-                errors.token ? 'border-red-500' : 'border-navy-600'
-              } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
-            />
-            {errors.token && <p className="mt-1 text-xs text-red-400">{errors.token}</p>}
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-500 light:text-gray-600">Default: Testnet USDC</p>
-          </div>
+        {/* Token */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
+            Token Contract Address
+          </label>
+          <input
+            type="text"
+            value={formData.token}
+            onChange={(e) => handleInputChange('token', e.target.value)}
+            placeholder="C..."
+            className="w-full px-4 py-3 bg-navy-800 dark:bg-navy-800 light:bg-gray-50 border border-navy-600 dark:border-navy-600 light:border-gray-300 rounded-lg text-white dark:text-white light:text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          />
+          {errors.token && <p className="mt-1 text-sm text-red-400">{errors.token}</p>}
         </div>
 
         {/* Milestones */}
-        <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+        <div>
+          <label className="block text-sm font-medium text-gray-300 dark:text-gray-300 light:text-gray-700 mb-2">
+            Milestones
+          </label>
           <MilestoneBuilder milestones={milestones} onChange={setMilestones} />
-          {errors.milestones && (
-            <p className="mt-2 text-sm text-red-400">{errors.milestones}</p>
-          )}
+          {errors.milestones && <p className="mt-1 text-sm text-red-400">{errors.milestones}</p>}
         </div>
 
-        {/* Submit Button */}
-        <div className="flex gap-4">
-          <button
-            type="submit"
-            disabled={isSubmitting || !wallet.connected || status !== 'idle'}
-            className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-navy-900 font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSubmitting ? 'Creating Agreement...' : 'Create Agreement'}
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            disabled={isSubmitting}
-            className="px-6 py-3 border border-navy-700 dark:border-navy-700 light:border-gray-200 text-gray-400 dark:text-gray-400 light:text-gray-600 hover:text-white dark:hover:text-white light:hover:text-gray-900 rounded-lg transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        </div>
-
-        {!wallet.connected && (
-          <p className="text-sm text-yellow-400 text-center">
-            Please connect your wallet to create an agreement
-          </p>
-        )}
+        <button
+          type="submit"
+          disabled={isSubmitting || isInFlight}
+          className="w-full px-6 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-navy-600 disabled:text-gray-500 text-navy-900 font-semibold rounded-lg transition-colors"
+        >
+          {isSubmitting || isInFlight ? 'Creating...' : 'Create Agreement'}
+        </button>
       </form>
     </main>
   )
