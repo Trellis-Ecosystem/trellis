@@ -9,6 +9,8 @@ import {
 import { signTransaction } from '../lib/wallet'
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 
+export const DEFAULT_INCLUSION_FEE = '100000'
+
 export type InvokeStatus = 'idle' | 'building' | 'signing' | 'submitting' | 'success' | 'error'
 
 /**
@@ -83,7 +85,7 @@ export function useContractInvoke(): UseContractInvokeResult {
   }, [])
 
   const invoke = useCallback(
-    async (method: string, args: xdr.ScVal[], publicKey: string): Promise<string> => {
+    async (method: string, args: xdr.ScVal[], publicKey: string, fee = DEFAULT_INCLUSION_FEE): Promise<string> => {
       // Abort any previously in-flight invocation before starting a new one.
       controllerRef.current?.abort()
       const controller = new AbortController()
@@ -106,7 +108,7 @@ export function useContractInvoke(): UseContractInvokeResult {
 
         // Build transaction
         const builtTx = new TransactionBuilder(sourceAccount, {
-          fee: '100000',
+          fee,
           networkPassphrase: NETWORK_PASSPHRASE,
         })
           .addOperation(contract.call(method, ...args))
@@ -150,6 +152,13 @@ export function useContractInvoke(): UseContractInvokeResult {
           throw new Error(formatSendTransactionError(sendResult.errorResult))
         }
 
+        if (sendResult.status === 'TRY_AGAIN_LATER') {
+          throw new Error('The network is busy. Please try again.')
+        }
+
+        // PENDING and DUPLICATE both identify a submitted transaction.
+        if (!unmountedRef.current) setTxHash(sendResult.hash)
+
         // Poll for transaction result
         let getResult = await server.getTransaction(sendResult.hash)
         let attempts = 0
@@ -170,13 +179,11 @@ export function useContractInvoke(): UseContractInvokeResult {
         }
 
         if (getResult.status === rpc.Api.GetTransactionStatus.FAILED) {
-          throw new Error('Transaction failed')
+          throw new Error(formatSendTransactionError(getResult.resultXdr))
         }
 
-        if (!unmountedRef.current) {
-          setTxHash(sendResult.hash)
-          setStatus('success')
-        }
+        if (signal.aborted) return ''
+        if (!unmountedRef.current) setStatus('success')
 
         return sendResult.hash
       } catch (err) {
