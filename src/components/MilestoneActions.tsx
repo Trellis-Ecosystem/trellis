@@ -1,127 +1,92 @@
 import { useState } from 'react';
 import { useMilestoneActions } from '../hooks/useMilestoneActions';
-import { getStatusColor } from '../utils/statusColors';
+import { formatTokenAmount } from '../lib/format';
 import type { Milestone } from '../types';
 
 interface MilestoneActionsProps {
+  agreementId: string;
   milestone: Milestone;
-  onActionComplete?: () => void;
+  index: number;
 }
 
-export function MilestoneActions({ milestone, onActionComplete }: MilestoneActionsProps) {
-  const { approveMilestone, rejectMilestone, releaseFunds, isLoading, error } = useMilestoneActions();
-  const [confirming, setConfirming] = useState<string | null>(null);
+export function MilestoneActions({ agreementId, milestone, index }: MilestoneActionsProps) {
+  const { lock, release, refund, pending, error } = useMilestoneActions(agreementId);
+  const [confirming, setConfirming] = useState<null | 'lock' | 'release' | 'refund'>(null);
 
-  const handleAction = async (action: () => Promise<void>) => {
-    try {
-      await action();
-      onActionComplete?.();
-    } catch {
-      // error surfaced via hook state
+  const formattedAmount = formatTokenAmount(milestone.amount);
+
+  const run = async (action: 'lock' | 'release' | 'refund') => {
+    setConfirming(null);
+    if (action === 'lock') await lock(milestone, index);
+    else if (action === 'release') await release(milestone, index);
+    else await refund(milestone, index);
+  };
+
+  const confirmationText = (action: 'lock' | 'release' | 'refund') => {
+    switch (action) {
+      case 'lock':
+        return `Lock ${formattedAmount} tokens for milestone ${index}?`;
+      case 'release':
+        return `Release ${formattedAmount} tokens for milestone ${index}?`;
+      case 'refund':
+        return `Refund ${formattedAmount} tokens for milestone ${index}?`;
     }
   };
 
-  const statusClasses = getStatusColor(milestone.status);
-
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${statusClasses}`}
-        >
-          {milestone.status}
-        </span>
-      </div>
-
-      {error && (
-        <p className="text-sm text-red-600 dark:text-red-400" role="alert">
-          {error}
-        </p>
-      )}
-
+    <div className="mt-3">
       <div className="flex flex-wrap gap-2">
-        {milestone.status === 'Pending' && (
-          <button
-            type="button"
-            disabled={isLoading}
-            onClick={() => handleAction(() => approveMilestone(milestone.id))}
-            className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50"
-          >
-            Approve
-          </button>
-        )}
-
-        {milestone.status === 'Submitted' && (
-          <>
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={() => handleAction(() => approveMilestone(milestone.id))}
-              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50"
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={() => handleAction(() => rejectMilestone(milestone.id))}
-              className="rounded-md bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-50"
-            >
-              Reject
-            </button>
-          </>
-        )}
-
-        {milestone.status === 'Approved' && (
-          <button
-            type="button"
-            disabled={isLoading}
-            onClick={() => handleAction(() => releaseFunds(milestone.id))}
-            className="rounded-md bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 disabled:opacity-50"
-          >
-            Release Funds
-          </button>
-        )}
-
-        {milestone.status === 'Completed' && (
-          <button
-            type="button"
-            disabled={isLoading}
-            onClick={() => setConfirming('release')}
-            className="rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 disabled:opacity-50"
-          >
-            Release Funds
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setConfirming('lock')}
+          className="rounded bg-indigo-600 px-3 py-1 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          Lock
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setConfirming('release')}
+          className="rounded bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-700 disabled:opacity-50"
+        >
+          Release
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setConfirming('refund')}
+          className="rounded bg-rose-600 px-3 py-1 text-sm text-white hover:bg-rose-700 disabled:opacity-50"
+        >
+          Refund
+        </button>
       </div>
 
-      {confirming === 'release' && (
-        <div className="rounded-md border border-gray-200 p-3 dark:border-gray-700">
-          <p className="mb-2 text-sm text-gray-700 dark:text-gray-300">
-            Release funds for this milestone?
-          </p>
-          <div className="flex gap-2">
+      {confirming && (
+        <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>{confirmationText(confirming)}</p>
+          <div className="mt-2 flex gap-2">
             <button
               type="button"
-              disabled={isLoading}
-              onClick={() => {
-                setConfirming(null);
-                handleAction(() => releaseFunds(milestone.id));
-              }}
-              className="rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 disabled:opacity-50"
+              disabled={pending}
+              onClick={() => run(confirming)}
+              className="rounded bg-amber-600 px-3 py-1 text-white hover:bg-amber-700 disabled:opacity-50"
             >
               Confirm
             </button>
             <button
               type="button"
+              disabled={pending}
               onClick={() => setConfirming(null)}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+              className="rounded border border-amber-400 px-3 py-1 text-amber-900 hover:bg-amber-100 disabled:opacity-50"
             >
               Cancel
             </button>
           </div>
         </div>
       )}
+
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
   );
 }
