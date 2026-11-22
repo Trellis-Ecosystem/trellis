@@ -38,12 +38,18 @@ sort_commits = "oldest"
 
 commit_parsers = [
   { message = "^feat", group = "Features" },
+  # Legacy: `ix(...)` is a historical typo of `fix(...)`; keep it grouped
+  # with real bug fixes rather than surfacing an ad-hoc "Ix" heading.
+  { message = "^ix\\(", group = "Bug Fixes" },
   { message = "^fix", group = "Bug Fixes" },
   { message = "^perf", group = "Performance" },
   { message = "^refactor", group = "Refactor" },
   { message = "^doc", group = "Documentation" },
   { message = "^test", group = "Testing" },
   { message = "^ci", group = "CI" },
+  { message = "^build", group = "Build" },
+  { message = "^security", group = "Security" },
+  { message = "^style", group = "Style" },
   { message = "^chore\\(release\\)", skip = true },
   { message = "^chore", group = "Miscellaneous" },
 ]

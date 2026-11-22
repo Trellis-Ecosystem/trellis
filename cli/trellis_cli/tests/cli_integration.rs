@@ -627,3 +627,198 @@ fn test_release_partial_rejects_bad_amounts() {
         assert!(!out.status.success(), "amount {bad} should be rejected");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Native account sequence-number lookup (#470)
+// ---------------------------------------------------------------------------
+
+/// A base64-encoded `AccountEntry` XDR whose `seq_num` is 42.
+///
+/// Layout: AccountEntry { accountID (PublicKey), balance (int64), seqNum
+/// (int64), numSubEntries (uint32), ... }. The sequence number is the 8-byte
+/// big-endian value at byte offset 40 (4-byte discriminant + 32-byte ed25519
+/// key, then the 8-byte balance, then the 8-byte seq_num).
+fn account_entry_xdr_with_seq(seq: i64) -> String {
+    let mut bytes = Vec::new();
+    // AccountEntry discriminant (0).
+    bytes.extend_from_slice(&0i32.to_be_bytes());
+    // PublicKey discriminant (0 = ed25519) + 32-byte key.
+    bytes.extend_from_slice(&0i32.to_be_bytes());
+    bytes.extend_from_slice(&[7u8; 32]);
+    // balance (int64)
+    bytes.extend_from_slice(&1_000_0000i64.to_be_bytes());
+    // seqNum (int64)
+    bytes.extend_from_slice(&seq.to_be_bytes());
+    // numSubEntries (uint32)
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    // flags (uint32)
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    // homeDomain (string, empty)
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    // thresholds (4 bytes)
+    bytes.extend_from_slice(&[1u8, 0, 0, 0]);
+    // signers (empty vec)
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    // ext (v0)
+    bytes.extend_from_slice(&0i32.to_be_bytes());
+
+    base64_encode(&bytes)
+}
+
+/// Minimal base64 encoder (standard alphabet, padded) so the test does not
+/// depend on an extra dev-dependency.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Found case: `getLedgerEntries` returns the account entry and the decoded
+/// sequence number is surfaced through the `--json` envelope.
+#[test]
+fn test_account_sequence_lookup_found() {
+    let xdr = account_entry_xdr_with_seq(42);
+    let mut server = mockito::Server::new();
+    let _entries = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getLedgerEntries"}),
+        ))
+        .with_body(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"entries":[{{"key":"AAAAAA==","xdr":"{xdr}","lastModifiedLedgerSeq":100,"liveUntilLedgerSeq":null}}],"latestLedger":100}}}}"#
+        ))
+        .create();
+
+    let output = trellis_cmd()
+        // Prove the stellar binary is not needed for a native call.
+        .env("STELLAR_MOCK_BIN", "/nonexistent/stellar")
+        .args([
+            "--rpc-url",
+            &server.url(),
+            "--json",
+            "account",
+            "sequence",
+            "--account",
+            "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "sequence lookup should succeed\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json prints one JSON envelope");
+    assert_eq!(envelope["status"], "success");
+    assert_eq!(envelope["result"]["sequence"], 42);
+}
+
+/// Not-found case: an empty `entries` array means the account is unfunded and
+/// must produce a clear error rather than a panic or a bogus sequence.
+#[test]
+fn test_account_sequence_lookup_not_found() {
+    let mut server = mockito::Server::new();
+    let _entries = server
+        .mock("POST", "/")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"method": "getLedgerEntries"}),
+        ))
+        .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"entries":[],"latestLedger":100}}"#)
+        .create();
+
+    let output = trellis_cmd()
+        .args([
+            "--rpc-url",
+            &server.url(),
+            "--json",
+            "account",
+            "sequence",
+            "--account",
+            "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        !output.status.success(),
+        "missing account must exit non-zero"
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("JSON");
+    assert_eq!(envelope["status"], "error");
+    let message = envelope["error"].as_str().unwrap_or("").to_lowercase();
+    assert!(
+        message.contains("not found") || message.contains("not funded"),
+        "error should explain the account is missing, got: {envelope}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Payee-side decline of an unfunded milestone (#464)
+// ---------------------------------------------------------------------------
+
+/// `decline-unfunded-milestone` must be available to the payee and preview the
+/// correct contract entrypoint under `--dry-run`.
+#[test]
+fn test_decline_unfunded_milestone_dry_run() {
+    let out = dry_run(&["decline-unfunded-milestone"]);
+    assert!(
+        out.status.success(),
+        "decline-unfunded-milestone dry-run should succeed\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("decline_unfunded_milestone"),
+        "dry-run should preview the decline_unfunded_milestone entrypoint\nstdout: {stdout}"
+    );
+}
+
+/// The `--json` envelope for the decline command reports success and echoes the
+/// milestone it acted on.
+#[test]
+fn test_decline_unfunded_milestone_json_output() {
+    let out = trellis_cmd()
+        .args([
+            "decline-unfunded-milestone",
+            "--agreement-id",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id",
+            "0",
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert!(
+        out.status.success(),
+        "decline-unfunded-milestone --json should succeed\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("JSON");
+    assert_eq!(envelope["status"], "success");
+}
