@@ -854,6 +854,23 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Mirror the contract's `init` rejections that depend only on the addresses,
+/// so they fail here instead of in a doomed simulation/transaction: the payer
+/// and payee must differ, the resolver must be neither party, and the token
+/// must be a contract (`C…`) address.
+fn check_init_parties(payer: &str, payee: &str, token: &str, resolver: &str) -> Result<(), String> {
+    if payer == payee {
+        return Err("payer and payee must be different addresses".to_string());
+    }
+    if resolver == payer || resolver == payee {
+        return Err("resolver must be a neutral third party, not the payer or payee".to_string());
+    }
+    if !token.starts_with('C') {
+        return Err("token must be a token contract address starting with 'C'".to_string());
+    }
+    Ok(())
+}
+
 /// Print an error that ends the command (#645).
 ///
 /// Under `--json` / `--quiet` this is the standard error envelope on stdout,
@@ -907,6 +924,7 @@ fn run_init(
     validate_address("payee", &payee)?;
     validate_address("token", &token)?;
     validate_address("resolver", &resolver)?;
+    check_init_parties(&payer, &payee, &token, &resolver)?;
     let agreement_id_for_history = agreement_id.clone();
 
     let milestones_json = build_milestones_json(&milestones_csv)?;
@@ -2052,6 +2070,16 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
         );
     }
 
+    let count = csv.split(',').count();
+    if count > crate::input::MAX_MILESTONES {
+        return Err(format!(
+            "too many milestones: at most {} are allowed, got {count}",
+            crate::input::MAX_MILESTONES
+        ));
+    }
+
+    // The contract sums every amount as i128 and rejects an overflowing total.
+    let mut total: i128 = 0;
     let entries: Vec<String> = csv
         .split(',')
         .enumerate()
@@ -2075,6 +2103,10 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
                     idx
                 ));
             }
+            total = total.checked_add(amount).ok_or_else(|| {
+                "milestone amounts overflow: their total exceeds the maximum i128 value"
+                    .to_string()
+            })?;
             Ok(format!(
                 r#"{{"id":{idx},"amount":"{amount}","status":{{"Pending":null}},"proof_uri":null}}"#,
             ))
@@ -2623,6 +2655,61 @@ mod tests {
         assert!(
             err.contains("empty milestone amount at index 2"),
             "got: {err}"
+        );
+    }
+
+    // --- init pre-checks mirroring contract rejections (#648) ---
+
+    const PAYER: &str = "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+    const PAYEE: &str = "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF";
+    const RESOLVER: &str = "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO";
+    const TOKEN: &str = "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+
+    #[test]
+    fn init_rejects_payer_equal_to_payee() {
+        let err = check_init_parties(PAYER, PAYER, TOKEN, RESOLVER).unwrap_err();
+        assert_eq!(err, "payer and payee must be different addresses");
+    }
+
+    #[test]
+    fn init_rejects_resolver_that_is_a_party() {
+        for resolver in [PAYER, PAYEE] {
+            let err = check_init_parties(PAYER, PAYEE, TOKEN, resolver).unwrap_err();
+            assert_eq!(
+                err,
+                "resolver must be a neutral third party, not the payer or payee"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_account_address_as_token() {
+        let account_token = TOKEN.replacen('C', "G", 1);
+        let err = check_init_parties(PAYER, PAYEE, &account_token, RESOLVER).unwrap_err();
+        assert_eq!(err, "token must be a token contract address starting with 'C'");
+    }
+
+    #[test]
+    fn init_accepts_distinct_parties_and_contract_token() {
+        assert!(check_init_parties(PAYER, PAYEE, TOKEN, RESOLVER).is_ok());
+    }
+
+    #[test]
+    fn init_rejects_more_than_max_milestones() {
+        let ok = vec!["1"; crate::input::MAX_MILESTONES].join(",");
+        assert!(build_milestones_json(&ok).is_ok());
+        let too_many = vec!["1"; crate::input::MAX_MILESTONES + 1].join(",");
+        let err = build_milestones_json(&too_many).unwrap_err();
+        assert_eq!(err, "too many milestones: at most 50 are allowed, got 51");
+    }
+
+    #[test]
+    fn init_rejects_milestone_sum_overflow() {
+        let csv = format!("{},1", i128::MAX);
+        let err = build_milestones_json(&csv).unwrap_err();
+        assert_eq!(
+            err,
+            "milestone amounts overflow: their total exceeds the maximum i128 value"
         );
     }
 

@@ -23,6 +23,12 @@ pub const MAX_AGREEMENT_ID_LEN: usize = 64;
 /// parameters, but bounded so it cannot bloat the contract payload.
 pub const MAX_PROOF_URI_LEN: usize = 512;
 
+/// Maximum number of milestones in one agreement.
+///
+/// Mirrors the contract's `MAX_MILESTONES` (contracts/trellis_core/src/lib.rs):
+/// `init` rejects longer lists, so catching it here avoids a doomed transaction.
+pub const MAX_MILESTONES: usize = 50;
+
 /// Maximum length of a Stellar strkey address (`G…`, `C…`, `S…`, named
 /// identities). Every strkey encodes to 56 base-32 characters.
 pub const MAX_ADDRESS_LEN: usize = 56;
