@@ -995,4 +995,201 @@ mod tests {
             verify_network_passphrase(&cfg, "Standalone Network ; February 2017").is_ok()
         );
     }
+
+    // --- Config::resolve, read_source_key_file, is_secret_seed (#653) ---
+
+    /// Serialises every test that mutates process env vars, since the test
+    /// harness runs tests on parallel threads that share one environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Every env var `Config::resolve` reads.
+    const RESOLVE_VARS: [&str; 5] = [
+        "STELLAR_RPC_URL",
+        "STELLAR_NETWORK_PASSPHRASE",
+        "TRELLIS_CONTRACT_ID",
+        "TRELLIS_SOURCE_KEY",
+        "TRELLIS_SOURCE_KEY_FILE",
+    ];
+
+    /// Unset every resolve input. Call only while holding `ENV_LOCK`.
+    fn clear_resolve_vars() {
+        for var in RESOLVE_VARS {
+            std::env::remove_var(var);
+        }
+    }
+
+    /// Take the env lock and start from a clean slate for every resolve input.
+    fn clean_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_resolve_vars();
+        guard
+    }
+
+    #[test]
+    fn resolve_uses_preset_for_each_named_network() {
+        let _env = clean_env();
+        for (network, url, passphrase) in [
+            (
+                Network::Testnet,
+                "https://soroban-testnet.stellar.org",
+                "Test SDF Network ; September 2015",
+            ),
+            (
+                Network::Mainnet,
+                "https://mainnet.sorobanrpc.com",
+                "Public Global Stellar Network ; September 2015",
+            ),
+            (
+                Network::Futurenet,
+                "https://rpc-futurenet.stellar.org",
+                "Test SDF Future Network ; October 2022",
+            ),
+        ] {
+            let cfg = Config::resolve(network, None, None, None, None).unwrap();
+            assert_eq!(cfg.rpc_url, url, "{network:?}");
+            assert_eq!(cfg.network_passphrase, passphrase, "{network:?}");
+        }
+        assert!(Network::Custom.preset().is_none());
+    }
+
+    #[test]
+    fn resolve_env_vars_override_preset() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.rpc_url, "https://env.example.com");
+        assert_eq!(cfg.network_passphrase, "Env Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_cli_flags_override_env_vars() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(
+            Network::Testnet,
+            Some("https://cli.example.com".to_string()),
+            Some("Cli Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.rpc_url, "https://cli.example.com");
+        assert_eq!(cfg.network_passphrase, "Cli Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_custom_without_rpc_url_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            None,
+            Some("Custom Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --rpc-url (or STELLAR_RPC_URL)"
+        );
+    }
+
+    #[test]
+    fn resolve_custom_without_passphrase_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            Some("https://custom.example.com".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --network-passphrase (or STELLAR_NETWORK_PASSPHRASE)"
+        );
+    }
+
+    #[test]
+    fn resolve_source_key_cli_file_beats_env_file_and_env_key() {
+        let _env = clean_env();
+        let cli = temp_key_file("resolve-cli", "from-cli-file", 0o600);
+        let env = temp_key_file("resolve-env", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, Some(cli.clone()), None).unwrap();
+        assert_eq!(cfg.source_key, "from-cli-file");
+        assert_eq!(cfg.source_key_origin, "--source-key-file");
+        clear_resolve_vars();
+        std::fs::remove_file(cli).ok();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_env_file_beats_env_key() {
+        let _env = clean_env();
+        let env = temp_key_file("resolve-env-only", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-file");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY_FILE");
+        clear_resolve_vars();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_falls_back_to_env_key_then_unset() {
+        let _env = clean_env();
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-key");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY");
+
+        std::env::remove_var("TRELLIS_SOURCE_KEY");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "UNSET_SOURCE_KEY");
+        assert_eq!(cfg.source_key_origin, "unset");
+    }
+
+    #[test]
+    fn read_source_key_file_trims_whitespace() {
+        let path = temp_key_file("read-trim", "\n  SKEY  \r\n", 0o600);
+        assert_eq!(read_source_key_file(&path, "--source-key-file").unwrap(), "SKEY");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn read_source_key_file_reports_missing_and_empty_files() {
+        let missing = read_source_key_file("/nonexistent/trellis/key", "--source-key-file")
+            .unwrap_err();
+        assert!(
+            missing.starts_with("Error: cannot read --source-key-file"),
+            "got: {missing}"
+        );
+
+        let path = temp_key_file("read-empty", " \n\t\n", 0o600);
+        let empty = read_source_key_file(&path, "TRELLIS_SOURCE_KEY_FILE").unwrap_err();
+        assert_eq!(empty, format!("Error: TRELLIS_SOURCE_KEY_FILE {path:?} is empty"));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn is_secret_seed_edge_cases() {
+        let seed = format!("S{}", "A".repeat(STRKEY_LEN - 1));
+        assert!(is_secret_seed(&seed));
+        // Wrong prefix, wrong length, lowercase and non-alphanumeric all fail.
+        assert!(!is_secret_seed(&format!("G{}", "A".repeat(STRKEY_LEN - 1))));
+        assert!(!is_secret_seed(&seed[..STRKEY_LEN - 1]));
+        assert!(!is_secret_seed(&format!("{seed}A")));
+        assert!(!is_secret_seed(&seed.to_lowercase()));
+        assert!(!is_secret_seed(&format!("S{}-", "A".repeat(STRKEY_LEN - 2))));
+        assert!(!is_secret_seed("alice"));
+        assert!(!is_secret_seed(""));
+    }
 }
