@@ -237,6 +237,81 @@ pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<Str
     }
 }
 
+/// Warnings for an explicitly chosen `--network` preset that env vars
+/// override (#654).
+///
+/// `Config::resolve` lets `STELLAR_RPC_URL` / `STELLAR_NETWORK_PASSPHRASE` win
+/// over the preset, so a `.env` holding testnet values silently turns
+/// `--network mainnet` into a testnet run. When the network was typed (it is
+/// `None` for the default, which stays silent) this names each env var that
+/// replaces a preset value, and warns when only one of the URL / passphrase
+/// pair is overridden, since the other still comes from the preset.
+pub fn network_override_warnings(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    network_override_warnings_from(
+        explicit_network,
+        cli_rpc_url,
+        cli_network_passphrase,
+        std::env::var("STELLAR_RPC_URL").ok().as_deref(),
+        std::env::var("STELLAR_NETWORK_PASSPHRASE").ok().as_deref(),
+    )
+}
+
+/// [`network_override_warnings`] with the env var values passed in, so it can
+/// be tested without touching the process environment.
+fn network_override_warnings_from(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+    env_rpc_url: Option<&str>,
+    env_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(network) = explicit_network else {
+        return warnings;
+    };
+    let Some(preset) = network.preset() else {
+        return warnings;
+    };
+    let name = format!("{network:?}").to_lowercase();
+
+    let env_rpc_url = env_rpc_url.filter(|v| *v != preset.rpc_url);
+    let env_network_passphrase =
+        env_network_passphrase.filter(|v| *v != preset.network_passphrase);
+
+    if let (None, Some(url)) = (cli_rpc_url, env_rpc_url) {
+        warnings.push(format!(
+            "Warning: --network {name} preset RPC URL is overridden by STELLAR_RPC_URL={url}"
+        ));
+    }
+    if let (None, Some(passphrase)) = (cli_network_passphrase, env_network_passphrase) {
+        warnings.push(format!(
+            "Warning: --network {name} preset passphrase is overridden by \
+             STELLAR_NETWORK_PASSPHRASE={passphrase:?}"
+        ));
+    }
+
+    let url_overridden = cli_rpc_url.is_some() || env_rpc_url.is_some();
+    let passphrase_overridden =
+        cli_network_passphrase.is_some() || env_network_passphrase.is_some();
+    if url_overridden != passphrase_overridden {
+        let (overridden, kept) = if url_overridden {
+            ("RPC URL", "passphrase")
+        } else {
+            ("passphrase", "RPC URL")
+        };
+        warnings.push(format!(
+            "Warning: only the {overridden} is overridden; it is paired with the \
+             --network {name} preset {kept}"
+        ));
+    }
+
+    warnings
+}
+
 impl Config {
     /// Load configuration from environment variables with network detection.
     ///
@@ -1191,5 +1266,83 @@ mod tests {
         assert!(!is_secret_seed(&format!("S{}-", "A".repeat(STRKEY_LEN - 2))));
         assert!(!is_secret_seed("alice"));
         assert!(!is_secret_seed(""));
+    }
+
+    // --- explicit --network overridden by env vars (#654) ---
+
+    const TESTNET_URL: &str = "https://soroban-testnet.stellar.org";
+    const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+
+    #[test]
+    fn explicit_mainnet_with_env_rpc_url_warns() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            None,
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("--network mainnet")
+                && w.contains("STELLAR_RPC_URL")
+                && w.contains(TESTNET_URL)),
+            "got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("only the RPC URL is overridden")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_mainnet_with_both_env_vars_names_each() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings[0].contains("STELLAR_RPC_URL"));
+        assert!(warnings[1].contains("STELLAR_NETWORK_PASSPHRASE"));
+    }
+
+    #[test]
+    fn default_network_stays_silent() {
+        let warnings =
+            network_override_warnings_from(None, None, None, Some(TESTNET_URL), None);
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn env_values_matching_the_preset_are_silent() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Testnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn explicit_cli_flag_overriding_only_url_warns_about_the_pairing() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            Some("https://rpc.example.com"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                "Warning: only the RPC URL is overridden; it is paired with the \
+                 --network mainnet preset passphrase"
+                    .to_string()
+            ]
+        );
     }
 }

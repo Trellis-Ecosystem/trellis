@@ -68,10 +68,11 @@ use std::process;
     propagate_version = true,
 )]
 struct Cli {
-    /// Network preset to connect to. `custom` requires `--rpc-url` and
-    /// `--network-passphrase`.
-    #[arg(long, global = true, value_enum, default_value_t = Network::Testnet)]
-    network: Network,
+    /// Network preset to connect to (default: testnet). `custom` requires
+    /// `--rpc-url` and `--network-passphrase`. Kept optional so an explicit
+    /// choice can be told apart from the default (#654).
+    #[arg(long, global = true, value_enum)]
+    network: Option<Network>,
 
     /// Custom Soroban RPC endpoint. Required when `--network=custom`;
     /// overrides the preset / env var for any other network.
@@ -342,8 +343,20 @@ fn main() {
     }
 
     // ── #80: Resolve config from --network preset + CLI / env overrides ───
-    let config = match config::Config::resolve(
+    let network = cli.network.unwrap_or(Network::Testnet);
+
+    // ── #654: An explicit --network silently losing to STELLAR_RPC_URL /
+    // STELLAR_NETWORK_PASSPHRASE would point it at the wrong chain, so say so.
+    for warning in config::network_override_warnings(
         cli.network,
+        cli.rpc_url.as_deref(),
+        cli.network_passphrase.as_deref(),
+    ) {
+        eprintln!("{warning}");
+    }
+
+    let config = match config::Config::resolve(
+        network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
         cli.source_key_file.clone(),
@@ -362,7 +375,7 @@ fn main() {
     if let Commands::Config = cli.command {
         let opts = output_opts(&cli);
         let stellar_found = validate_environment().is_ok();
-        if commands::run_config(cli.network, &config, stellar_found, &opts).is_err() {
+        if commands::run_config(network, &config, stellar_found, &opts).is_err() {
             process::exit(1);
         }
         return;
