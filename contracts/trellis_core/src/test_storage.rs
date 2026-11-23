@@ -16,12 +16,12 @@
 //! would differ here.
 
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _},
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
     token, Address, BytesN, Env, Vec,
 };
 
 use crate::{
-    storage::{DataKey, LEDGER_BUMP},
+    storage::{DataKey, LEDGER_BUMP, LEDGER_THRESHOLD},
     types::{AgreementHeader, EscrowStatus, Milestone},
     TrellisContract, TrellisContractClient,
 };
@@ -274,8 +274,44 @@ fn test_happy_path_after_split_reassembles_every_milestone() {
 
     // `extend_agreement_ttl` renews every entry of the now-split agreement, not
     // just the header — otherwise a keeper would strand milestone entries.
-    client.extend_agreement_ttl(&id, &payer);
+    //
+    // The entries were just written by `init`/`lock_funds`, so they already sit
+    // at `LEDGER_BUMP`; asserting that here would pass even if the keeper did
+    // nothing. Drive the ledger past `LEDGER_THRESHOLD` first so the entries
+    // are genuinely below the bump threshold, and extend the contract instance
+    // TTL so advancing the ledger does not archive the instance out from under
+    // the call.
     let contract = client.address.clone();
+    env.as_contract(&contract, || {
+        env.storage()
+            .instance()
+            .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
+    });
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + LEDGER_THRESHOLD + 1);
+
+    // Precondition: the entries are now below the bump threshold, so a no-op
+    // keeper would leave them there.
+    for milestone_id in 0..3 {
+        assert!(
+            env.as_contract(&contract, || {
+                env.storage()
+                    .persistent()
+                    .get_ttl(&DataKey::Milestone(id.clone(), milestone_id))
+            }) < LEDGER_BUMP,
+            "milestone {milestone_id} must start below the bump threshold"
+        );
+    }
+
+    client.extend_agreement_ttl(&id, &payer);
+
+    assert_eq!(
+        env.as_contract(&contract, || {
+            env.storage().persistent().get_ttl(&DataKey::Agreement(id.clone()))
+        }),
+        LEDGER_BUMP,
+        "keeper renewal must cover the agreement header"
+    );
     for milestone_id in 0..3 {
         assert_eq!(
             env.as_contract(&contract, || {
