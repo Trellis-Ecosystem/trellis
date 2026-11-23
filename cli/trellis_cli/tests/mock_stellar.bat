@@ -26,6 +26,7 @@ set "FUNC_NAME=%~1"
 :dispatch
 if "%FUNC_NAME%"=="init" exit /b 0
 if "%FUNC_NAME%"=="get_agreement" goto :get_agreement
+if "%FUNC_NAME%"=="get_milestone" goto :get_milestone
 if "%FUNC_NAME%"=="lock_funds" exit /b 0
 if "%FUNC_NAME%"=="submit_work" exit /b 0
 if "%FUNC_NAME%"=="approve_and_release" exit /b 0
@@ -41,12 +42,16 @@ exit /b 1
 echo {"agreement_id":"0000000000000000000000000000000000000000000000000000000000000001","payer":"GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW","payee":"GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF","token":"CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ","milestones":[{"id":0,"amount":"1000","status":"Pending","proof_uri":null}],"dispute_resolver":"GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO","total_amount":"1000"}
 exit /b 0
 
+:get_milestone
+echo {"id":0,"amount":"1000","status":"Pending","proof_uri":null}
+exit /b 0
+
 :get_total_amount
 echo 1000
 exit /b 0
 
 :version
-echo stellar 22.0.0 (mock)
+echo stellar 26.0.0 (mock)
 exit /b 0
 
 :unexpected

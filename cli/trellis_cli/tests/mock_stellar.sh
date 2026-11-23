@@ -16,7 +16,7 @@ set -euo pipefail
 
 # Parse command-line arguments to determine which mock response to return
 if [[ "${1:-}" == "--version" ]]; then
-    echo "stellar 22.0.0 (mock)"
+    echo "stellar 26.0.0 (mock)"
     exit 0
 fi
 
@@ -55,6 +55,18 @@ if [[ "${1:-}" == "contract" ]] && [[ "${2:-}" == "invoke" ]]; then
   ],
   "dispute_resolver": "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
   "total_amount": "1000"
+}
+EOF
+            exit 0
+            ;;
+        get_milestone)
+            # Return a single milestone
+            cat <<'EOF'
+{
+  "id": 0,
+  "amount": "1000",
+  "status": "Pending",
+  "proof_uri": null
 }
 EOF
             exit 0
