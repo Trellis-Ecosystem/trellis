@@ -16,14 +16,18 @@ use std::process::Command;
 /// Path to the mock stellar binary script
 fn mock_stellar_path() -> String {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    format!("{}/tests/mock_stellar.sh", manifest_dir)
+    let script = if cfg!(windows) {
+        "mock_stellar.bat"
+    } else {
+        "mock_stellar.sh"
+    };
+    format!("{}/tests/{}", manifest_dir, script)
 }
 
 /// Build a trellis CLI invocation with the mock stellar binary
 fn trellis_cmd() -> Command {
-    let mut cmd = Command::new("cargo");
-    cmd.args(["run", "--quiet", "--"])
-        .env("TRELLIS_TEST_MODE", "true")
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_trellis"));
+    cmd.env("TRELLIS_TEST_MODE", "true")
         .env("STELLAR_MOCK_BIN", mock_stellar_path())
         .env(
             "TRELLIS_CONTRACT_ID",
@@ -179,8 +183,8 @@ fn test_quiet_mode_suppresses_non_result_output() {
 #[test]
 fn test_missing_stellar_binary_error() {
     // Temporarily unset the mock binary to simulate stellar not being in PATH
-    let output = Command::new("cargo")
-        .args(["run", "--quiet", "--", "status", "--agreement-id", "0001"])
+    let output = Command::new(env!("CARGO_BIN_EXE_trellis"))
+        .args(["status", "--agreement-id", "0001"])
         .env_remove("STELLAR_MOCK_BIN")
         .env_remove("PATH") // Remove PATH to ensure stellar is not found
         .env(
@@ -223,8 +227,8 @@ fn test_invalid_hex_agreement_id() {
 
 #[test]
 fn test_missing_required_env_vars() {
-    let output = Command::new("cargo")
-        .args(["run", "--quiet", "--", "status", "--agreement-id", "0001"])
+    let output = Command::new(env!("CARGO_BIN_EXE_trellis"))
+        .args(["status", "--agreement-id", "0001"])
         .env_remove("TRELLIS_CONTRACT_ID")
         .env_remove("TRELLIS_SOURCE_KEY")
         .output()
@@ -392,11 +396,8 @@ fn test_completion_command_generates_shell_completions() {
 /// must be skipped for dry-run invocations.
 #[test]
 fn test_dry_run_works_without_stellar_binary() {
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_trellis"))
         .args([
-            "run",
-            "--quiet",
-            "--",
             "lock",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
@@ -441,11 +442,8 @@ stdout: {}",
 /// while fixing #406.
 #[test]
 fn test_non_dry_run_still_requires_stellar_binary() {
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_trellis"))
         .args([
-            "run",
-            "--quiet",
-            "--",
             "status",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
