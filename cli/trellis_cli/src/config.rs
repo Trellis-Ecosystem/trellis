@@ -83,7 +83,7 @@ impl Network {
 ///
 /// Values are loaded from environment variables with Soroban Testnet defaults
 /// so the tool works out-of-the-box for local development.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Soroban RPC endpoint.
     /// Env: `STELLAR_RPC_URL`
@@ -108,6 +108,25 @@ pub struct Config {
     /// `TRELLIS_SOURCE_KEY_FILE`, `TRELLIS_SOURCE_KEY`, or `unset`. Only
     /// used for diagnostics (`trellis config`, #485).
     pub source_key_origin: &'static str,
+}
+
+/// Written by hand so a `{:?}` of a `Config` never prints a raw secret seed
+/// (#641). Named `stellar keys` identities are not secret and are shown.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source_key = if is_secret_seed(&self.source_key) {
+            "<redacted>"
+        } else {
+            self.source_key.as_str()
+        };
+        f.debug_struct("Config")
+            .field("rpc_url", &self.rpc_url)
+            .field("network_passphrase", &self.network_passphrase)
+            .field("contract_id", &self.contract_id)
+            .field("source_key", &source_key)
+            .field("source_key_origin", &self.source_key_origin)
+            .finish()
+    }
 }
 
 /// Number of characters in a Stellar strkey address (`C…` / `G…` / `S…`),
@@ -763,6 +782,17 @@ mod tests {
     fn source_key_none_when_nothing_configured() {
         let key = resolve_source_key_value(None, file_var(None), key_var(None)).unwrap();
         assert_eq!(key, None);
+    }
+
+    #[test]
+    fn debug_output_redacts_secret_seed() {
+        let seed = format!("S{}", "A".repeat(STRKEY_LEN - 1));
+        let printed = format!("{:?}", config_with(&valid_contract_id(), &seed));
+        assert!(!printed.contains(&seed), "{printed}");
+        assert!(printed.contains("source_key: \"<redacted>\""), "{printed}");
+
+        let printed = format!("{:?}", config_with(&valid_contract_id(), "alice"));
+        assert!(printed.contains("source_key: \"alice\""), "{printed}");
     }
 
     #[test]
