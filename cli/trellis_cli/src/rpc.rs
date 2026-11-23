@@ -1217,11 +1217,14 @@ impl RpcClient {
         cmd_args.extend_from_slice(args);
 
         // Quote any argument containing whitespace so the printed command can
-        // be copy-pasted straight into a shell.
+        // be copy-pasted straight into a shell. The RPC URL is printed with
+        // any credentials redacted (#642); the real one is still passed on.
         let quoted = cmd_args
             .iter()
             .map(|a| {
-                if a.contains(' ') {
+                if *a == config.rpc_url {
+                    crate::config::redact_url(a)
+                } else if a.contains(' ') {
                     format!("'{a}'")
                 } else {
                     a.clone()
@@ -1287,7 +1290,7 @@ impl RpcClient {
                                     stderr: format!("sendTransaction failed: {}", err_msg),
                                     success: false,
                                     exit_code: None,
-                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                    command_debug: format!("sendTransaction({})", crate::config::redact_url(rpc_url)),
                                 };
                             }
                         } else if let Some(result) = json.get("result") {
@@ -1304,7 +1307,7 @@ impl RpcClient {
                                     stderr: format!("Transaction failed: {}", error_result),
                                     success: false,
                                     exit_code: None,
-                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                    command_debug: format!("sendTransaction({})", crate::config::redact_url(rpc_url)),
                                 };
                             }
                             if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
@@ -1319,7 +1322,7 @@ impl RpcClient {
                                 stderr: format!("Failed to parse sendTransaction response: {}", e),
                                 success: false,
                                 exit_code: None,
-                                command_debug: format!("sendTransaction({})", rpc_url),
+                                command_debug: format!("sendTransaction({})", crate::config::redact_url(rpc_url)),
                             };
                         }
                     }
@@ -1328,10 +1331,10 @@ impl RpcClient {
                     if attempt >= max_retries {
                         return InvokeOutput {
                             stdout: String::new(),
-                            stderr: format!("sendTransaction network error: {}", e),
+                            stderr: format!("sendTransaction network error: {}", e.without_url()),
                             success: false,
                             exit_code: None,
-                            command_debug: format!("sendTransaction({})", rpc_url),
+                            command_debug: format!("sendTransaction({})", crate::config::redact_url(rpc_url)),
                         };
                     }
                 }
@@ -1502,14 +1505,14 @@ impl RpcClient {
             .post(config.rpc_url.as_str())
             .json(&body)
             .send()
-            .map_err(|e| SimulationError::Network(e.to_string()))?;
+            .map_err(|e| SimulationError::Network(e.without_url().to_string()))?;
 
         let status = response.status();
         if !status.is_success() {
             return Err(SimulationError::Network(format!(
                 "HTTP {} from {}",
                 status.as_u16(),
-                config.rpc_url
+                crate::config::redact_url(&config.rpc_url)
             )));
         }
 
@@ -1880,7 +1883,13 @@ pub fn get_account_sequence_number(config: &Config, account_id: &str) -> Result<
         .post(config.rpc_url.as_str())
         .json(&body)
         .send()
-        .map_err(|e| format!("getLedgerEntries: request to {} failed: {e}", config.rpc_url))?;
+        .map_err(|e| {
+            format!(
+                "getLedgerEntries: request to {} failed: {}",
+                crate::config::redact_url(&config.rpc_url),
+                e.without_url()
+            )
+        })?;
 
     let status = response.status();
     let text = response
@@ -1889,7 +1898,7 @@ pub fn get_account_sequence_number(config: &Config, account_id: &str) -> Result<
     if !status.is_success() {
         return Err(format!(
             "getLedgerEntries: HTTP {status} from {}: {}",
-            config.rpc_url,
+            crate::config::redact_url(&config.rpc_url),
             text.trim()
         ));
     }
@@ -2155,7 +2164,11 @@ impl RpcClient {
     /// Describe the native request `method` would send, without sending it.
     /// Used by `--dry-run` and printed on failure, like [`Self::preview`].
     pub fn native_preview(config: &Config, method: &str) -> String {
-        format!("POST {} {}", config.rpc_url, json_rpc_request(method))
+        format!(
+            "POST {} {}",
+            crate::config::redact_url(&config.rpc_url),
+            json_rpc_request(method)
+        )
     }
 }
 
@@ -2173,11 +2186,12 @@ fn native_call<T: serde::de::DeserializeOwned>(rpc_url: &str, method: &str) -> R
         .build()
         .map_err(|e| format!("{method}: failed to build HTTP client: {e}"))?;
 
+    let shown_url = crate::config::redact_url(rpc_url);
     let response = client
         .post(rpc_url)
         .json(&json_rpc_request(method))
         .send()
-        .map_err(|e| format!("{method}: request to {rpc_url} failed: {e}"))?;
+        .map_err(|e| format!("{method}: request to {shown_url} failed: {}", e.without_url()))?;
 
     let status = response.status();
     let body = response
@@ -2185,7 +2199,7 @@ fn native_call<T: serde::de::DeserializeOwned>(rpc_url: &str, method: &str) -> R
         .map_err(|e| format!("{method}: failed to read response body: {e}"))?;
     if !status.is_success() {
         return Err(format!(
-            "{method}: HTTP {status} from {rpc_url}: {}",
+            "{method}: HTTP {status} from {shown_url}: {}",
             body.trim()
         ));
     }
@@ -2801,6 +2815,27 @@ mod tests {
             .expect("--source present");
         assert_eq!(argv[src + 1], "alice");
         assert!(debug.starts_with("stellar contract invoke"));
+    }
+
+    #[test]
+    fn printed_previews_redact_rpc_url_credentials() {
+        let url = "https://user:pw@rpc.example/?apikey=abc";
+        let cfg = Config {
+            rpc_url: url.to_string(),
+            ..cfg_with_source("alice")
+        };
+        let (argv, _) = RpcClient::build_cmd_args(&cfg, "init", &[]);
+        assert!(argv.iter().any(|a| a == url), "stellar still gets the real URL");
+
+        for printed in [
+            RpcClient::preview(&cfg, "init", &[]),
+            RpcClient::native_preview(&cfg, "getHealth"),
+        ] {
+            assert!(!printed.contains(url), "{printed}");
+            assert!(!printed.contains("user:pw"), "{printed}");
+            assert!(!printed.contains("abc"), "{printed}");
+            assert!(printed.contains("https://rpc.example/?apikey=***"), "{printed}");
+        }
     }
 
     // --- native JSON-RPC: getHealth (#467) / getLatestLedger (#468) ---

@@ -1820,7 +1820,7 @@ pub fn config_report(
 
     serde_json::json!({
         "network": network_name,
-        "rpc_url": config.rpc_url,
+        "rpc_url": crate::config::redact_url(&config.rpc_url),
         "network_passphrase": config.network_passphrase,
         "contract_id": contract_id,
         "source_key": config.masked_source_key(),
@@ -1943,7 +1943,8 @@ fn run_health(config: &Config, opts: &OutputOpts) -> Result<(), String> {
             stdout: serde_json::json!({ "health": health }).to_string(),
             stderr: format!(
                 "RPC endpoint {} reports status {:?}",
-                config.rpc_url, health.status
+                crate::config::redact_url(&config.rpc_url),
+                health.status
             ),
             success: false,
             exit_code: None,

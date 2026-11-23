@@ -161,20 +161,21 @@ pub fn validate_contract_id(id: &str) -> Result<(), String> {
 /// error to a printed warning (useful for development devnets). This mirrors
 /// the `--unsafe-rpc` CLI flag (#156).
 pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, String> {
+    let shown = redact_url(raw);
     let parsed =
-        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {shown:?} is not a valid URL: {e}"))?;
 
     match parsed.scheme() {
         "http" | "https" => {}
         other => {
             return Err(format!(
-                "RPC URL scheme must be http or https, got {other:?} (in {raw:?})"
+                "RPC URL scheme must be http or https, got {other:?} (in {shown:?})"
             ));
         }
     }
 
     if parsed.host_str().map_or(true, str::is_empty) {
-        return Err(format!("RPC URL {raw:?} is missing a host"));
+        return Err(format!("RPC URL {shown:?} is missing a host"));
     }
 
     // Guard against cleartext HTTP to non-loopback hosts (#156).
@@ -183,7 +184,7 @@ pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, S
         let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
         if !is_loopback {
             let msg = format!(
-                "Warning: RPC URL {raw:?} uses cleartext HTTP to a non-loopback host. \
+                "Warning: RPC URL {shown:?} uses cleartext HTTP to a non-loopback host. \
                  Traffic may be intercepted. Use https:// or pass --unsafe-rpc to suppress this error."
             );
             if unsafe_rpc {
@@ -197,6 +198,37 @@ pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, S
     Ok(None)
 }
 
+/// A copy of the URL `raw` that is safe to print (#642).
+///
+/// Hosted Soroban RPC providers often put an API key in the URL, so the
+/// userinfo (`user:password@`) is removed and every query-string value is
+/// replaced with `***` (a bare `?token` is replaced as a whole). A key
+/// embedded in a path segment (e.g. `https://rpc.example/v1/<key>`) can't be
+/// told apart from an ordinary path and is left as-is. A URL with neither
+/// userinfo nor a query, or one that doesn't parse, is returned unchanged.
+pub fn redact_url(raw: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if parsed.username().is_empty() && parsed.password().is_none() && parsed.query().is_none() {
+        return raw.to_string();
+    }
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    if let Some(query) = parsed.query() {
+        let masked = query
+            .split('&')
+            .map(|pair| match pair.split_once('=') {
+                Some((key, _)) => format!("{key}=***"),
+                None => "***".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        parsed.set_query(Some(&masked));
+    }
+    parsed.to_string()
+}
+
 /// Refuse cleartext `http://` to a non-loopback RPC host (#156).
 ///
 /// Runs after [`validate_rpc_url`] has accepted the URL's shape. A planted
@@ -207,8 +239,9 @@ pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, S
 /// Returns `Ok(None)` when no warning is needed, `Ok(Some(warning))` when
 /// cleartext was allowed by the flag, and `Err(message)` when it was not.
 pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<String>, String> {
+    let shown = redact_url(raw);
     let parsed =
-        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {shown:?} is not a valid URL: {e}"))?;
     if parsed.scheme() != "http" {
         return Ok(None);
     }
@@ -224,13 +257,13 @@ pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<Str
         Ok(None)
     } else if allow_insecure {
         Ok(Some(format!(
-            "warning: using cleartext HTTP RPC endpoint {raw} (--unsafe-rpc). \
+            "warning: using cleartext HTTP RPC endpoint {shown} (--unsafe-rpc). \
              Responses from this endpoint are not authenticated and can be \
              tampered with — never use this against mainnet."
         )))
     } else {
         Err(format!(
-            "Error: refusing to use insecure RPC URL {raw:?}. Non-localhost \
+            "Error: refusing to use insecure RPC URL {shown:?}. Non-localhost \
              endpoints must use https://. Pass --unsafe-rpc to allow http:// \
              for local development."
         ))
@@ -730,6 +763,25 @@ mod tests {
     fn source_key_none_when_nothing_configured() {
         let key = resolve_source_key_value(None, file_var(None), key_var(None)).unwrap();
         assert_eq!(key, None);
+    }
+
+    #[test]
+    fn redact_url_strips_userinfo_and_masks_query_values() {
+        assert_eq!(
+            redact_url("https://user:pw@rpc.example/?apikey=abc"),
+            "https://rpc.example/?apikey=***"
+        );
+        assert_eq!(
+            redact_url("https://rpc.example/rpc?key=abc&token"),
+            "https://rpc.example/rpc?key=***&***"
+        );
+    }
+
+    #[test]
+    fn redact_url_leaves_plain_and_unparseable_urls_unchanged() {
+        for raw in ["https://soroban-testnet.stellar.org", "not a url"] {
+            assert_eq!(redact_url(raw), raw);
+        }
     }
 
     #[test]
