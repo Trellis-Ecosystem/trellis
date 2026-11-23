@@ -726,6 +726,25 @@ trellis --as payee decline-milestone --agreement-id <hex-id> --milestone-id 0
 All **11 CLI commands** are implemented — `init`, `lock-funds`, `batch-lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `extend-ttl`, `deadline set|get`, `expire`, `status`, and `total-amount`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 All **9 escrow commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `status`, and `milestone-status`. The CLI also provides two utility commands: `completion` (see [Shell Completions](#shell-completions)) and `keys` (manage secret keys in the OS keychain). See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 
+#### Storing a Secret Key
+
+`trellis keys add` never takes the secret seed as a positional argument — a
+command-line argument would land in your shell history and in the process
+argv (visible to `ps`). Instead the seed is read from **stdin** or from a
+**file**:
+
+```bash
+# Read the seed from stdin (it is not echoed or recorded in history)
+echo S... | trellis keys add alice
+
+# Or read it from a file (keep it 0600)
+trellis keys add alice --key-file ~/.keys/alice
+```
+
+Passing the seed positionally (`trellis keys add alice S...`) is rejected by
+clap, and a value that is not a valid secret seed is refused with a clear
+error before anything is stored.
+
 `trellis health` checks the configured RPC endpoint natively (`getHealth` + `getLatestLedger` over HTTP). It needs only an RPC URL, with no `stellar` binary, contract ID or source key, and it supports `--json` / `--human-readable` / `--quiet` / `--dry-run`.
 
 #### Global Output Flags

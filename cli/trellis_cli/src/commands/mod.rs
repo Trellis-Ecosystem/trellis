@@ -526,12 +526,19 @@ pub enum DeadlineSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum KeysSubcommand {
     /// Store a Stellar secret key in the OS keychain for a named identity.
+    ///
+    /// The secret seed is never taken as a command-line argument: it is read
+    /// from stdin (or from the file given by `--key-file`) so it never lands
+    /// in shell history or the process argv (`ps`).
+    ///
+    /// Example: `echo S... | trellis keys add alice`
     Add {
         /// Identity name (e.g., "alice", "bob").
         identity: String,
 
-        /// Stellar secret key (S...).
-        key: String,
+        /// Read the Stellar secret key (S...) from this file instead of stdin.
+        #[arg(long, value_name = "PATH")]
+        key_file: Option<std::path::PathBuf>,
     },
 
     /// Remove a Stellar secret key from the OS keychain.
@@ -724,13 +731,57 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
     }
 }
 
+/// Read a Stellar secret seed from `key_file` when given, otherwise from stdin.
+///
+/// Surrounding whitespace (including the trailing newline `echo` adds) is
+/// trimmed. The value is never echoed back, so it cannot leak into logs.
+fn read_secret_key(key_file: Option<&std::path::Path>) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let raw = match key_file {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read key file {}: {e}", path.display()))?,
+        None => {
+            if std::io::stdin().is_terminal() {
+                eprint!("Enter Stellar secret key (S...): ");
+            }
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| format!("Failed to read secret key from stdin: {e}"))?;
+            buf
+        }
+    };
+
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err(
+            "No secret key provided: pipe it on stdin (echo S... | trellis keys add <identity>) \
+             or pass --key-file <path>."
+                .to_string(),
+        );
+    }
+    Ok(key.to_string())
+}
+
 fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
     use crate::keystore::Keystore;
 
     let keystore = Keystore::new();
 
     match subcmd {
-        KeysSubcommand::Add { identity, key } => {
+        KeysSubcommand::Add {
+            identity,
+            key_file,
+        } => {
+            let key = read_secret_key(key_file.as_deref())?;
+            if !crate::config::is_secret_seed(&key) {
+                return Err(
+                    "Invalid secret key: expected a Stellar secret seed (56 characters, \
+                     starting with 'S'). Nothing was stored."
+                        .to_string(),
+                );
+            }
             keystore
                 .store_in_keychain(&identity, &key)
                 .map_err(|e| format!("Failed to store key: {}", e))?;
@@ -747,7 +798,10 @@ fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
         KeysSubcommand::List => {
             let identities = keystore.list_keychain_identities();
             if identities.is_empty() {
-                println!("No keys stored. Use 'trellis keys add <identity> <key>' to store one.");
+                println!(
+                    "No keys stored. Use 'echo S... | trellis keys add <identity>' \
+                     (or 'trellis keys add <identity> --key-file <path>') to store one."
+                );
             } else {
                 println!("Stored identities:");
                 for identity in identities {
