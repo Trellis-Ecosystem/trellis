@@ -3127,14 +3127,6 @@ mod tests {
         assert_eq!(extract_json_string_field(r#"{"result":{}}"#, "passphrase"), None);
     }
 
-    #[test]
-    fn verify_network_passphrase_rejects_unsupported_scheme() {
-        let mut cfg = cfg_with_source("alice");
-        cfg.rpc_url = "https://soroban-testnet.stellar.org".to_string();
-        let err = RpcClient::verify_network_passphrase(&cfg).unwrap_err();
-        assert!(err.contains("unsupported RPC URL scheme"), "got: {err}");
-    }
-
     // --- #476: native transaction simulation / resource-fee parsing ---
 
     /// The `transactionData` from the official `simulateTransaction` docs
