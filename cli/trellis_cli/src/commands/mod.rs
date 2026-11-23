@@ -800,8 +800,9 @@ fn validate_agreement_id(id: &str) -> Result<(), String> {
 /// Validate a proof URI: printable, non-empty, within a reasonable length cap.
 ///
 /// Control characters (including newlines) are rejected so they cannot be
-/// used to confuse argument parsing downstream. Unicode is normalized to NFC.
-fn validate_proof_uri(uri: &str) -> Result<(), String> {
+/// used to confuse argument parsing downstream. Unicode is normalized to NFC,
+/// and the normalized value is returned so callers send that form.
+fn validate_proof_uri(uri: &str) -> Result<String, String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
     }
@@ -814,8 +815,7 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
             uri.len()
         ));
     }
-    crate::sanitizer::sanitize_proof_uri(uri)?;
-    Ok(())
+    crate::sanitizer::sanitize_proof_uri(uri)
 }
 
 /// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
@@ -1039,13 +1039,35 @@ fn run_submit_work(
     opts: &OutputOpts,
 ) -> Result<(), String> {
     validate_agreement_id(&agreement_id)?;
+    let proof_uri = match proof_uri.filter(|u| !u.is_empty()) {
+        Some(uri) => Some(validate_proof_uri(&uri)?),
+        None => None,
+    };
 
+    let proof_note = proof_uri
+        .as_deref()
+        .map(|uri| format!(" with proof {uri}"))
+        .unwrap_or_default();
     confirm_action(
-        &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
+        &format!(
+            "This will submit work for milestone {milestone_id} of agreement {agreement_id}{proof_note}."
+        ),
         yes,
         opts,
     )?;
 
+    let args = build_submit_work_args(agreement_id, milestone_id, proof_uri);
+    execute(config, "submit_work", &args, opts)
+}
+
+/// Build the `submit_work` argument list from an already validated and
+/// NFC-normalized proof URI. Split out from the handler so the value that is
+/// actually sent can be unit-tested without touching the network.
+fn build_submit_work_args(
+    agreement_id: String,
+    milestone_id: u32,
+    proof_uri: Option<String>,
+) -> Vec<String> {
     let mut args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -1053,15 +1075,14 @@ fn run_submit_work(
         milestone_id.to_string(),
     ];
 
-    if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        validate_proof_uri(&uri)?;
+    if let Some(uri) = proof_uri {
         args.push("--proof-uri".to_string());
         // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
         // JSON, so a bare string value fails to parse — it must be JSON-quoted.
         args.push(serde_json::to_string(&uri).unwrap_or(uri));
     }
 
-    execute(config, "submit_work", &args, opts)
+    args
 }
 
 /// `stellar contract invoke … -- approve_and_release …`
@@ -3100,14 +3121,40 @@ mod tests {
 
     #[test]
     fn proof_uri_rejects_oversized() {
-        let uri = "a".repeat(2049);
+        let uri = "a".repeat(513);
         assert!(validate_proof_uri(&uri).is_err());
     }
 
     #[test]
     fn proof_uri_accepts_max_length() {
-        let uri = "a".repeat(2048);
+        let uri = "a".repeat(512);
         assert!(validate_proof_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn submit_work_sends_nfc_normalized_proof_uri() {
+        // "e" + combining acute accent (decomposed) must be sent as "é" (NFC).
+        let uri = validate_proof_uri("ipfs://cafe\u{0301}").unwrap();
+        let args = build_submit_work_args("a".repeat(64), 0, Some(uri));
+        assert_eq!(args[4], "--proof-uri");
+        assert_eq!(args[5], "\"ipfs://caf\u{00e9}\"");
+    }
+
+    #[test]
+    fn submit_work_rejects_invalid_proof_uri_before_prompt() {
+        // Under --quiet without --yes the prompt itself would fail with a
+        // "--yes" error, so getting the proof_uri error proves validation ran first.
+        let cfg = test_config(&good_contract_id(), &format!("S{}", "Q".repeat(55)));
+        let err = run_submit_work(
+            &cfg,
+            "a".repeat(64),
+            0,
+            Some("https://example.com/\nbad".to_string()),
+            false,
+            &quiet_opts(),
+        )
+        .unwrap_err();
+        assert!(err.contains("proof_uri"), "got: {err}");
     }
 
     // --- extract_tx_hash / extract_events ---
