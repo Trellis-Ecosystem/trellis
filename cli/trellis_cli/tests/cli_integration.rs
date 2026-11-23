@@ -221,6 +221,30 @@ fn test_invalid_hex_agreement_id() {
     );
 }
 
+/// #645: a validation error under `--json` is reported as exactly one JSON
+/// error envelope on stdout (not plain text on stderr) and exits 1.
+#[test]
+fn test_json_validation_error_prints_error_envelope() {
+    let output = trellis_cmd()
+        .args(["--json", "status", "--agreement-id", "not-hex"])
+        .output()
+        .expect("failed to execute trellis");
+
+    assert_eq!(output.status.code(), Some(1), "validation error must exit 1");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "expected exactly one JSON object\nstdout: {stdout}");
+
+    let envelope: serde_json::Value =
+        serde_json::from_str(lines[0]).expect("stdout should be a JSON envelope");
+    assert_eq!(envelope["status"], "error");
+    assert!(
+        envelope["error"].as_str().unwrap_or("").contains("agreement_id"),
+        "got: {envelope}"
+    );
+}
+
 #[test]
 fn test_missing_required_env_vars() {
     let output = Command::new("cargo")

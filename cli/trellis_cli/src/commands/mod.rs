@@ -854,13 +854,27 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a validation error and terminate the process.
+/// Print an error that ends the command (#645).
 ///
-/// Returns `!` so it can be used both as a statement and as the fallback in
-/// `Result::unwrap_or_else` without a type mismatch.
-fn fail_validation(msg: &str) -> ! {
-    eprintln!("error: {msg}");
-    std::process::exit(1);
+/// Under `--json` / `--quiet` this is the standard error envelope on stdout,
+/// so scripts always get exactly one JSON object; otherwise it is a single
+/// `Error:`-prefixed message on stderr. Messages that already carry the
+/// prefix are not prefixed twice.
+pub fn print_error(msg: &str, opts: &OutputOpts) {
+    let msg = msg.strip_prefix("Error: ").unwrap_or(msg);
+    match opts.format {
+        OutputFormat::Json => {
+            let out = InvokeOutput {
+                stdout: String::new(),
+                stderr: msg.to_string(),
+                success: false,
+                exit_code: None,
+                command_debug: String::new(),
+            };
+            println!("{}", serde_json::to_string(&json_envelope(&out)).unwrap_or_default());
+        }
+        _ => eprintln!("Error: {msg}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -888,17 +902,14 @@ fn run_init(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payer", &payer).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payee", &payee).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("token", &token).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("resolver", &resolver).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("payer", &payer)?;
+    validate_address("payee", &payee)?;
+    validate_address("token", &token)?;
+    validate_address("resolver", &resolver)?;
     let agreement_id_for_history = agreement_id.clone();
 
-    let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    });
+    let milestones_json = build_milestones_json(&milestones_csv)?;
 
     confirm_action(
         &format!(
@@ -943,7 +954,7 @@ fn run_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
@@ -978,10 +989,9 @@ fn run_batch_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
-    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)
-        .unwrap_or_else(|e| fail_validation(&e));
+    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)?;
 
     confirm_action(
         &format!(
@@ -1028,7 +1038,7 @@ fn run_submit_work(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
@@ -1068,7 +1078,7 @@ fn run_approve_release(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1103,12 +1113,14 @@ fn run_release_partial(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
     let amount = match amount.parse::<i128>() {
         Ok(a) if a > 0 => a,
-        _ => fail_validation(&format!(
-            "amount must be a positive integer, got '{amount}'"
-        )),
+        _ => {
+            return Err(format!(
+                "amount must be a positive integer, got '{amount}'"
+            ))
+        }
     };
 
     confirm_action(
@@ -1150,8 +1162,8 @@ fn run_raise_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1190,19 +1202,19 @@ fn run_resolve_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     // Split ruling (`resolve_dispute_split`): clap guarantees both amounts are
     // present together and never alongside --refund-to-payer.
     if let (Some(payer), Some(payee)) = (payer_amount, payee_amount) {
         let parse = |name: &str, v: &str| match v.parse::<i128>() {
-            Ok(a) if a >= 0 => a,
-            _ => fail_validation(&format!(
+            Ok(a) if a >= 0 => Ok(a),
+            _ => Err(format!(
                 "{name} must be a non-negative integer, got '{v}'"
             )),
         };
-        let payer = parse("payer-amount", &payer);
-        let payee = parse("payee-amount", &payee);
+        let payer = parse("payer-amount", &payer)?;
+        let payee = parse("payee-amount", &payee)?;
         confirm_action(
             &format!(
                 "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} with a split: {payer} to the payer, {payee} to the payee."
@@ -1262,7 +1274,7 @@ fn run_cancel_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
@@ -1299,7 +1311,7 @@ fn run_decline_unfunded_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1344,8 +1356,8 @@ fn run_extend_ttl(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!("This will extend the ledger TTL of agreement {agreement_id} (rent paid by the source account)."),
@@ -1529,8 +1541,8 @@ fn run_deadline_set(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    check_deadline_in_future(deadline, unix_now()).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    check_deadline_in_future(deadline, unix_now())?;
 
     confirm_action(
         &format!(
@@ -1570,7 +1582,7 @@ fn run_deadline_get(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -1597,8 +1609,8 @@ fn run_expire(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1639,7 +1651,7 @@ fn build_expire_args(agreement_id: String, milestone_id: u32, caller: String) ->
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id.clone()];
 
@@ -1664,7 +1676,7 @@ fn run_total_amount(
     agreement_id: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
@@ -1692,7 +1704,7 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = milestone_status_args(&agreement_id, milestone_id);
 
