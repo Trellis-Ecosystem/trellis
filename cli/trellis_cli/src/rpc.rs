@@ -1307,9 +1307,30 @@ impl RpcClient {
                                     command_debug: format!("sendTransaction({})", rpc_url),
                                 };
                             }
-                            if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
-                                break hash.to_string();
+                            // TRY_AGAIN_LATER means the transaction was not
+                            // accepted, so it is retried rather than polled.
+                            if status != "TRY_AGAIN_LATER" {
+                                if let Some(hash) = result.get("hash").and_then(|v| v.as_str()) {
+                                    break hash.to_string();
+                                }
                             }
+                            if attempt >= max_retries {
+                                return InvokeOutput {
+                                    stdout: String::new(),
+                                    stderr: format!("sendTransaction did not accept the transaction (status: {:?})", status),
+                                    success: false,
+                                    exit_code: None,
+                                    command_debug: format!("sendTransaction({})", rpc_url),
+                                };
+                            }
+                        } else if attempt >= max_retries {
+                            return InvokeOutput {
+                                stdout: String::new(),
+                                stderr: "sendTransaction response contained neither result nor error".to_string(),
+                                success: false,
+                                exit_code: None,
+                                command_debug: format!("sendTransaction({})", rpc_url),
+                            };
                         }
                     }
                     Err(e) => {
@@ -1339,7 +1360,7 @@ impl RpcClient {
 
             let idx = (attempt as usize).min(BACKOFF_MS.len() - 1);
             let base_ms = BACKOFF_MS[idx];
-            let jitter = (std::time::Instant::now().elapsed().subsec_nanos() % 200) as u64;
+            let jitter = jitter_millis();
             let sleep_duration = std::time::Duration::from_millis(base_ms + jitter);
 
             if !quiet {
@@ -3554,5 +3575,94 @@ mod tests {
             }
             other => panic!("expected a v1 envelope, got {other:?}"),
         }
+    }
+
+    // --- send_and_poll retry limit (#643) ---
+
+    /// Mock a `sendTransaction` endpoint that always answers with `body`.
+    fn send_transaction_mock(server: &mut mockito::Server, body: &str) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"method": "sendTransaction"}),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .expect_at_least(1)
+            .create()
+    }
+
+    /// `getTransaction` must never be called when the transaction was not
+    /// accepted.
+    fn no_poll_mock(server: &mut mockito::Server) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"method": "getTransaction"}),
+            ))
+            .expect(0)
+            .create()
+    }
+
+    #[test]
+    fn send_and_poll_gives_up_after_retries_on_try_again_later() {
+        let mut server = mockito::Server::new();
+        let send = send_transaction_mock(
+            &mut server,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"TRY_AGAIN_LATER","hash":"abcd"}}"#,
+        );
+        let poll = no_poll_mock(&mut server);
+
+        std::env::set_var("STELLAR_RPC_RETRIES", "1");
+        let out = RpcClient::send_and_poll(&cfg_for(&server), "AAAA", true);
+        std::env::remove_var("STELLAR_RPC_RETRIES");
+
+        assert!(
+            !out.success,
+            "TRY_AGAIN_LATER must not be treated as accepted"
+        );
+        assert!(
+            out.stderr.contains("TRY_AGAIN_LATER"),
+            "got: {}",
+            out.stderr
+        );
+        send.assert();
+        poll.assert();
+    }
+
+    #[test]
+    fn send_and_poll_gives_up_after_retries_without_hash() {
+        let mut server = mockito::Server::new();
+        let send = send_transaction_mock(&mut server, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#);
+        let poll = no_poll_mock(&mut server);
+
+        std::env::set_var("STELLAR_RPC_RETRIES", "1");
+        let out = RpcClient::send_and_poll(&cfg_for(&server), "AAAA", true);
+        std::env::remove_var("STELLAR_RPC_RETRIES");
+
+        assert!(!out.success);
+        send.assert();
+        poll.assert();
+    }
+
+    #[test]
+    fn send_and_poll_gives_up_after_retries_without_result_or_error() {
+        let mut server = mockito::Server::new();
+        let send = send_transaction_mock(&mut server, r#"{"jsonrpc":"2.0","id":1}"#);
+        let poll = no_poll_mock(&mut server);
+
+        std::env::set_var("STELLAR_RPC_RETRIES", "1");
+        let out = RpcClient::send_and_poll(&cfg_for(&server), "AAAA", true);
+        std::env::remove_var("STELLAR_RPC_RETRIES");
+
+        assert!(!out.success);
+        assert!(
+            out.stderr.contains("neither result nor error"),
+            "got: {}",
+            out.stderr
+        );
+        send.assert();
+        poll.assert();
     }
 }
