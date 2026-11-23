@@ -402,6 +402,16 @@ impl<'a> XdrReader<'a> {
         Ok(s)
     }
 
+    /// Read a `u32` element count and reject it before anything is allocated
+    /// if the remaining bytes cannot hold that many elements of at least
+    /// `min_elem_size` bytes each — an untrusted `0xFFFFFFFF` length would
+    /// otherwise reach `Vec::with_capacity` and abort the process.
+    fn read_len(&mut self, min_elem_size: usize) -> Result<usize, String> {
+        let len = self.read_u32()? as usize;
+        check_len_fits(len, min_elem_size, self.bytes.len() - self.pos)?;
+        Ok(len)
+    }
+
     /// Read a length-prefixed opaque value, skipping its alignment padding.
     fn read_opaque(&mut self) -> Result<Vec<u8>, String> {
         let len = self.read_u32()? as usize;
@@ -410,6 +420,36 @@ impl<'a> XdrReader<'a> {
         self.read_fixed(pad)?;
         Ok(raw)
     }
+}
+
+/// Maximum nesting depth accepted when walking an `ScVal` (vec / map /
+/// contract-instance storage). Deeper input is rejected instead of recursing
+/// until the stack overflows.
+const MAX_SCVAL_DEPTH: usize = 64;
+
+/// Smallest encoded size of any XDR element: every `ScVal` / `LedgerKey`
+/// starts with a 4-byte discriminant.
+const MIN_XDR_ELEM_SIZE: usize = 4;
+
+/// Reject a length prefix claiming more elements (of at least
+/// `min_elem_size` bytes each) than `remaining` bytes can hold.
+fn check_len_fits(len: usize, min_elem_size: usize, remaining: usize) -> Result<(), String> {
+    if len.saturating_mul(min_elem_size) > remaining {
+        return Err(format!(
+            "invalid XDR length {len}: only {remaining} bytes remain"
+        ));
+    }
+    Ok(())
+}
+
+/// Return `Err` once an `ScVal` walk is nested deeper than `MAX_SCVAL_DEPTH`.
+fn check_scval_depth(depth: usize) -> Result<(), String> {
+    if depth > MAX_SCVAL_DEPTH {
+        return Err(format!(
+            "ScVal nesting exceeds the maximum depth of {MAX_SCVAL_DEPTH}"
+        ));
+    }
+    Ok(())
 }
 
 /// Parse a base64 `SorobanTransactionData` XDR blob into the pieces
@@ -438,13 +478,13 @@ fn parse_transaction_data(
         return Err(format!("unsupported SorobanTransactionData extension {ext}"));
     }
 
-    let read_only_len = r.read_u32()? as usize;
+    let read_only_len = r.read_len(MIN_XDR_ELEM_SIZE)?;
     let mut read_only = Vec::with_capacity(read_only_len);
     for _ in 0..read_only_len {
         read_only.push(read_ledger_key(&mut r)?);
     }
 
-    let read_write_len = r.read_u32()? as usize;
+    let read_write_len = r.read_len(MIN_XDR_ELEM_SIZE)?;
     let mut read_write = Vec::with_capacity(read_write_len);
     for _ in 0..read_write_len {
         read_write.push(read_ledger_key(&mut r)?);
@@ -506,7 +546,7 @@ fn read_ledger_key(r: &mut XdrReader<'_>) -> Result<LedgerKey, String> {
         }),
         LEDGER_CONTRACT_DATA => {
             let contract = read_sc_address(r)?;
-            skip_scval(r)?;
+            skip_scval(r, 0)?;
             let durability = match r.read_u32()? {
                 0 => "temporary",
                 1 => "persistent",
@@ -598,8 +638,10 @@ fn read_trustline_asset(r: &mut XdrReader<'_>) -> Result<String, String> {
 /// This must decode exactly (not guess) the value's length — e.g. a
 /// `contract_data` footprint key carries an arbitrary `ScVal` as its key, so
 /// the cursor can only reach the following durability byte by walking that
-/// value. Discriminants match `Stellar-contract.x`.
-fn skip_scval(r: &mut XdrReader<'_>) -> Result<(), String> {
+/// value. Discriminants match `Stellar-contract.x`. `depth` is the current
+/// nesting level (0 at the top) and is capped at `MAX_SCVAL_DEPTH`.
+fn skip_scval(r: &mut XdrReader<'_>, depth: usize) -> Result<(), String> {
+    check_scval_depth(depth)?;
     let kind = r.read_u32()?;
     match kind {
         // SCV_BOOL
@@ -635,19 +677,19 @@ fn skip_scval(r: &mut XdrReader<'_>) -> Result<(), String> {
         // SCV_VEC: optional `SCVec*`
         16 => {
             if r.read_u32()? != 0 {
-                let len = r.read_u32()? as usize;
+                let len = r.read_len(MIN_XDR_ELEM_SIZE)?;
                 for _ in 0..len {
-                    skip_scval(r)?;
+                    skip_scval(r, depth + 1)?;
                 }
             }
         }
         // SCV_MAP: optional `SCMap*`
         17 => {
             if r.read_u32()? != 0 {
-                let len = r.read_u32()? as usize;
+                let len = r.read_len(MIN_XDR_ELEM_SIZE)?;
                 for _ in 0..len {
-                    skip_scval(r)?;
-                    skip_scval(r)?;
+                    skip_scval(r, depth + 1)?;
+                    skip_scval(r, depth + 1)?;
                 }
             }
         }
@@ -657,10 +699,10 @@ fn skip_scval(r: &mut XdrReader<'_>) -> Result<(), String> {
         19 => {
             skip_contract_executable(r)?;
             if r.read_u32()? != 0 {
-                let len = r.read_u32()? as usize;
+                let len = r.read_len(MIN_XDR_ELEM_SIZE)?;
                 for _ in 0..len {
-                    skip_scval(r)?;
-                    skip_scval(r)?;
+                    skip_scval(r, depth + 1)?;
+                    skip_scval(r, depth + 1)?;
                 }
             }
         }
@@ -956,7 +998,22 @@ enum ScVal {
 /// discriminants produce an error rather than a silent mis-decode.
 fn parse_scval(bytes: &[u8]) -> Result<ScVal, String> {
     let mut cur = std::io::Cursor::new(bytes);
-    read_scval(&mut cur)
+    read_scval(&mut cur, 0)
+}
+
+/// Bytes left to read in `cur`.
+fn cursor_remaining(cur: &std::io::Cursor<&[u8]>) -> usize {
+    cur.get_ref()
+        .len()
+        .saturating_sub(cur.position() as usize)
+}
+
+/// Read a `u32` element count, rejecting it before any allocation if the
+/// remaining bytes cannot hold that many elements of `min_elem_size` bytes.
+fn read_len(cur: &mut std::io::Cursor<&[u8]>, min_elem_size: usize) -> Result<usize, String> {
+    let len = read_u32(cur)? as usize;
+    check_len_fits(len, min_elem_size, cursor_remaining(cur))?;
+    Ok(len)
 }
 
 fn read_u32(cur: &mut std::io::Cursor<&[u8]>) -> Result<u32, String> {
@@ -983,7 +1040,7 @@ fn read_u64(cur: &mut std::io::Cursor<&[u8]>) -> Result<u64, String> {
 /// be decoded from the wrong offset.
 fn read_opaque(cur: &mut std::io::Cursor<&[u8]>) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let len = read_u32(cur)? as usize;
+    let len = read_len(cur, 1)?;
     let mut buf = vec![0u8; len];
     cur.read_exact(&mut buf)
         .map_err(|e| format!("unexpected end of XDR: {e}"))?;
@@ -996,7 +1053,10 @@ fn read_opaque(cur: &mut std::io::Cursor<&[u8]>) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
+/// `depth` is the current nesting level (0 at the top) and is capped at
+/// `MAX_SCVAL_DEPTH`.
+fn read_scval(cur: &mut std::io::Cursor<&[u8]>, depth: usize) -> Result<ScVal, String> {
+    check_scval_depth(depth)?;
     let disc = read_u32(cur)?;
     match disc {
         0 => Ok(ScVal::Bool(read_u32(cur)? != 0)),
@@ -1034,10 +1094,10 @@ fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
             if read_u32(cur)? == 0 {
                 return Ok(ScVal::Vec(Vec::new()));
             }
-            let len = read_u32(cur)? as usize;
+            let len = read_len(cur, MIN_XDR_ELEM_SIZE)?;
             let mut items = Vec::with_capacity(len);
             for _ in 0..len {
-                items.push(read_scval(cur)?);
+                items.push(read_scval(cur, depth + 1)?);
             }
             Ok(ScVal::Vec(items))
         }
@@ -1046,11 +1106,11 @@ fn read_scval(cur: &mut std::io::Cursor<&[u8]>) -> Result<ScVal, String> {
             if read_u32(cur)? == 0 {
                 return Ok(ScVal::Map(Vec::new()));
             }
-            let len = read_u32(cur)? as usize;
+            let len = read_len(cur, MIN_XDR_ELEM_SIZE)?;
             let mut entries = Vec::with_capacity(len);
             for _ in 0..len {
-                let k = read_scval(cur)?;
-                let v = read_scval(cur)?;
+                let k = read_scval(cur, depth + 1)?;
+                let v = read_scval(cur, depth + 1)?;
                 entries.push((k, v));
             }
             Ok(ScVal::Map(entries))
@@ -3172,6 +3232,68 @@ mod tests {
     fn parse_transaction_data_rejects_bad_base64() {
         let err = parse_transaction_data("not base64!!").unwrap_err();
         assert!(err.contains("base64"), "got: {err}");
+    }
+
+    // --- untrusted XDR lengths and nesting (#644) ---
+
+    /// Concatenate big-endian `u32` words into raw XDR bytes.
+    fn xdr_words(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_be_bytes()).collect()
+    }
+
+    /// `depth` nested non-null `SCV_VEC`s of length 1 around an `SCV_VOID`.
+    fn nested_vec_xdr(depth: usize) -> Vec<u8> {
+        let mut words = Vec::with_capacity(depth * 3 + 1);
+        for _ in 0..depth {
+            words.extend_from_slice(&[16, 1, 1]);
+        }
+        words.push(1);
+        xdr_words(&words)
+    }
+
+    #[test]
+    fn transaction_data_rejects_huge_footprint_length() {
+        // ext = 0, readOnly length = 0xFFFFFFFF, nothing else.
+        let raw = xdr_words(&[0, u32::MAX]);
+        let err = parse_transaction_data(&base64_encode(&raw)).unwrap_err();
+        assert!(err.contains("invalid XDR length"), "got: {err}");
+    }
+
+    #[test]
+    fn read_scval_rejects_huge_vec_map_and_opaque_lengths() {
+        for raw in [
+            xdr_words(&[16, 1, u32::MAX]), // SCV_VEC
+            xdr_words(&[17, 1, u32::MAX]), // SCV_MAP
+            xdr_words(&[13, u32::MAX]),    // SCV_BYTES
+            xdr_words(&[14, u32::MAX]),    // SCV_STRING
+        ] {
+            let err = parse_scval(&raw).unwrap_err();
+            assert!(err.contains("invalid XDR length"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn skip_scval_rejects_huge_vec_and_map_lengths() {
+        for raw in [xdr_words(&[16, 1, u32::MAX]), xdr_words(&[17, 1, u32::MAX])] {
+            let err = skip_scval(&mut XdrReader::new(&raw), 0).unwrap_err();
+            assert!(err.contains("invalid XDR length"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn scval_walkers_reject_deep_nesting_without_overflowing() {
+        let raw = nested_vec_xdr(10_000);
+        let err = parse_scval(&raw).unwrap_err();
+        assert!(err.contains("maximum depth"), "got: {err}");
+        let err = skip_scval(&mut XdrReader::new(&raw), 0).unwrap_err();
+        assert!(err.contains("maximum depth"), "got: {err}");
+    }
+
+    #[test]
+    fn scval_walkers_accept_nesting_up_to_the_limit() {
+        let raw = nested_vec_xdr(MAX_SCVAL_DEPTH);
+        assert!(parse_scval(&raw).is_ok());
+        assert!(skip_scval(&mut XdrReader::new(&raw), 0).is_ok());
     }
 
     #[test]
