@@ -303,8 +303,7 @@ impl Config {
                     .to_string()
             })?;
 
-        let contract_id = std::env::var("TRELLIS_CONTRACT_ID")
-            .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
+        let contract_id = contract_id_value(std::env::var("TRELLIS_CONTRACT_ID").ok());
 
         let (source_key, source_key_origin) = match role {
             None => resolve_source_key_value(
@@ -409,6 +408,15 @@ impl Config {
     }
 }
 
+/// The contract ID from a raw `TRELLIS_CONTRACT_ID` value, trimmed. A missing,
+/// blank or whitespace-only value becomes the `UNSET_CONTRACT_ID` sentinel
+/// that `validate()` reports by name.
+fn contract_id_value(raw: Option<String>) -> String {
+    raw.map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "UNSET_CONTRACT_ID".to_string())
+}
+
 /// An env var name paired with its value, if set.
 struct KeyVar {
     name: &'static str,
@@ -459,7 +467,13 @@ fn resolve_source_key_value(
             }
             read_source_key_file(&path, origin).map(|k| Some((k, origin)))
         }
-        None => Ok(env_key.value.map(|k| (k, env_key.name))),
+        // A blank or whitespace-only value is treated as unset, so `validate()`
+        // names the missing variable instead of `--source ""` reaching `stellar`.
+        None => Ok(env_key
+            .value
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .map(|k| (k, env_key.name))),
     }
 /// Response body from a Soroban RPC `getNetwork` call.
 ///
@@ -716,6 +730,38 @@ mod tests {
     fn source_key_none_when_nothing_configured() {
         let key = resolve_source_key_value(None, file_var(None), key_var(None)).unwrap();
         assert_eq!(key, None);
+    }
+
+    #[test]
+    fn blank_source_key_env_var_is_treated_as_unset() {
+        for blank in ["", "   "] {
+            let key =
+                resolve_source_key_value(None, file_var(None), key_var(Some(blank))).unwrap();
+            assert_eq!(key, None, "{blank:?}");
+        }
+        // `resolve` maps `None` to the sentinel, which `validate` names.
+        let err = config_with(&valid_contract_id(), "UNSET_SOURCE_KEY")
+            .validate()
+            .unwrap_err();
+        assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
+    }
+
+    #[test]
+    fn source_key_env_var_is_trimmed() {
+        let key =
+            resolve_source_key_value(None, file_var(None), key_var(Some("  alice "))).unwrap();
+        assert_eq!(key, Some(("alice".to_string(), "TRELLIS_SOURCE_KEY")));
+    }
+
+    #[test]
+    fn contract_id_is_trimmed_and_blank_is_unset() {
+        let id = valid_contract_id();
+        let trimmed = contract_id_value(Some(format!("  {id} \n")));
+        assert_eq!(trimmed, id);
+        assert!(config_with(&trimmed, "alice").validate().is_ok());
+        for blank in [None, Some(String::new()), Some("   ".to_string())] {
+            assert_eq!(contract_id_value(blank), "UNSET_CONTRACT_ID");
+        }
     }
 
     #[test]
