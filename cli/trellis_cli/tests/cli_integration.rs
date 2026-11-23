@@ -822,3 +822,81 @@ fn test_decline_unfunded_milestone_json_output() {
         serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("JSON");
     assert_eq!(envelope["status"], "success");
 }
+
+// ---------------------------------------------------------------------------
+// #652: every handler that takes --agreement-id must validate it
+// ---------------------------------------------------------------------------
+
+/// Every command whose handler must call `validate_agreement_id` first, with
+/// the other arguments clap requires for it. When adding a command that takes
+/// an agreement ID, add it here too.
+fn agreement_id_commands() -> Vec<(&'static str, Vec<&'static str>)> {
+    vec![
+        (
+            "init",
+            vec![
+                "--payer",
+                "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWX",
+                "--payee",
+                "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGFED",
+                "--token",
+                "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWX",
+                "--resolver",
+                "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQ",
+                "--milestones",
+                "1000",
+            ],
+        ),
+        ("lock-funds", vec!["--milestone-id", "0"]),
+        ("submit-work", vec!["--milestone-id", "0"]),
+        ("approve-release", vec!["--milestone-id", "0"]),
+        (
+            "raise-dispute",
+            vec![
+                "--milestone-id",
+                "0",
+                "--caller",
+                "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWX",
+            ],
+        ),
+        ("resolve-dispute", vec!["--milestone-id", "0"]),
+        ("cancel-milestone", vec!["--milestone-id", "0"]),
+        ("status", vec![]),
+        ("milestone-status", vec!["--milestone-id", "0"]),
+    ]
+}
+
+/// Drives every handler without `--dry-run` with an agreement ID carrying an
+/// injected suffix. Each must exit 1 with an `agreement_id` error before
+/// anything is invoked, so removing the `validate_agreement_id` call from any
+/// one handler lets the value through to the mock and fails this test.
+#[test]
+fn test_injected_agreement_id_rejected_by_every_command() {
+    let injected = format!("{};x", "0".repeat(64));
+
+    for (command, extra_args) in agreement_id_commands() {
+        let output = trellis_cmd()
+            .arg(command)
+            .args(["--agreement-id", &injected])
+            .args(&extra_args)
+            .output()
+            .expect("failed to execute trellis");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{command} must reject the injected agreement ID\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("agreement_id"),
+            "{command} should report an agreement_id error\nstderr: {stderr}"
+        );
+        // Nothing reached `stellar contract invoke`, so there is no result.
+        assert!(
+            stdout.trim().is_empty(),
+            "{command} must not invoke stellar\nstdout: {stdout}"
+        );
+    }
+}
