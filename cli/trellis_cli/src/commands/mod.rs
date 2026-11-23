@@ -560,9 +560,11 @@ fn confirm_action(summary: &str, yes: bool, opts: &OutputOpts) -> Result<(), Str
 
     use std::io::Write;
 
-    println!("{summary}");
-    print!("Continue? [y/N] ");
-    std::io::stdout()
+    // Prompt on stderr so stdout stays reserved for results — a `--json` run
+    // must not prepend prompt text to the envelope (#646).
+    eprintln!("{summary}");
+    eprint!("Continue? [y/N] ");
+    std::io::stderr()
         .flush()
         .map_err(|e| format!("Failed to write prompt: {e}"))?;
 
