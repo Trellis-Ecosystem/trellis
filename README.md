@@ -971,3 +971,8 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 </svg>
 
 </div>
+
+## Handsoff notes
+
+<!-- handsoff-issue-754 -->
+- #754: `resolve_dispute` / `resolve_dispute_split` re-read the header from storage needlessly
