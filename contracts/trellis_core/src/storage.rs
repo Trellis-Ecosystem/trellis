@@ -21,14 +21,19 @@ pub enum DataKey {
     /// `submit_work` and friends rewrite only this entry instead of
     /// re-serialising the whole `Vec<Milestone>` back to storage.
     Milestone(BytesN<32>, u32),
-    /// Persistent storage key for an agreement's milestone deadlines, held as a
-    /// `Map<u32, u64>` from milestone index to ledger timestamp.
+    /// Persistent storage key for one milestone's deadline, addressed by the
+    /// agreement ID and the milestone's index within it.
     ///
     /// Deadlines live beside the agreement rather than as a field on
     /// [`crate::types::Milestone`] so the `init` argument layout and the
     /// `get_agreement` / `get_milestone` return types stay unchanged for
     /// existing callers.
-    Deadlines(BytesN<32>),
+    ///
+    /// Storing one entry per milestone (#757) keeps `lock_funds`,
+    /// `batch_lock_funds` and `expire_milestone` O(1): they read or write only
+    /// the deadline they care about instead of deserialising a whole-agreement
+    /// `Map<u32, u64>` whose cost grew with milestone count.
+    Deadline(BytesN<32>, u32),
     /// Persistent storage key for the index of agreement IDs in which the
     /// given address is the *payer*.
     ///
@@ -110,20 +115,19 @@ fn bump_ttl(env: &Env, key: &DataKey) {
 }
 
 /// Reset the TTL of every entry backing agreement `id` — the header plus each
-/// of its `milestone_count` milestone entries.
+/// of its `milestone_count` milestone and deadline entries.
 ///
 /// Only [`extend_agreement_ttl`] needs this: an agreement is now several ledger
 /// entries, so a keeper renewing an idle agreement has to keep the milestone
-/// entries alive too, not just the header. Every other path bumps only the
-/// entry it actually touched.
+/// and deadline entries alive too, not just the header. Every other path bumps
+/// only the entry it actually touched.
 fn bump_agreement_ttls(env: &Env, id: &BytesN<32>, milestone_count: u32) {
     bump_ttl(env, &DataKey::Agreement(id.clone()));
 
     for milestone_id in 0..milestone_count {
         bump_ttl(env, &DataKey::Milestone(id.clone(), milestone_id));
+        bump_ttl(env, &DataKey::Deadline(id.clone(), milestone_id));
     }
-
-    bump_ttl(env, &DataKey::Deadlines(id.clone()));
 }
 
 /// Persist a freshly-initialised [`Agreement`] as one header entry plus one
@@ -168,248 +172,59 @@ pub fn write_agreement(
             .milestones
             .get(milestone_id)
             .ok_or(TrellisError::InvalidMilestone)?;
-        write_milestone(env, id, milestone_id, &milestone);
-    }
 
-    // Populate the payer/payee discovery indexes (#458). Done last so a
-    // malformed agreement fails before it is ever indexed.
-    append_to_index(env, &DataKey::PayerAgreements(header.payer.clone()), id);
-    append_to_index(env, &DataKey::PayeeAgreements(header.payee.clone()), id);
+        write_milestone(env, id, milestone_id, &milestone)?;
+    }
 
     Ok(())
 }
 
-/// Append `id` to the agreement-ID index stored under `key`, if not already
-/// present.
+/// Persist one milestone of agreement `id` and renew its TTL.
 ///
-/// Idempotent: re-running `init` for an ID that is already indexed (which the
-/// duplicate-ID guard in `init` rejects anyway) can never create a duplicate
-/// entry. The whole vector is rewritten on each append, so the cost of this
-/// call grows with the number of agreements already indexed for the address —
-/// see the [`DataKey::PayerAgreements`] storage-growth notes.
-fn append_to_index(env: &Env, key: &DataKey, id: &BytesN<32>) {
-    let mut ids: Vec<BytesN<32>> = env
-        .storage()
-        .persistent()
-        .get(key)
-        .unwrap_or_else(|| Vec::new(env));
-
-    for existing in ids.iter() {
-        if &existing == id {
-            // Already indexed; just keep the entry alive.
-            bump_ttl(env, key);
-            return;
-        }
-    }
-
-    ids.push_back(id.clone());
-    env.storage().persistent().set(key, &ids);
-    bump_ttl(env, key);
-}
-
-/// Return the agreement IDs in which `address` is the payer, in the order the
-/// agreements were initialised.
-///
-/// Returns an empty vector when the address has never created an agreement.
-/// This is a pure read: it does not bump the TTL, so querying an index does
-/// not charge rent.
-pub fn read_payer_agreements(env: &Env, address: &Address) -> Vec<BytesN<32>> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::PayerAgreements(address.clone()))
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-/// Return the agreement IDs in which `address` is the payee, in the order the
-/// agreements were initialised.
-///
-/// Returns an empty vector when the address has never been a payee. Like
-/// [`read_payer_agreements`], this is a pure read and does not bump the TTL.
-pub fn read_payee_agreements(env: &Env, address: &Address) -> Vec<BytesN<32>> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::PayeeAgreements(address.clone()))
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-/// Return the configured contract admin, if any.
-///
-/// Deliberately does not bump the TTL: this is a pure read used by the
-/// admin-gated upgrade entrypoint to authorize the caller.
-pub fn read_admin(env: &Env) -> Option<Address> {
-    env.storage().persistent().get(&DataKey::Admin)
-}
-
-/// Persist the contract admin address.
-///
-/// Callers must have already verified that no admin is set (or that the
-/// caller is the current admin); this helper performs no authorization.
-pub fn write_admin(env: &Env, admin: &Address) {
-    let key = DataKey::Admin;
-    env.storage().persistent().set(&key, admin);
+/// This is the single write path for milestone state, so every transition
+/// (`lock_funds`, `submit_work`, `approve_milestone`, …) rewrites exactly one
+/// ledger entry regardless of how many milestones the agreement has.
+pub fn write_milestone(
+    env: &Env,
+    id: &BytesN<32>,
+    milestone_id: u32,
+    milestone: &Milestone,
+) -> Result<(), TrellisError> {
+    let key = DataKey::Milestone(id.clone(), milestone_id);
+    env.storage().persistent().set(&key, milestone);
     bump_ttl(env, &key);
+    Ok(())
 }
 
-/// Read only an agreement's header — one ledger read, regardless of how many
-/// milestones the agreement has.
+/// Read one milestone of agreement `id`.
 ///
-/// This is what makes each milestone state transition O(1): an entrypoint that
-/// only needs the parties, the token or the resolver never deserialises the
-/// milestone list at all.
-///
-/// # Errors
-/// Returns [`TrellisError::AgreementNotFound`] when no agreement exists for
-/// `id`. Deliberately does not touch the milestone entries — see
-/// [`bump_agreement_ttls`].
-pub fn read_header(env: &Env, id: &BytesN<32>) -> Result<AgreementHeader, TrellisError> {
-    let key = DataKey::Agreement(id.clone());
-    let header: AgreementHeader = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .ok_or(TrellisError::AgreementNotFound)?;
-
-    // Reaching here proves the entry exists, so the bump is safe.
-    bump_ttl(env, &key);
-
-    Ok(header)
-}
-
-/// Persist an updated [`AgreementHeader`] — one ledger write.
-///
-/// Only [`crate::lib`] uses this, and only when it has to change
-/// agreement-level data: `release_partial` recording a cumulative release in
-/// `released_amounts`, and `rotate_resolver` replacing `dispute_resolver`.
-/// Milestone status transitions never call it — they go through
-/// [`write_milestone`] — which is what keeps them to a single ledger write
-/// (#401).
-pub fn write_header(env: &Env, id: &BytesN<32>, header: &AgreementHeader) {
-    let key = DataKey::Agreement(id.clone());
-    env.storage().persistent().set(&key, header);
-    bump_ttl(env, &key);
-}
-
-/// Read a single milestone — one ledger read, regardless of agreement size.
-///
-/// # Errors
-/// Returns [`TrellisError::InvalidMilestone`] (code 4) both when `milestone_id`
-/// is out of range and when the entry is otherwise absent. That matches the
-/// pre-split behaviour, where both cases were a single `Vec::get(..)` miss, so
-/// no entrypoint changed the error it reports.
+/// Returns [`TrellisError::MilestoneNotFound`] if the entry is absent.
 pub fn read_milestone(
     env: &Env,
     id: &BytesN<32>,
     milestone_id: u32,
 ) -> Result<Milestone, TrellisError> {
-    let key = DataKey::Milestone(id.clone(), milestone_id);
-    let milestone: Milestone = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .ok_or(TrellisError::InvalidMilestone)?;
-
-    bump_ttl(env, &key);
-
-    Ok(milestone)
-}
-
-/// Write a single milestone — one ledger write, regardless of agreement size.
-///
-/// Every state-mutating entrypoint ends up here, so a transition on milestone
-/// *k* can never rewrite milestones *j != k*, nor the header.
-pub fn write_milestone(env: &Env, id: &BytesN<32>, milestone_id: u32, milestone: &Milestone) {
-    let key = DataKey::Milestone(id.clone(), milestone_id);
-    env.storage().persistent().set(&key, milestone);
-    bump_ttl(env, &key);
-}
-
-/// Renew the TTL of an existing agreement without modifying it.
-///
-/// Backs the public `extend_agreement_ttl` entrypoint so keeper services can
-/// keep long-running agreements alive between state transitions. Because an
-/// agreement is now several ledger entries, this renews *all* of them — a
-/// keeper that only renewed the header would eventually strand orphaned
-/// milestone entries.
-///
-/// # Errors
-/// Returns [`TrellisError::AgreementNotFound`] if no entry exists for `id`,
-/// so a keeper pointed at a bad ID fails loudly instead of silently no-opping.
-pub fn extend_agreement_ttl(env: &Env, id: &BytesN<32>) -> Result<(), TrellisError> {
-    let header = read_header(env, id)?;
-
-    bump_agreement_ttls(env, id, header.milestone_count);
-
-    Ok(())
-}
-
-/// Retrieve the full [`Agreement`] for `id`, reassembled from its header and
-/// per-milestone entries.
-///
-/// This is the only O(n) path in storage, and it backs the read-only views
-/// (`get_agreement`) that genuinely need every milestone. State transitions do
-/// not go through it — they read a header plus one milestone.
-///
-/// Reading also refreshes each entry's TTL. An agreement that is merely being
-/// watched — a long dispute window, a milestone awaiting delivery — is still
-/// in active use and must not be archived out from under its parties.
-///
-/// # Errors
-/// Returns [`TrellisError::AgreementNotFound`] (code 3) when no record exists
-/// for `id`. Callers may also use [`has_agreement`] to pre-check existence.
-pub fn read_agreement(env: &Env, id: &BytesN<32>) -> Result<Agreement, TrellisError> {
-    let header = read_header(env, id)?;
-
-    let mut milestones: Vec<Milestone> = Vec::new(env);
-    for milestone_id in 0..header.milestone_count {
-        milestones.push_back(read_milestone(env, id, milestone_id)?);
-    }
-
-    Ok(Agreement {
-        agreement_id: header.agreement_id,
-        payer: header.payer,
-        payee: header.payee,
-        token: header.token,
-        milestones,
-        dispute_resolver: header.dispute_resolver,
-        total_amount: header.total_amount,
-        released_amounts: header.released_amounts,
-    })
-}
-
-/// Return `true` if an [`Agreement`] with the given `id` exists in storage.
-///
-/// Deliberately does not bump the TTL: this is a pure existence probe used by
-/// `init` to reject duplicate IDs, and it must not charge rent for asking
-/// about an agreement that may not exist.
-pub fn has_agreement(env: &Env, id: &BytesN<32>) -> bool {
     env.storage()
         .persistent()
-        .has(&DataKey::Agreement(id.clone()))
+        .get(&DataKey::Milestone(id.clone(), milestone_id))
+        .ok_or(TrellisError::MilestoneNotFound)
 }
 
-/// Return the deadline (ledger timestamp, seconds) set for `milestone_id`, or
-/// `None` if the milestone has no deadline.
+/// Persist the deadline for one milestone of agreement `id` and renew its TTL.
+///
+/// Storing one entry per milestone (#757) keeps this an O(1) write: callers
+/// never load or rewrite the deadlines of other milestones.
+pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u64) {
+    let key = DataKey::Deadline(id.clone(), milestone_id);
+    env.storage().persistent().set(&key, &deadline);
+    bump_ttl(env, &key);
+}
+
+/// Read the deadline for one milestone of agreement `id`.
+///
+/// Returns `None` if no deadline was recorded for that milestone.
 pub fn read_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32) -> Option<u64> {
     env.storage()
         .persistent()
-        .get::<_, Map<u32, u64>>(&DataKey::Deadlines(id.clone()))
-        .and_then(|deadlines| deadlines.get(milestone_id))
-}
-
-/// Set (or replace) the deadline for `milestone_id`.
-///
-/// Callers must already have verified the agreement exists; the TTL bump
-/// below then renews both the agreement and the deadline entry together.
-pub fn write_deadline(env: &Env, id: &BytesN<32>, milestone_id: u32, deadline: u64) {
-    let key = DataKey::Deadlines(id.clone());
-    let mut deadlines: Map<u32, u64> = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| Map::new(env));
-    deadlines.set(milestone_id, deadline);
-    env.storage().persistent().set(&key, &deadlines);
-
-    bump_ttl(env, &key);
-    bump_ttl(env, &DataKey::Agreement(id.clone()));
+        .get(&DataKey::Deadline(id.clone(), milestone_id))
 }
