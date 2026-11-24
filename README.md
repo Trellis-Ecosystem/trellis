@@ -971,3 +971,17 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 </svg>
 
 </div>
+
+## Handsoff notes
+
+<!-- handsoff-issue-756 -->
+- #756: Simplify `pull_funds`: `amount` and `expected` are always the same value
+
+<!-- handsoff-issue-759 -->
+- #759: Add a `version()` view to the contract
+
+<!-- handsoff-issue-760 -->
+- #760: Restore four deleted `release_partial` tests (orphaned snapshots still exist)
+
+<!-- handsoff-issue-761 -->
+- #761: Restore three deleted `agreement_completed` tests
