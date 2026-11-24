@@ -7,12 +7,15 @@ import { useTotalAmount } from '../hooks/useTotalAmount'
 import AgreementDetail from '../components/AgreementDetail'
 import EventFeed from '../components/EventFeed'
 
+const INVALID_AGREEMENT_ID = 'Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).'
+
 function AgreementStatusPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   // The URL is the source of truth for which agreement is shown, so
   // bookmarks, shared links and back/forward navigation all work.
-  const queriedId = id || null
+  const queriedId = id && isValidHexAgreementId(id) ? id : null
+  const invalidPath = !!id && !queriedId
   const [searchId, setSearchId] = useState(id || '')
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -22,14 +25,16 @@ function AgreementStatusPage() {
     setValidationError(null)
   }, [id])
 
-  const { agreement, isLoading, isError, error, refetch } = useAgreement(queriedId)
+  const { agreement, isLoading, isError, error, errorKind, refetch } = useAgreement(queriedId)
   const { totalAmount } = useTotalAmount(queriedId)
 
   // Viewing an agreement records it in the local history list.
+  const loadedId = agreement?.agreement_id
   useEffect(() => {
-    if (!queriedId) return
-    addToHistory({ agreementId: queriedId, lastViewed: new Date().toISOString() })
-  }, [queriedId])
+    if (loadedId && loadedId === queriedId) {
+      addToHistory({ agreementId: loadedId, lastViewed: new Date().toISOString() })
+    }
+  }, [loadedId, queriedId])
 
   const handleSearch = () => {
     const trimmed = searchId.trim()
@@ -38,7 +43,7 @@ function AgreementStatusPage() {
       return
     }
     if (!isValidHexAgreementId(trimmed)) {
-      setValidationError('Invalid agreement ID. Must be a 64-character hex string (0-9, a-f).')
+      setValidationError(INVALID_AGREEMENT_ID)
       return
     }
     setValidationError(null)
@@ -49,6 +54,8 @@ function AgreementStatusPage() {
     e.preventDefault()
     handleSearch()
   }
+
+  const inlineError = validationError ?? (invalidPath ? INVALID_AGREEMENT_ID : null)
 
   return (
     <main className="px-6 pt-16 pb-32 max-w-5xl mx-auto">
@@ -96,8 +103,17 @@ function AgreementStatusPage() {
       {/* Error State */}
       {isError && (
         <div className="mt-10 rounded-xl border border-red-500/50 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8">
-          <p className="text-red-400 font-semibold mb-2">Agreement not found</p>
-          <p className="text-sm text-gray-400">{error || 'The agreement ID may be invalid or the agreement does not exist.'}</p>
+          <h2 className="text-red-400 font-semibold mb-2">
+            {errorKind === 'contract' ? 'Agreement not found' : errorKind === 'rpc' ? 'Could not reach the network' : 'Could not load agreement'}
+          </h2>
+          <p className="text-sm text-gray-400">{error}</p>
+          <button
+            type="button"
+            onClick={refetch}
+            className="mt-4 px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-navy-900 font-semibold rounded"
+          >
+            Retry
+          </button>
         </div>
       )}
 
@@ -110,7 +126,7 @@ function AgreementStatusPage() {
       )}
 
       {/* Empty State */}
-      {!queriedId && !isLoading && (
+      {!id && !isLoading && (
         <div className="mt-10 rounded-xl border border-navy-700 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-8 text-center">
           <p className="text-gray-400">Enter an agreement ID above to view its details</p>
         </div>

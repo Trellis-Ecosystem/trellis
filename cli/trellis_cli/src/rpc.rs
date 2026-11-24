@@ -1,17 +1,30 @@
 use crate::config::Config;
 use crate::commands::ContractResult;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::num::NonZeroU32;
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 
 /// Default hard timeout (in seconds) for a single `stellar` subprocess call.
 ///
-/// The process is killed and a transient error is returned when this elapses,
-/// allowing the existing retry/backoff logic to attempt again. Set
+/// When this elapses the child process is killed and reaped, and a timeout
+/// error is returned. The retry loop only re-attempts a timed-out call for
+/// read-only (`get_*`) entrypoints: a mutating call may already have submitted
+/// its transaction, so retrying it could double-submit (issue #635). Set
 /// `STELLAR_INVOKE_TIMEOUT_SECS=0` to disable the timeout entirely (not
 /// recommended in production).
 const DEFAULT_INVOKE_TIMEOUT_SECS: u64 = 30;
+
+/// Return true when `function` is a read-only entrypoint whose timeout is
+/// safe to retry.
+///
+/// Only `get_*` reads are retried after a timeout. Any other name may mutate
+/// on-chain state, and the timed-out subprocess may already have submitted its
+/// transaction, so re-running it could double-submit (issue #635).
+fn is_retryable_timeout_function(function: &str) -> bool {
+    function.starts_with("get_")
+}
 
 static RPC_RATE_LIMITER: OnceLock<DefaultDirectRateLimiter> = OnceLock::new();
 
@@ -2368,10 +2381,14 @@ fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
 /// `contains_http_status_code` rather than a space-anchored substring so that
 /// shapes like `"429: too many requests"` or `"Error(429)"` are also detected
 /// (issue #412).
+///
+/// Note: a subprocess *timeout* is deliberately **not** classified here. The
+/// retry loop decides separately whether a timed-out call is safe to repeat
+/// (see [`is_retryable_timeout_function`]); a mutating call that timed out may
+/// already have submitted its transaction (issue #635).
 fn is_transient_error(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     const TRANSIENT_PATTERNS: &[&str] = &[
-        "subprocess timed out",
         "timeout",
         "timed out",
         "connection refused",
@@ -2686,7 +2703,8 @@ mod tests {
     }
 
     /// When the stellar process hangs, invoke_once must return before the test
-    /// times out — well within the 1 s timeout we set here.
+    /// times out — well within the 1 s timeout we set here — and the child
+    /// process must have been killed and reaped, not abandoned (issue #635).
     #[test]
     fn invoke_once_returns_when_subprocess_hangs() {
         // Point at the hang mock; ensure test mode is active.
@@ -2712,23 +2730,74 @@ mod tests {
             out.stderr
         );
 
+        // The child must be gone: invoke_once reports the PID it killed, and
+        // that PID must no longer be alive (no `sleep 9999` orphan left behind).
+        let pid = out
+            .timed_out_pid
+            .expect("a timed-out invoke must report the killed child's PID");
+        assert!(
+            !process_is_alive(pid),
+            "child process {pid} is still alive after invoke_once returned"
+        );
+
         std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
         std::env::remove_var("STELLAR_MOCK_BIN");
         std::env::remove_var("TRELLIS_TEST_MODE");
     }
 
-    /// The error message from a timed-out subprocess must be recognised as a
-    /// transient error so the retry loop will attempt again.
+    /// A timed-out mutating call must not be retried: the first subprocess may
+    /// already have submitted its transaction (issue #635).
     #[test]
-    fn timeout_error_is_treated_as_transient() {
-        let timeout_stderr = format!(
-            "subprocess timed out: `stellar` did not respond within 30s. \
-             The process has been abandoned. \
-             You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time."
-        );
+    fn invoke_with_retry_makes_one_attempt_for_lock_funds_after_timeout() {
+        std::env::set_var("TRELLIS_TEST_MODE", "true");
+        std::env::set_var("STELLAR_MOCK_BIN", hang_mock_bin());
+        std::env::set_var("STELLAR_INVOKE_TIMEOUT_SECS", "1");
+        // Plenty of retries available — the timeout must still stop after one.
+        std::env::set_var("STELLAR_RPC_RETRIES", "3");
+
+        let start = std::time::Instant::now();
+        let out = RpcClient::invoke_with_retry(&timeout_test_config(), "lock_funds", &[]);
+        let elapsed = start.elapsed();
+
+        assert!(!out.success, "timed-out mutating call must fail");
         assert!(
-            is_transient_error(&timeout_stderr),
-            "timeout error must be classified as transient so the retry logic fires"
+            out.stderr.contains("subprocess timed out"),
+            "stderr should contain 'subprocess timed out'; got: {}",
+            out.stderr
+        );
+        // Exactly one attempt: a single 1 s timeout, not 1 s × (retries + 1).
+        assert!(
+            elapsed.as_secs() < 3,
+            "invoke_with_retry took {}s — it retried a mutating timeout",
+            elapsed.as_secs()
+        );
+
+        std::env::remove_var("STELLAR_RPC_RETRIES");
+        std::env::remove_var("STELLAR_INVOKE_TIMEOUT_SECS");
+        std::env::remove_var("STELLAR_MOCK_BIN");
+        std::env::remove_var("TRELLIS_TEST_MODE");
+    }
+
+    /// Only `get_*` reads are safe to retry after a timeout.
+    #[test]
+    fn only_get_functions_are_retryable_after_timeout() {
+        assert!(is_retryable_timeout_function("get_balance"));
+        assert!(is_retryable_timeout_function("get_agreement"));
+        assert!(!is_retryable_timeout_function("lock_funds"));
+        assert!(!is_retryable_timeout_function("release_funds"));
+        assert!(!is_retryable_timeout_function("init"));
+    }
+
+    /// The timeout message itself is not classified as a generic transient
+    /// error; retryability is decided by the function name instead (#635).
+    #[test]
+    fn timeout_error_is_not_generically_transient() {
+        let timeout_stderr = "subprocess timed out: `stellar` did not respond within 30s. \
+             The process was killed. \
+             You can raise STELLAR_INVOKE_TIMEOUT_SECS to allow more time.";
+        assert!(
+            !is_transient_error(timeout_stderr),
+            "a subprocess timeout must not be treated as a generic transient error"
         );
     }
 
@@ -3397,6 +3466,7 @@ mod tests {
             success,
             exit_code,
             command_debug: "stellar contract invoke".to_string(),
+            timed_out_pid: None,
         }
     }
 

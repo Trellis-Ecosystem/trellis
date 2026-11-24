@@ -1,23 +1,58 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { rpc } from '@stellar/stellar-sdk'
+import { ErrorBoundary } from '../components/ErrorBoundary'
+import { HISTORY_STORAGE_KEY } from '../lib/history'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgreementStatusPage from './AgreementStatusPage'
 import { ThemeProvider } from '../context/ThemeContext'
 import { WalletProvider } from '../context/WalletContext'
 
-const renderAgreementStatusPage = () => {
+afterEach(() => {
+  vi.restoreAllMocks()
+  localStorage.removeItem(HISTORY_STORAGE_KEY)
+})
+
+const renderAgreementStatusPage = (path = '/agreement') => {
   return render(
-    <BrowserRouter>
+    <MemoryRouter initialEntries={[path]}>
       <ThemeProvider>
         <WalletProvider>
-          <AgreementStatusPage />
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/agreement/:id?" element={<AgreementStatusPage />} />
+            </Routes>
+          </ErrorBoundary>
         </WalletProvider>
       </ThemeProvider>
-    </BrowserRouter>
+    </MemoryRouter>
   )
 }
 
 describe('<AgreementStatusPage />', () => {
+  it('shows an inline error for a malformed route without recording it in history', () => {
+    const simulate = vi.spyOn(rpc.Server.prototype, 'simulateTransaction')
+    renderAgreementStatusPage('/agreement/xyz')
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid agreement ID')
+    expect(screen.queryByText('Something Went Wrong')).not.toBeInTheDocument()
+    expect(localStorage.getItem(HISTORY_STORAGE_KEY)).toBeNull()
+    expect(simulate).not.toHaveBeenCalled()
+  })
+
+  it('shows a Retry button that refetches a failed agreement', async () => {
+    const simulate = vi.spyOn(rpc.Server.prototype, 'simulateTransaction').mockResolvedValue({
+      _parsed: true, id: '1', latestLedger: 1, events: [], error: 'Agreement does not exist',
+    })
+    renderAgreementStatusPage('/agreement/' + 'a'.repeat(64))
+
+    expect(await screen.findByRole('heading', { name: 'Agreement not found' })).toBeInTheDocument()
+    expect(localStorage.getItem(HISTORY_STORAGE_KEY)).toBeNull()
+    const initialCalls = simulate.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(simulate).toHaveBeenCalledTimes(initialCalls + 1))
+  })
+
   it('renders the agreement status page title', () => {
     renderAgreementStatusPage()
 

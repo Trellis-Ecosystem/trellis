@@ -25,6 +25,27 @@ export interface AgreementEvent {
   cancelledBy?: string
 }
 
+/**
+ * Maps the contract's `trls_*` event topic symbols (see
+ * contracts/trellis_core/src/events.rs) to the event type names consumed by
+ * the UI.  Every symbol the contract can emit must be present here, otherwise
+ * `parseEventType` falls back to 'unknown'.
+ */
+export const EVENT_TYPE_MAP: Record<string, string> = {
+  trls_crte: 'created',
+  trls_lckd: 'locked',
+  trls_sbmt: 'work_submitted',
+  trls_rlsd: 'released',
+  trls_dspt: 'disputed',
+  trls_rslv: 'resolved',
+  trls_cncl: 'cancelled',
+  trls_prtl: 'partial_release',
+  trls_cmpl: 'completed',
+  trls_ttle: 'ttl_extended',
+  trls_ddln: 'deadline_set',
+  trls_expd: 'expired',
+}
+
 const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
 const MAX_POLL_INTERVAL_MS = 60_000  // Cap backoff at 60 seconds
 const FETCH_TIMEOUT_MS = 30_000     // Per-request timeout: 30 seconds
@@ -91,9 +112,10 @@ export function useAgreementEvents(agreementId: string | null) {
       clearTimeout(timeoutId)
 
       try {
-        // Encode agreement_id topic filter
-        const idBytes = Buffer.from(agreementId, 'hex')
-        const idScVal = xdr.ScVal.scvBytes(idBytes)
+        // Encode agreement_id topic filter. Events are published with topics
+        // (symbol, agreement_id), so the first segment is a wildcard and the
+        // agreement id is matched against topic 1.
+        const idScVal = xdr.ScVal.scvBytes(hexToBytes(agreementId))
         const idTopic = idScVal.toXDR('base64')
 
         const startLedger = await getRecentStartLedger(mergedSignal)
@@ -108,7 +130,7 @@ export function useAgreementEvents(agreementId: string | null) {
               {
                 type: 'contract',
                 contractIds: [CONTRACT_ID],
-                topics: [[idTopic]],
+                topics: [['*', idTopic]],
               },
             ],
             pagination: { limit: 100 },
@@ -235,122 +257,80 @@ export function useAgreementEvents(agreementId: string | null) {
       closeStream?.()
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current)
-        timerRef.current = null
       }
     }
-  }, [fetchEvents, agreementId])
+  }, [agreementId, fetchEvents])
 
-  const refetch = useCallback(() => {
-    if (relayActiveRef.current && agreementId) {
-      // The relay pushes new events on its own; a manual refetch just reloads
-      // the stored history from the indexer's query API.
-      setError(null)
-      fetchIndexedEvents(agreementId, new AbortController().signal)
-        .then((raw) => {
-          if (!unmountedRef.current) setEvents(toAgreementEvents(raw, agreementId))
-        })
-        .catch((err: unknown) => {
-          if (!unmountedRef.current) {
-            setError(err instanceof Error ? err.message : 'Failed to fetch events')
-          }
-        })
-      return
-    }
-
-    // Cancel any pending timer and fire immediately.
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-    failureCount.current = 0
-    void fetchEvents(new AbortController().signal)
-  }, [fetchEvents, agreementId])
+  const refetch = useCallback(async () => {
+    if (!agreementId) return
+    const controller = new AbortController()
+    await fetchEvents(controller.signal)
+  }, [agreementId, fetchEvents])
 
   return { events, isLoading, error, refetch }
 }
 
-/** Parses raw RPC-shaped events (from RPC or the indexer), newest first. */
-function toAgreementEvents(rawEvents: unknown[], agreementId: string): AgreementEvent[] {
-  const parsed: AgreementEvent[] = rawEvents
-    .filter(isValidEventResponse)
-    .map((e: RawEventResponse) => {
-      const eventType = parseEventType(e)
-      const eventData = parseEventData(e)
-      const id = (e as { id?: unknown }).id
-
-      return {
-        ...(typeof id === 'string' ? { id } : {}),
-        type: eventType,
-        ledger: e.ledger || 0,
-        txHash: e.txHash || '',
-        timestamp: e.ledgerClosedAt || new Date().toISOString(),
-        agreementId,
-        ...eventData,
-      }
-    })
-
-  // Sort by ledger descending (newest first)
-  parsed.sort((a, b) => b.ledger - a.ledger)
-  return parsed
+/**
+ * Resolve a `trls_*` topic symbol to its event type name.  Returns 'unknown'
+ * only for symbols the contract does not emit.
+ */
+export function parseEventType(symbol: string): string {
+  try {
+    return EVENT_TYPE_MAP[symbol] ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 function eventsOf(data: unknown): unknown[] {
-  const events = (data as { events?: unknown } | null)?.events
-  return Array.isArray(events) ? events : []
+  if (Array.isArray(data)) return data
+  if (data && typeof data === 'object' && Array.isArray((data as { events?: unknown[] }).events)) {
+    return (data as { events: unknown[] }).events
+  }
+  return []
 }
 
-/** Adds relay deltas to the list, skipping any event already present. */
 function mergeEvents(prev: AgreementEvent[], fresh: AgreementEvent[]): AgreementEvent[] {
   const seen = new Set(prev.map((e) => e.id).filter(Boolean))
-  const added = fresh.filter((e) => !e.id || !seen.has(e.id))
-  if (added.length === 0) return prev
-  return [...added, ...prev].sort((a, b) => b.ledger - a.ledger)
+  const merged = [...prev]
+  for (const event of fresh) {
+    if (event.id && seen.has(event.id)) continue
+    if (event.id) seen.add(event.id)
+    merged.push(event)
+  }
+  return merged
 }
 
-function parseEventType(event: RawEventResponse): string {
-  try {
-    const topics = event.topic || []
-    if (topics.length > 0 && typeof topics[0] === 'string') {
-      const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
-      if (firstTopic.switch().name === 'scvSymbol') {
-        const symbol = firstTopic.sym().toString()
-        // Map abbreviated symbols to human-readable names
-        return EVENT_TYPE_MAP[symbol] || symbol
-      }
-    }
-  } catch {
-    // Fallback to unknown
+function toAgreementEvents(rawEvents: unknown[], agreementId: string): AgreementEvent[] {
+  const parsed: AgreementEvent[] = []
+  for (const raw of rawEvents) {
+    if (!isValidEventResponse(raw)) continue
+    const event = raw as RawEventResponse
+    const symbol = extractTopicSymbol(event)
+    if (!symbol) continue
+    const type = parseEventType(symbol)
+    parsed.push({
+      id: event.id,
+      type,
+      ledger: event.ledger,
+      txHash: event.txHash,
+      timestamp: event.ledgerClosedAt ?? '',
+      agreementId,
+    })
   }
-  return 'unknown'
+  return parsed
 }
 
-function parseEventData(event: RawEventResponse): Partial<AgreementEvent> {
+function extractTopicSymbol(event: RawEventResponse): string | null {
+  const topics = event.topic
+  if (!Array.isArray(topics) || topics.length === 0) return null
   try {
-    const value = event.value?.xdr
-    if (!value || typeof value !== 'string') {
-      return {}
+    const scVal = xdr.ScVal.fromXDR(topics[0], 'base64')
+    if (scVal.switch().name === 'scvSymbol') {
+      return scVal.sym().toString()
     }
-
-    // Get the event type from topics
-    const topics = event.topic || []
-    let eventTypeSymbol = 'unknown'
-    if (topics.length > 0) {
-      try {
-        const firstTopic = xdr.ScVal.fromXDR(topics[0], 'base64')
-        if (firstTopic.switch().name === 'scvSymbol') {
-          eventTypeSymbol = firstTopic.sym().toString()
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    const scVal = xdr.ScVal.fromXDR(value, 'base64')
-
-    // Parse common fields from event data structure
-    // This is simplified - actual parsing depends on contract event schema
-    return {}
   } catch {
-    return {}
+    return null
   }
+  return null
 }

@@ -120,6 +120,10 @@ function CreateAgreementPage() {
   // other value would fail on-chain after signing.
   const payer = wallet.publicKey ?? ''
 
+  // Only treat the hook as busy while a transaction is actually in flight.
+  // Terminal states ('error'/'success') must not keep the button disabled.
+  const isInFlight = status === 'building' || status === 'signing' || status === 'submitting'
+
   const validateAddress = (address: string, field: string): string | undefined => {
     const trimmed = address.trim()
     if (!trimmed) return `${field} is required`

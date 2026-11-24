@@ -1,95 +1,58 @@
-import type { ReactNode } from 'react'
-import {
-  explorerUrl,
-  networkLabel,
-  truncateId,
-  type ExplorerEntity,
-  type StellarNetwork,
-} from '../lib/explorer'
+import React from 'react';
+import { ExternalLink } from 'lucide-react';
 
 interface ExplorerLinkProps {
-  /** Which kind of on-chain record `value` identifies. */
-  type: ExplorerEntity
-  /** The raw identifier — tx hash, contract ID, account address, ledger seq. */
-  value: string | null | undefined
-  /** Override the visible text. Defaults to a truncated form of `value`. */
-  label?: ReactNode
-  /** Show the full identifier instead of the `ABCD…WXYZ` short form. */
-  full?: boolean
-  /** Explorer network. Defaults to the network Trellis is configured for. */
-  network?: StellarNetwork
-  className?: string
+  /** The hash or address to link to */
+  value: string;
+  /** The type of explorer link */
+  type?: 'tx' | 'account' | 'ledger' | 'contract';
+  /** Optional custom label; defaults to a truncated value */
+  label?: string;
+  /** Optional additional CSS classes */
+  className?: string;
+  /** Whether to show the external link icon */
+  showIcon?: boolean;
 }
 
-const ENTITY_NOUN: Record<ExplorerEntity, string> = {
-  tx: 'transaction',
-  op: 'operation',
+const STELLAR_EXPERT_BASE = 'https://stellar.expert/explorer/public';
+
+const TYPE_PATHS: Record<NonNullable<ExplorerLinkProps['type']>, string> = {
+  tx: 'tx',
   account: 'account',
-  contract: 'contract',
   ledger: 'ledger',
-  asset: 'asset',
-  agreement: 'agreement',
+  contract: 'contract',
+};
+
+function truncate(value: string, head = 6, tail = 6): string {
+  if (value.length <= head + tail + 3) return value;
+  return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
 /**
- * Renders an on-chain identifier as a link to its Stellar Expert record.
- *
- * Renders `null` for a missing or blank `value` so callers can pass through
- * optional data (an unconfirmed tx hash, an unset resolver) without guarding
- * at every call site — an absent identifier shows nothing rather than a link
- * that 404s on the explorer.
+ * Renders a link to Stellar Expert for a given on-chain value.
  */
-export function ExplorerLink({
-  type,
+export const ExplorerLink: React.FC<ExplorerLinkProps> = ({
   value,
+  type = 'tx',
   label,
-  full = false,
-  network,
   className = '',
-}: ExplorerLinkProps) {
-  const href = explorerUrl(type, value, network)
-  if (!href || !value) return null
-
-  const id = value.trim()
+  showIcon = true,
+}) => {
+  const href = `${STELLAR_EXPERT_BASE}/${TYPE_PATHS[type]}/${value}`;
+  const display = label ?? truncate(value);
 
   return (
     <a
       href={href}
       target="_blank"
-      // noreferrer alongside noopener: the explorer never needs to know which
-      // Trellis screen the user came from.
       rel="noopener noreferrer"
-      title={`View ${ENTITY_NOUN[type]} ${id} on Stellar Expert (${networkLabel(network)})`}
-      data-testid="explorer-link"
-      className={`inline-flex items-center gap-1 min-w-0 font-mono text-cyan-400 underline decoration-cyan-400/40 underline-offset-2 transition-colors hover:text-cyan-300 hover:decoration-cyan-300 ${className}`}
+      className={`inline-flex items-center gap-1 text-cyan-400 light:text-cyan-700 hover:underline ${className}`}
+      title={value}
     >
-      {/* break-all: `full` renders the raw 56-char identifier as one unbroken
-          token, which otherwise forces the flex item (and page) to overflow
-          horizontally on narrow viewports instead of wrapping (#120). */}
-      <span className="break-all">{label ?? (full ? id : truncateId(id))}</span>
-      <ExternalLinkIcon />
+      <span className="font-mono">{display}</span>
+      {showIcon && <ExternalLink className="h-3 w-3" aria-hidden="true" />}
     </a>
-  )
-}
+  );
+};
 
-function ExternalLinkIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      focusable="false"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-3 w-3 shrink-0 opacity-70"
-    >
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-      <path d="M15 3h6v6" />
-      <path d="M10 14 21 3" />
-    </svg>
-  )
-}
-
-export default ExplorerLink
+export default ExplorerLink;

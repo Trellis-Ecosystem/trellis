@@ -147,7 +147,7 @@ export default function StatusPage() {
 
             {/* Agreement Details */}
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-cyan-400 mb-6">Agreement Details</h2>
+              <h2 className="text-xl font-semibold text-cyan-400 light:text-cyan-700 mb-6">Agreement Details</h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
@@ -179,7 +179,7 @@ export default function StatusPage() {
 
             {/* Milestones Table */}
             <div className="bg-navy-800 dark:bg-navy-800 light:bg-white border border-navy-700 dark:border-navy-700 light:border-gray-200 rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-cyan-400 mb-6">Milestones</h2>
+              <h2 className="text-xl font-semibold text-cyan-400 light:text-cyan-700 mb-6">Milestones</h2>
 
               {/* Desktop: full table. Mobile: single-column cards (#120) — a
                   scrollable table is hard to read and hard to tap on a phone. */}
