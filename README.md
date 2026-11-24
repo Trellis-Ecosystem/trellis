@@ -996,5 +996,5 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 
 ## Handsoff notes
 
-<!-- handsoff-issue-758 -->
-- #758: No way to clear a milestone deadline once set
+<!-- handsoff-issue-624 -->
+- #624: 'Wrong Role' Authorization Tests Deny Every Signature Instead of Signing as the Wrong Party

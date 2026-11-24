@@ -192,3 +192,28 @@ pub fn setup_mocked() -> (
     env.mock_all_auths();
     deploy(env, FUZZ_MINT)
 }
+
+/// Fixture used by the role-gate tests in `test.rs` (#623).
+///
+/// Funds the payer ([`FUZZ_MINT`]) and installs `deny_all_auth` *before*
+/// [`deploy`], so the SAC `mint` is rejected too. Callers that need a funded
+/// agreement must therefore build it with [`setup_mocked`] and only switch to
+/// `deny_all_auth` immediately before the entrypoint under test; this helper
+/// exists for the cases where the gate is the very first thing exercised.
+pub fn setup_denied() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    TrellisContractClient<'static>,
+) {
+    let env = Env::new_with_config(EnvTestConfig {
+        capture_snapshot_at_drop: false,
+    });
+    env.mock_all_auths();
+    let (env, payer, payee, dispute_resolver, token_address, client) =
+        deploy(env, FUZZ_MINT);
+    env.set_auths(&[]);
+    (env, payer, payee, dispute_resolver, token_address, client)
+}

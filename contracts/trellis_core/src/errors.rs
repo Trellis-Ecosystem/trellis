@@ -169,14 +169,16 @@ pub enum TrellisError {
     /// Appended as discriminant `19` per the stability rule above.
     TransferAmountMismatch = 19,
 
-    /// `rotate_resolver` was called with a `new_resolver` equal to the
-    /// agreement's current `dispute_resolver`.
+    /// `raise_dispute` was called with a `reason_uri` longer than
+    /// [`crate::MAX_PROOF_URI_LEN`] (512 bytes).
     ///
-    /// Such a call would write the header and emit a `trls_rrot` event with
-    /// `old == new`, which is a no-op rotation that misleads off-chain
-    /// indexers into believing the resolver changed. Rejecting it up front
-    /// keeps the rotation event meaningful.
+    /// The URI is published in the dispute event and kept for the agreement's
+    /// lifetime, so an unbounded length would be a permanent storage/rent cost
+    /// imposed on the payer by the payee. Rejecting it up front keeps an
+    /// agreement's storage footprint bounded by something the contract
+    /// controls, mirroring the `proof_uri` cap enforced by `submit_work`.
     ///
-    /// Appended as discriminant `20` per the stability rule above.
-    ResolverUnchanged = 20,
+    /// Appended as discriminant `20` per the stability rule above (`19` is the
+    /// highest already assigned).
+    ReasonUriTooLong = 20,
 }
