@@ -55,7 +55,7 @@ fn test_init_parses_all_required_args() {
             "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
             "--resolver",
             "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
-            "--amounts",
+            "--milestones",
             "1000,2000,3000",
             "--dry-run",
         ])
@@ -73,7 +73,7 @@ fn test_init_parses_all_required_args() {
 fn test_lock_funds_parses_required_args() {
     let output = trellis_cmd()
         .args([
-            "lock",
+            "lock-funds",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -303,7 +303,7 @@ fn test_init_with_multiple_milestones() {
             "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ",
             "--resolver",
             "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO",
-            "--amounts",
+            "--milestones",
             "1000,2000,3000,4000,5000",
             "--json",
         ])
@@ -321,7 +321,7 @@ fn test_init_with_multiple_milestones() {
 fn test_submit_work_with_proof_uri() {
     let output = trellis_cmd()
         .args([
-            "submit",
+            "submit-work",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -344,7 +344,7 @@ fn test_submit_work_with_proof_uri() {
 fn test_raise_dispute_requires_caller() {
     let output = trellis_cmd()
         .args([
-            "dispute",
+            "raise-dispute",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -367,7 +367,7 @@ fn test_raise_dispute_requires_caller() {
 fn test_resolve_dispute_refund_flag() {
     let output = trellis_cmd()
         .args([
-            "resolve",
+            "resolve-dispute",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -389,7 +389,7 @@ fn test_resolve_dispute_refund_flag() {
 fn test_batch_lock_with_multiple_ids() {
     let output = trellis_cmd()
         .args([
-            "batch-lock",
+            "batch-lock-funds",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-ids",
@@ -409,7 +409,7 @@ fn test_batch_lock_with_multiple_ids() {
 #[test]
 fn test_completion_command_generates_shell_completions() {
     let output = trellis_cmd()
-        .args(["completion", "--shell", "bash"])
+        .args(["completion", "bash"])
         .output()
         .expect("failed to execute trellis");
 
@@ -442,7 +442,7 @@ fn test_dry_run_works_without_stellar_binary() {
             "run",
             "--quiet",
             "--",
-            "lock",
+            "lock-funds",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -640,7 +640,7 @@ fn test_resolve_split_dry_run() {
 #[test]
 fn test_resolve_split_rejects_mixed_and_negative_flags() {
     let mixed = dry_run(&[
-        "resolve",
+        "resolve-dispute",
         "--refund-to-payer",
         "--payer-amount",
         "1",

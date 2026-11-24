@@ -307,9 +307,18 @@ pub enum Commands {
         #[arg(long)]
         milestone_id: u32,
 
-        /// Pass true to refund locked funds to the payer (payer wins).
-        /// Pass false to release funds to the payee (payee wins).
-        #[arg(long, default_value = "false")]
+        /// Refund locked funds to the payer (payer wins) when true, or release
+        /// them to the payee (payee wins) when false.
+        ///
+        /// The value is optional: `--refund-to-payer` alone means `true`, and
+        /// `--refund-to-payer true` / `--refund-to-payer false` are both
+        /// accepted. Omit the flag entirely to default to `false`.
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            default_value_t = false
+        )]
         refund_to_payer: bool,
 
         /// Split ruling: amount to refund to the payer (non-negative i128).
@@ -802,8 +811,9 @@ fn validate_agreement_id(id: &str) -> Result<(), String> {
 /// Validate a proof URI: printable, non-empty, within a reasonable length cap.
 ///
 /// Control characters (including newlines) are rejected so they cannot be
-/// used to confuse argument parsing downstream. Unicode is normalized to NFC.
-fn validate_proof_uri(uri: &str) -> Result<(), String> {
+/// used to confuse argument parsing downstream. Unicode is normalized to NFC,
+/// and the normalized value is returned so callers send that form.
+fn validate_proof_uri(uri: &str) -> Result<String, String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
     }
@@ -816,8 +826,7 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
             uri.len()
         ));
     }
-    crate::sanitizer::sanitize_proof_uri(uri)?;
-    Ok(())
+    crate::sanitizer::sanitize_proof_uri(uri)
 }
 
 /// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
@@ -856,13 +865,44 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a validation error and terminate the process.
+/// Mirror the contract's `init` rejections that depend only on the addresses,
+/// so they fail here instead of in a doomed simulation/transaction: the payer
+/// and payee must differ, the resolver must be neither party, and the token
+/// must be a contract (`C…`) address.
+fn check_init_parties(payer: &str, payee: &str, token: &str, resolver: &str) -> Result<(), String> {
+    if payer == payee {
+        return Err("payer and payee must be different addresses".to_string());
+    }
+    if resolver == payer || resolver == payee {
+        return Err("resolver must be a neutral third party, not the payer or payee".to_string());
+    }
+    if !token.starts_with('C') {
+        return Err("token must be a token contract address starting with 'C'".to_string());
+    }
+    Ok(())
+}
+
+/// Print an error that ends the command (#645).
 ///
-/// Returns `!` so it can be used both as a statement and as the fallback in
-/// `Result::unwrap_or_else` without a type mismatch.
-fn fail_validation(msg: &str) -> ! {
-    eprintln!("error: {msg}");
-    std::process::exit(1);
+/// Under `--json` / `--quiet` this is the standard error envelope on stdout,
+/// so scripts always get exactly one JSON object; otherwise it is a single
+/// `Error:`-prefixed message on stderr. Messages that already carry the
+/// prefix are not prefixed twice.
+pub fn print_error(msg: &str, opts: &OutputOpts) {
+    let msg = msg.strip_prefix("Error: ").unwrap_or(msg);
+    match opts.format {
+        OutputFormat::Json => {
+            let out = InvokeOutput {
+                stdout: String::new(),
+                stderr: msg.to_string(),
+                success: false,
+                exit_code: None,
+                command_debug: String::new(),
+            };
+            println!("{}", serde_json::to_string(&json_envelope(&out)).unwrap_or_default());
+        }
+        _ => eprintln!("Error: {msg}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -890,17 +930,15 @@ fn run_init(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payer", &payer).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payee", &payee).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("token", &token).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("resolver", &resolver).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("payer", &payer)?;
+    validate_address("payee", &payee)?;
+    validate_address("token", &token)?;
+    validate_address("resolver", &resolver)?;
+    check_init_parties(&payer, &payee, &token, &resolver)?;
     let agreement_id_for_history = agreement_id.clone();
 
-    let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    });
+    let milestones_json = build_milestones_json(&milestones_csv)?;
 
     confirm_action(
         &format!(
@@ -945,7 +983,7 @@ fn run_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
@@ -980,10 +1018,9 @@ fn run_batch_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
-    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)
-        .unwrap_or_else(|e| fail_validation(&e));
+    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)?;
 
     confirm_action(
         &format!(
@@ -1030,14 +1067,36 @@ fn run_submit_work(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    let proof_uri = match proof_uri.filter(|u| !u.is_empty()) {
+        Some(uri) => Some(validate_proof_uri(&uri)?),
+        None => None,
+    };
 
+    let proof_note = proof_uri
+        .as_deref()
+        .map(|uri| format!(" with proof {uri}"))
+        .unwrap_or_default();
     confirm_action(
-        &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
+        &format!(
+            "This will submit work for milestone {milestone_id} of agreement {agreement_id}{proof_note}."
+        ),
         yes,
         opts,
     )?;
 
+    let args = build_submit_work_args(agreement_id, milestone_id, proof_uri);
+    execute(config, "submit_work", &args, opts)
+}
+
+/// Build the `submit_work` argument list from an already validated and
+/// NFC-normalized proof URI. Split out from the handler so the value that is
+/// actually sent can be unit-tested without touching the network.
+fn build_submit_work_args(
+    agreement_id: String,
+    milestone_id: u32,
+    proof_uri: Option<String>,
+) -> Vec<String> {
     let mut args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -1045,15 +1104,14 @@ fn run_submit_work(
         milestone_id.to_string(),
     ];
 
-    if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        validate_proof_uri(&uri)?;
+    if let Some(uri) = proof_uri {
         args.push("--proof-uri".to_string());
         // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
         // JSON, so a bare string value fails to parse — it must be JSON-quoted.
         args.push(serde_json::to_string(&uri).unwrap_or(uri));
     }
 
-    execute(config, "submit_work", &args, opts)
+    args
 }
 
 /// `stellar contract invoke … -- approve_and_release …`
@@ -1070,7 +1128,7 @@ fn run_approve_release(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1105,12 +1163,14 @@ fn run_release_partial(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
     let amount = match amount.parse::<i128>() {
         Ok(a) if a > 0 => a,
-        _ => fail_validation(&format!(
-            "amount must be a positive integer, got '{amount}'"
-        )),
+        _ => {
+            return Err(format!(
+                "amount must be a positive integer, got '{amount}'"
+            ))
+        }
     };
 
     confirm_action(
@@ -1152,8 +1212,8 @@ fn run_raise_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1192,19 +1252,19 @@ fn run_resolve_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     // Split ruling (`resolve_dispute_split`): clap guarantees both amounts are
     // present together and never alongside --refund-to-payer.
     if let (Some(payer), Some(payee)) = (payer_amount, payee_amount) {
         let parse = |name: &str, v: &str| match v.parse::<i128>() {
-            Ok(a) if a >= 0 => a,
-            _ => fail_validation(&format!(
+            Ok(a) if a >= 0 => Ok(a),
+            _ => Err(format!(
                 "{name} must be a non-negative integer, got '{v}'"
             )),
         };
-        let payer = parse("payer-amount", &payer);
-        let payee = parse("payee-amount", &payee);
+        let payer = parse("payer-amount", &payer)?;
+        let payee = parse("payee-amount", &payee)?;
         confirm_action(
             &format!(
                 "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} with a split: {payer} to the payer, {payee} to the payee."
@@ -1264,7 +1324,7 @@ fn run_cancel_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
@@ -1301,7 +1361,7 @@ fn run_decline_unfunded_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1346,8 +1406,8 @@ fn run_extend_ttl(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!("This will extend the ledger TTL of agreement {agreement_id} (rent paid by the source account)."),
@@ -1531,8 +1591,8 @@ fn run_deadline_set(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    check_deadline_in_future(deadline, unix_now()).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    check_deadline_in_future(deadline, unix_now())?;
 
     confirm_action(
         &format!(
@@ -1572,7 +1632,7 @@ fn run_deadline_get(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -1599,8 +1659,8 @@ fn run_expire(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1641,7 +1701,7 @@ fn build_expire_args(agreement_id: String, milestone_id: u32, caller: String) ->
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id.clone()];
 
@@ -1666,7 +1726,7 @@ fn run_total_amount(
     agreement_id: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
@@ -1694,7 +1754,7 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = milestone_status_args(&agreement_id, milestone_id);
 
@@ -2021,6 +2081,16 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
         );
     }
 
+    let count = csv.split(',').count();
+    if count > crate::input::MAX_MILESTONES {
+        return Err(format!(
+            "too many milestones: at most {} are allowed, got {count}",
+            crate::input::MAX_MILESTONES
+        ));
+    }
+
+    // The contract sums every amount as i128 and rejects an overflowing total.
+    let mut total: i128 = 0;
     let entries: Vec<String> = csv
         .split(',')
         .enumerate()
@@ -2044,6 +2114,10 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
                     idx
                 ));
             }
+            total = total.checked_add(amount).ok_or_else(|| {
+                "milestone amounts overflow: their total exceeds the maximum i128 value"
+                    .to_string()
+            })?;
             Ok(format!(
                 r#"{{"id":{idx},"amount":"{amount}","status":{{"Pending":null}},"proof_uri":null}}"#,
             ))
@@ -2595,6 +2669,61 @@ mod tests {
         );
     }
 
+    // --- init pre-checks mirroring contract rejections (#648) ---
+
+    const PAYER: &str = "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+    const PAYEE: &str = "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF";
+    const RESOLVER: &str = "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO";
+    const TOKEN: &str = "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+
+    #[test]
+    fn init_rejects_payer_equal_to_payee() {
+        let err = check_init_parties(PAYER, PAYER, TOKEN, RESOLVER).unwrap_err();
+        assert_eq!(err, "payer and payee must be different addresses");
+    }
+
+    #[test]
+    fn init_rejects_resolver_that_is_a_party() {
+        for resolver in [PAYER, PAYEE] {
+            let err = check_init_parties(PAYER, PAYEE, TOKEN, resolver).unwrap_err();
+            assert_eq!(
+                err,
+                "resolver must be a neutral third party, not the payer or payee"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_account_address_as_token() {
+        let account_token = TOKEN.replacen('C', "G", 1);
+        let err = check_init_parties(PAYER, PAYEE, &account_token, RESOLVER).unwrap_err();
+        assert_eq!(err, "token must be a token contract address starting with 'C'");
+    }
+
+    #[test]
+    fn init_accepts_distinct_parties_and_contract_token() {
+        assert!(check_init_parties(PAYER, PAYEE, TOKEN, RESOLVER).is_ok());
+    }
+
+    #[test]
+    fn init_rejects_more_than_max_milestones() {
+        let ok = vec!["1"; crate::input::MAX_MILESTONES].join(",");
+        assert!(build_milestones_json(&ok).is_ok());
+        let too_many = vec!["1"; crate::input::MAX_MILESTONES + 1].join(",");
+        let err = build_milestones_json(&too_many).unwrap_err();
+        assert_eq!(err, "too many milestones: at most 50 are allowed, got 51");
+    }
+
+    #[test]
+    fn init_rejects_milestone_sum_overflow() {
+        let csv = format!("{},1", i128::MAX);
+        let err = build_milestones_json(&csv).unwrap_err();
+        assert_eq!(
+            err,
+            "milestone amounts overflow: their total exceeds the maximum i128 value"
+        );
+    }
+
     #[test]
     fn test_build_milestones_json_mixed_tabs_and_newlines_trimmed() {
         // Mixed whitespace (tabs, newlines, spaces) around otherwise valid
@@ -3090,14 +3219,40 @@ mod tests {
 
     #[test]
     fn proof_uri_rejects_oversized() {
-        let uri = "a".repeat(2049);
+        let uri = "a".repeat(513);
         assert!(validate_proof_uri(&uri).is_err());
     }
 
     #[test]
     fn proof_uri_accepts_max_length() {
-        let uri = "a".repeat(2048);
+        let uri = "a".repeat(512);
         assert!(validate_proof_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn submit_work_sends_nfc_normalized_proof_uri() {
+        // "e" + combining acute accent (decomposed) must be sent as "é" (NFC).
+        let uri = validate_proof_uri("ipfs://cafe\u{0301}").unwrap();
+        let args = build_submit_work_args("a".repeat(64), 0, Some(uri));
+        assert_eq!(args[4], "--proof-uri");
+        assert_eq!(args[5], "\"ipfs://caf\u{00e9}\"");
+    }
+
+    #[test]
+    fn submit_work_rejects_invalid_proof_uri_before_prompt() {
+        // Under --quiet without --yes the prompt itself would fail with a
+        // "--yes" error, so getting the proof_uri error proves validation ran first.
+        let cfg = test_config(&good_contract_id(), &format!("S{}", "Q".repeat(55)));
+        let err = run_submit_work(
+            &cfg,
+            "a".repeat(64),
+            0,
+            Some("https://example.com/\nbad".to_string()),
+            false,
+            &quiet_opts(),
+        )
+        .unwrap_err();
+        assert!(err.contains("proof_uri"), "got: {err}");
     }
 
     // --- extract_tx_hash / extract_events ---
@@ -4118,6 +4273,60 @@ mod tests {
         assert!(validate_agreement_id(&"z".repeat(64)).is_err());
         // Sanity: the handler itself is reachable with a valid ID.
         assert!(run_decline_unfunded_milestone(&config, "c".repeat(64), 0, true, &opts).is_ok());
+    }
+
+    // --- --refund-to-payer optional value (#637) ---
+
+    #[test]
+    fn resolve_dispute_refund_to_payer_accepts_bare_true_and_false() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Commands,
+        }
+
+        let id = "1".repeat(64);
+        let parse = |extra: &[&str]| {
+            let mut argv = vec![
+                "trellis",
+                "resolve-dispute",
+                "--agreement-id",
+                &id,
+                "--milestone-id",
+                "0",
+            ];
+            argv.extend_from_slice(extra);
+            TestCli::try_parse_from(argv)
+        };
+
+        // Bare flag -> true.
+        match parse(&["--refund-to-payer"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Explicit `true` -> true.
+        match parse(&["--refund-to-payer", "true"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Explicit `false` -> false.
+        match parse(&["--refund-to-payer", "false"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(!refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Omitted -> false (default).
+        match parse(&[]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(!refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // A non-boolean value is still rejected.
+        assert!(parse(&["--refund-to-payer", "maybe"]).is_err());
     }
 
     #[test]

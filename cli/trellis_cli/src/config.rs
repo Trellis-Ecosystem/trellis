@@ -155,12 +155,13 @@ pub fn validate_contract_id(id: &str) -> Result<(), String> {
 /// `ws`, …) and any URL with an empty host is rejected here with a clear
 /// message.
 ///
-/// Cleartext `http://` to a non-loopback host is refused by default to
-/// prevent a compromised `.env` from silently redirecting traffic to an
-/// unauthenticated endpoint. Pass `unsafe_rpc = true` to downgrade the hard
-/// error to a printed warning (useful for development devnets). This mirrors
-/// the `--unsafe-rpc` CLI flag (#156).
-pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, String> {
+/// This checks the URL's *shape* only. The cleartext-`http://`-to-a-remote-host
+/// policy lives solely in [`check_rpc_transport`], which knows about the
+/// `--unsafe-rpc` flag (#156, #636). Keeping the policy out of here means
+/// `Config::validate` never rejects a URL that `--unsafe-rpc` would allow.
+///
+/// Returns the normalized URL on success.
+pub fn validate_rpc_url(raw: &str) -> Result<String, String> {
     let parsed =
         url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
 
@@ -177,24 +178,7 @@ pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, S
         return Err(format!("RPC URL {raw:?} is missing a host"));
     }
 
-    // Guard against cleartext HTTP to non-loopback hosts (#156).
-    if parsed.scheme() == "http" {
-        let host = parsed.host_str().unwrap_or("");
-        let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
-        if !is_loopback {
-            let msg = format!(
-                "Warning: RPC URL {raw:?} uses cleartext HTTP to a non-loopback host. \
-                 Traffic may be intercepted. Use https:// or pass --unsafe-rpc to suppress this error."
-            );
-            if unsafe_rpc {
-                return Ok(Some(msg));
-            } else {
-                return Err(msg);
-            }
-        }
-    }
-
-    Ok(None)
+    Ok(parsed.to_string())
 }
 
 /// Refuse cleartext `http://` to a non-loopback RPC host (#156).
@@ -442,7 +426,7 @@ impl Config {
             errors.push("TRELLIS_SOURCE_KEY".to_string());
         }
 
-        if let Err(e) = validate_rpc_url(&self.rpc_url, false) {
+        if let Err(e) = validate_rpc_url(&self.rpc_url) {
             errors.push(e);
         }
 
@@ -989,14 +973,21 @@ mod tests {
 
     #[test]
     fn rpc_url_accepts_https_and_http_localhost() {
-        assert!(validate_rpc_url("https://soroban-testnet.stellar.org", false).is_ok());
-        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc", false).is_ok());
-        assert!(validate_rpc_url("http://127.0.0.1:8000", false).is_ok());
+        assert!(validate_rpc_url("https://soroban-testnet.stellar.org").is_ok());
+        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc").is_ok());
+        assert!(validate_rpc_url("http://127.0.0.1:8000").is_ok());
+        assert!(validate_rpc_url("http://[::1]:8000").is_ok());
+    }
+
+    #[test]
+    fn rpc_url_accepts_remote_http_shape_only() {
+        // Cleartext policy lives in `check_rpc_transport`, not here (#636).
+        assert!(validate_rpc_url("http://rpc.example.com").is_ok());
     }
 
     #[test]
     fn rpc_url_rejects_scheme_typo() {
-        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org", false).unwrap_err();
+        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org").unwrap_err();
         assert!(
             err.contains("scheme") || err.contains("valid URL"),
             "got: {err}"
@@ -1005,20 +996,35 @@ mod tests {
 
     #[test]
     fn rpc_url_rejects_missing_scheme() {
-        assert!(validate_rpc_url("soroban-testnet.stellar.org", false).is_err());
+        assert!(validate_rpc_url("soroban-testnet.stellar.org").is_err());
     }
 
     #[test]
     fn rpc_url_rejects_non_http_scheme() {
-        assert!(validate_rpc_url("ftp://example.com", false).is_err());
-        assert!(validate_rpc_url("ws://example.com", false).is_err());
-        assert!(validate_rpc_url("file:///etc/passwd", false).is_err());
+        assert!(validate_rpc_url("ftp://example.com").is_err());
+        assert!(validate_rpc_url("ws://example.com").is_err());
+        assert!(validate_rpc_url("file:///etc/passwd").is_err());
     }
 
     #[test]
     fn rpc_url_rejects_empty_host() {
-        assert!(validate_rpc_url("https://", false).is_err());
-        assert!(validate_rpc_url("http://", false).is_err());
+        assert!(validate_rpc_url("https://").is_err());
+        assert!(validate_rpc_url("http://").is_err());
+    }
+
+    #[test]
+    fn validate_accepts_ipv6_loopback_rpc_url() {
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.rpc_url = "http://[::1]:8000".to_string();
+        assert!(cfg.validate().is_ok(), "got: {:?}", cfg.validate().unwrap_err());
+    }
+
+    #[test]
+    fn validate_accepts_remote_http_rpc_url() {
+        // `--unsafe-rpc` must be able to reach `check_rpc_transport` (#636).
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.rpc_url = "http://rpc.example.com".to_string();
+        assert!(cfg.validate().is_ok(), "got: {:?}", cfg.validate().unwrap_err());
     }
 
     #[test]
