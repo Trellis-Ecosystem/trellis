@@ -89,22 +89,36 @@ export class Ingester extends EventEmitter {
   }
 
   async pollOnce() {
+    // Events stored but not yet broadcast. Emitted after each page so a
+    // mid-cycle failure never drops events that already reached the store.
+    let pending = []
     try {
-      let fresh = []
       // Drain every available page so a long outage catches up in one cycle.
       for (;;) {
         const page = await this.fetchPage()
         const normalized = page.events.map((raw) => normalize(raw, this.contractId))
-        fresh = fresh.concat(this.store.insertMany(normalized))
-        if (page.cursor) this.store.setMeta('cursor', page.cursor)
+        const inserted = this.store.insertMany(normalized)
+        if (inserted.length > 0) {
+          pending = pending.concat(inserted)
+          this.emit('events', inserted)
+        }
+        if (page.cursor) {
+          this.store.setMeta('cursor', page.cursor)
+        } else if (page.events.length === 0) {
+          // Older RPCs return no top-level cursor. Without one, an empty page
+          // would leave the cursor unset and every poll would restart from the
+          // oldest ledger. Persist the latest ledger as the resume point.
+          const resumeAt = page.latestLedger ?? this.rpcLatestLedger
+          if (resumeAt != null) this.store.setMeta('cursor', String(resumeAt))
+        }
         if (page.events.length < PAGE_LIMIT) break
       }
       this.lastPollAt = new Date().toISOString()
       this.lastError = null
-      if (fresh.length > 0) this.emit('events', fresh)
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err)
       this.log.error('[indexer] poll failed:', this.lastError)
+      if (pending.length > 0) this.emit('events', pending)
     }
   }
 
@@ -156,6 +170,6 @@ export class Ingester extends EventEmitter {
     // per-event paging tokens.
     const last = events[events.length - 1]
     const cursor = result?.cursor ?? last?.id ?? last?.pagingToken ?? null
-    return { events, cursor }
+    return { events, cursor, latestLedger: result?.latestLedger ?? null }
   }
 }

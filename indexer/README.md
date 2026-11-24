@@ -37,12 +37,13 @@ reached, the frontend polls RPC directly as it did before.
 | `CORS_ORIGIN` | `*` | `Access-Control-Allow-Origin` value |
 | `MAX_SSE_CLIENTS` | `1000` | Cap on concurrent stream subscribers |
 | `START_LEDGER` | node's `oldestLedger` | First ledger to ingest on an empty database |
+| `MAX_LAG_LEDGERS` | `100` | Maximum allowed gap between `rpcLatestLedger` and `latestIndexedLedger` before `/health` reports degraded |
 
 ## API
 
 | Endpoint | Response |
 |---|---|
-| `GET /health` | Ingest status: last poll, last error, RPC vs. indexed ledger, last retention gap, number of connected clients |
+| `GET /health` | Ingest status: last poll, last error, RPC vs. indexed ledger, current lag (`rpcLatestLedger - latestIndexedLedger`), last retention gap, number of connected clients. Returns `200` when healthy, `503` when degraded (e.g. recent poll error) or when lag exceeds `MAX_LAG_LEDGERS` |
 | `GET /events?agreementId=<64 hex>[&limit=&beforeLedger=]` | `{ events }`: stored events for one agreement, newest first, in the same shape RPC `getEvents` returns |
 | `GET /stats` | `{ agreements, milestonesLocked, latestIndexedLedger }` |
 | `GET /stream/events?agreementId=<64 hex>` | SSE: one `snapshot` event (full history), then an `events` event for each new batch |

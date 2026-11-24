@@ -17,7 +17,7 @@ const MAX_LIMIT = 1000
  * Every browser subscribes here instead of polling Soroban RPC itself; the
  * Ingester polls RPC once and this server fans results out.
  */
-export function createIndexerServer({ store, ingester, corsOrigin, maxClients }) {
+export function createIndexerServer({ store, ingester, corsOrigin, maxClients, maxLagLedgers = 100 }) {
   /** @type {Set<{ res: import('node:http').ServerResponse, agreementId: string | null, stats: boolean }>} */
   const clients = new Set()
 
@@ -53,16 +53,24 @@ export function createIndexerServer({ store, ingester, corsOrigin, maxClients })
     const url = new URL(req.url ?? '/', 'http://localhost')
 
     switch (url.pathname) {
-      case '/health':
-        return json(res, 200, {
-          status: ingester.lastError ? 'degraded' : 'ok',
+      case '/health': {
+        const rpcLatestLedger = ingester.rpcLatestLedger ?? 0
+        const latestIndexedLedger = store.stats().latestIndexedLedger ?? 0
+        const lag = rpcLatestLedger - latestIndexedLedger
+        const degraded = Boolean(ingester.lastError)
+        const lagging = lag > maxLagLedgers
+        return json(res, degraded || lagging ? 503 : 200, {
+          status: degraded ? 'degraded' : lagging ? 'lagging' : 'ok',
+          lag,
+          maxLagLedgers,
+          rpcLatestLedger,
+          latestIndexedLedger,
           lastPollAt: ingester.lastPollAt,
           lastError: ingester.lastError,
-          rpcLatestLedger: ingester.rpcLatestLedger,
-          latestIndexedLedger: store.stats().latestIndexedLedger,
           lastGap: JSON.parse(store.getMeta('last_gap') ?? 'null'),
           clients: clients.size,
         })
+      }
 
       case '/events': {
         const agreementId = parseAgreementId(url)
