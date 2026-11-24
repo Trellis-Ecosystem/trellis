@@ -1,0 +1,64 @@
+name: Indexer CI
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-ci.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: indexer-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test & startup smoke test
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: indexer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13'
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Startup smoke test
+        run: |
+          set -euo pipefail
+          # Boot the indexer briefly and confirm it starts without crashing.
+          # A non-zero exit or an early crash fails the job.
+          node src/server.js &
+          SERVER_PID=$!
+          sleep 5
+          if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "::error::Indexer process exited during startup smoke test."
+            wait "$SERVER_PID" || true
+            exit 1
+          fi
+          kill "$SERVER_PID" 2>/dev/null || true
+          wait "$SERVER_PID" 2>/dev/null || true
+          echo "Indexer started successfully."
