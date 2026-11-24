@@ -971,3 +971,8 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 </svg>
 
 </div>
+
+## Handsoff notes
+
+<!-- handsoff-issue-758 -->
+- #758: No way to clear a milestone deadline once set
