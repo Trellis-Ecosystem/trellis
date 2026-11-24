@@ -1,14 +1,14 @@
 {
-  "name": "trellis-indexer",
-  "private": true,
+  "name": "trls-indexer",
   "version": "0.1.0",
-  "description": "Persists Trellis contract events beyond the RPC retention window and relays them to browsers over SSE",
+  "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22.13"
-  },
+  "main": "src/server.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/server.js",
     "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }
