@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { nativeToScVal, xdr } from '@stellar/stellar-sdk'
-import { useContractInvoke } from '../hooks/useContractInvoke'
+import { DEFAULT_INCLUSION_FEE, useContractInvoke } from '../hooks/useContractInvoke'
 import { useWallet } from '../context/WalletContext'
 import { useToastActions } from '../hooks/useToast'
 import TransactionStatus from './TransactionStatus'
@@ -82,8 +82,7 @@ function toDateTimeLocal(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-const MAX_RETRIES = 3
-const BASE_FEE = 100_000
+const RETRY_FEE = String(2 * Number(DEFAULT_INCLUSION_FEE))
 
 export default function MilestoneActions({ milestone, agreement, onSuccess }: MilestoneActionsProps) {
   const wallet = useWallet()
@@ -372,17 +371,17 @@ export default function MilestoneActions({ milestone, agreement, onSuccess }: Mi
     setIsRetrying(true)
     try {
       reset()
-      if (pendingAction.current === 'lock_funds') await handleLockFunds()
-      else if (pendingAction.current === 'submit_work') await handleSubmitWork()
-      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease()
-      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute()
-      else if (pendingAction.current === 'release_partial') await handleReleasePartial()
-      else if (pendingAction.current === 'cancel_unfunded_milestone') await handleCancelUnfunded()
-      else if (pendingAction.current === 'set_milestone_deadline') await handleSetDeadline()
-      else if (pendingAction.current === 'expire_milestone') await handleExpire()
-      else if (pendingAction.current === 'resolve_dispute_refund') await handleResolveDispute(true)
-      else if (pendingAction.current === 'resolve_dispute_pay') await handleResolveDispute(false)
-      else if (pendingAction.current === 'resolve_dispute_split') await handleResolveSplit()
+      if (pendingAction.current === 'lock_funds') await handleLockFunds(RETRY_FEE)
+      else if (pendingAction.current === 'submit_work') await handleSubmitWork(RETRY_FEE)
+      else if (pendingAction.current === 'approve_and_release') await handleApproveRelease(RETRY_FEE)
+      else if (pendingAction.current === 'raise_dispute') await handleRaiseDispute(RETRY_FEE)
+      else if (pendingAction.current === 'release_partial') await handleReleasePartial(RETRY_FEE)
+      else if (pendingAction.current === 'cancel_unfunded_milestone') await handleCancelUnfunded(RETRY_FEE)
+      else if (pendingAction.current === 'set_milestone_deadline') await handleSetDeadline(RETRY_FEE)
+      else if (pendingAction.current === 'expire_milestone') await handleExpire(RETRY_FEE)
+      else if (pendingAction.current === 'resolve_dispute_refund') await handleResolveDispute(true, RETRY_FEE)
+      else if (pendingAction.current === 'resolve_dispute_pay') await handleResolveDispute(false, RETRY_FEE)
+      else if (pendingAction.current === 'resolve_dispute_split') await handleResolveSplit(RETRY_FEE)
     } catch (err) {
       toast.error({ title: 'Retry failed', message: err instanceof Error ? err.message : 'Unknown error' })
     } finally {

@@ -380,6 +380,34 @@ fn bench_get_agreement() {
     );
 }
 
+/// #634 — the single-milestone remaining-amount view should be far cheaper
+/// than `get_agreement`, which reads every milestone entry.
+fn bench_get_remaining_amount() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 11);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &n_milestones(&env, 3, 1_000),
+        &dispute_resolver,
+    );
+
+    env.cost_estimate().budget().reset_default();
+
+    client.get_remaining_amount(&id, &0u32);
+
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    println!(
+        r#"{{"benchmark":"get_remaining_amount","cpu_instructions":{},"memory_bytes":{}}}"#,
+        cpu, mem
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Main benchmark runner
 // ---------------------------------------------------------------------------
@@ -407,5 +435,7 @@ fn main() {
     bench_batch_lock_funds_50();
     println!(",");
     bench_get_agreement();
+    println!(",");
+    bench_get_remaining_amount();
     println!("]");
 }

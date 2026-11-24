@@ -77,7 +77,7 @@ fn test_init_parses_all_required_args() {
 fn test_lock_funds_parses_required_args() {
     let output = trellis_cmd()
         .args([
-            "lock",
+            "lock-funds",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -225,6 +225,51 @@ fn test_invalid_hex_agreement_id() {
     );
 }
 
+/// #646: the confirmation prompt goes to stderr, so a `--json` run answered
+/// with `n` leaves stdout free of prompt text.
+#[test]
+fn test_json_confirmation_prompt_goes_to_stderr() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = trellis_cmd()
+        .args([
+            "--json",
+            "lock-funds",
+            "--agreement-id",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "--milestone-id",
+            "0",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to execute trellis");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(b"n\n")
+        .expect("failed to write to stdin");
+    let output = child.wait_with_output().expect("failed to wait for trellis");
+
+    assert!(!output.status.success(), "answering `n` should abort");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().is_empty() || serde_json::from_str::<serde_json::Value>(stdout.trim()).is_ok(),
+        "stdout must be empty or a JSON envelope\nstdout: {stdout}"
+    );
+    assert!(!stdout.contains("Continue?"), "prompt leaked to stdout: {stdout}");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Continue? [y/N]"),
+        "prompt should be on stderr\nstderr: {stderr}"
+    );
+}
+
 #[test]
 fn test_missing_required_env_vars() {
     let output = Command::new(env!("CARGO_BIN_EXE_trellis"))
@@ -280,7 +325,7 @@ fn test_init_with_multiple_milestones() {
 fn test_submit_work_with_proof_uri() {
     let output = trellis_cmd()
         .args([
-            "submit",
+            "submit-work",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -303,7 +348,7 @@ fn test_submit_work_with_proof_uri() {
 fn test_raise_dispute_requires_caller() {
     let output = trellis_cmd()
         .args([
-            "dispute",
+            "raise-dispute",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -326,7 +371,7 @@ fn test_raise_dispute_requires_caller() {
 fn test_resolve_dispute_refund_flag() {
     let output = trellis_cmd()
         .args([
-            "resolve",
+            "resolve-dispute",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-id",
@@ -348,7 +393,7 @@ fn test_resolve_dispute_refund_flag() {
 fn test_batch_lock_with_multiple_ids() {
     let output = trellis_cmd()
         .args([
-            "batch-lock",
+            "batch-lock-funds",
             "--agreement-id",
             "0000000000000000000000000000000000000000000000000000000000000001",
             "--milestone-ids",
@@ -368,7 +413,7 @@ fn test_batch_lock_with_multiple_ids() {
 #[test]
 fn test_completion_command_generates_shell_completions() {
     let output = trellis_cmd()
-        .args(["completion", "--shell", "bash"])
+        .args(["completion", "bash"])
         .output()
         .expect("failed to execute trellis");
 
@@ -593,7 +638,7 @@ fn test_resolve_split_dry_run() {
 #[test]
 fn test_resolve_split_rejects_mixed_and_negative_flags() {
     let mixed = dry_run(&[
-        "resolve",
+        "resolve-dispute",
         "--refund-to-payer",
         "--payer-amount",
         "1",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useId, useMemo } from 'react'
 
 export interface MilestoneInput {
   amount: string
@@ -61,6 +61,9 @@ export function validateMilestones(milestones: MilestoneInput[]): MilestoneValid
 }
 
 export default function MilestoneBuilder({ milestones, onChange, onValidationChange }: MilestoneBuilderProps) {
+  // Stable base id so each row's label/input/error can be linked uniquely.
+  const baseId = useId()
+
   // Errors and duplicates are derived from the current array on every render,
   // so they stay attached to the correct row after a remove or reorder.
   const { errors, duplicates, isValid } = useMemo(
@@ -119,7 +122,19 @@ export default function MilestoneBuilder({ milestones, onChange, onValidationCha
       )}
 
       <div className="space-y-3">
-        {milestones.map((milestone, index) => (
+        {milestones.map((milestone, index) => {
+          const amountId = `${baseId}-amount-${index}`
+          const amountErrorId = `${baseId}-amount-error-${index}`
+          const descriptionId = `${baseId}-description-${index}`
+          const amountError = errors[index]
+          const isDuplicate = duplicates.has(index) && !amountError
+          const amountDescribedBy = amountError
+            ? amountErrorId
+            : isDuplicate
+              ? `${baseId}-amount-duplicate-${index}`
+              : undefined
+
+          return (
           <div
             key={index}
             className="rounded-lg border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-4 space-y-3"
@@ -169,37 +184,33 @@ export default function MilestoneBuilder({ milestones, onChange, onValidationCha
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">Amount</label>
+              <label htmlFor={amountId} className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">Amount</label>
               <input
+                id={amountId}
                 type="text"
                 placeholder="100"
                 value={milestone.amount}
                 onChange={(e) => updateMilestone(index, 'amount', e.target.value)}
+                aria-invalid={amountError ? true : undefined}
+                aria-describedby={amountDescribedBy}
                 className={`w-full px-3 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border ${
                   errors[index] ? 'border-red-500' : 'border-navy-600'
                 } text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400`}
               />
               {errors[index] && (
-                <p className="mt-1 text-xs text-red-400">{errors[index]}</p>
+                <p id={amountErrorId} role="alert" className="mt-1 text-xs text-red-400">{errors[index]}</p>
               )}
               {duplicates.has(index) && !errors[index] && (
-                <p className="mt-1 text-xs text-amber-400">⚠️ This amount is duplicated in another milestone</p>
+                <p id={`${baseId}-amount-duplicate-${index}`} role="alert" className="mt-1 text-xs text-amber-400">⚠️ This amount is duplicated in another milestone</p>
               )}
             </div>
 
             <div>
-              <label className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">Description</label>
+              <label htmlFor={descriptionId} className="block text-sm text-gray-400 dark:text-gray-400 light:text-gray-600 mb-1">Description</label>
               <input
+                id={descriptionId}
                 type="text"
                 placeholder="Describe this milestone"
                 value={milestone.description}
                 onChange={(e) => updateMilestone(index, 'description', e.target.value)}
-                className="w-full px-3 py-2 bg-navy-700 dark:bg-navy-700 light:bg-gray-100 border border-navy-600 dark:border-navy-600 light:border-gray-300 text-white dark:text-white light:text-gray-900 rounded-lg focus:outline-none focus:border-cyan-400"
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
+                className="w-full
