@@ -514,7 +514,7 @@ Every state transition emits an on-chain event. The <code>agreement_created</cod
 <details>
 <summary>🧬 <strong>Native ScVal Encoding</strong></summary>
 <br />
-The CLI builds Soroban <code>ScVal</code> arguments natively in Rust instead of relying on the <code>stellar</code> CLI's JSON-to-XDR conversion. Scalar arguments (addresses, <code>i128</code> amounts, symbols) are encoded by the scalar encoder, and the milestone vector passed to <code>init</code> is encoded by a dedicated builder that mirrors the contract's exact <code>#[contracttype]</code> layout: each <code>Milestone</code> is a struct-of-fields map, <code>amount</code> is an <code>ScVal::I128</code>, and <code>status</code> is encoded as the <code>EscrowStatus::Pending</code> enum tag. The resulting <code>Vec&lt;Milestone&gt;</code> <code>ScVal</code> is cross-checked against what the <code>stellar</code> CLI produces for the same input.
+<em>Planned — not yet used by any command.</em> The CLI contains native Rust encoders for Soroban <code>ScVal</code> arguments: a scalar encoder (addresses, <code>i128</code> amounts, symbols) and a milestone-vector builder that mirrors the contract's exact <code>#[contracttype]</code> layout (each <code>Milestone</code> is a struct-of-fields map, <code>amount</code> is an <code>ScVal::I128</code>, and <code>status</code> is the <code>EscrowStatus::Pending</code> enum tag). Commands still pass their arguments to <code>stellar contract invoke</code>, which does the JSON-to-XDR conversion; switching to the native encoders is part of the <a href="#-open-for-contribution">native RPC client</a> work.
 </details>
 
 <details>
@@ -726,6 +726,25 @@ trellis --as payee decline-milestone --agreement-id <hex-id> --milestone-id 0
 All **11 CLI commands** are implemented — `init`, `lock-funds`, `batch-lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `extend-ttl`, `deadline set|get`, `expire`, `status`, and `total-amount`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 All **9 escrow commands** are implemented — `init`, `lock-funds`, `submit-work`, `approve-release`, `raise-dispute`, `resolve-dispute`, `cancel-milestone`, `status`, and `milestone-status`. The CLI also provides two utility commands: `completion` (see [Shell Completions](#shell-completions)) and `keys` (manage secret keys in the OS keychain). See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full command reference.
 
+#### Storing a Secret Key
+
+`trellis keys add` never takes the secret seed as a positional argument — a
+command-line argument would land in your shell history and in the process
+argv (visible to `ps`). Instead the seed is read from **stdin** or from a
+**file**:
+
+```bash
+# Read the seed from stdin (it is not echoed or recorded in history)
+echo S... | trellis keys add alice
+
+# Or read it from a file (keep it 0600)
+trellis keys add alice --key-file ~/.keys/alice
+```
+
+Passing the seed positionally (`trellis keys add alice S...`) is rejected by
+clap, and a value that is not a valid secret seed is refused with a clear
+error before anything is stored.
+
 `trellis health` checks the configured RPC endpoint natively (`getHealth` + `getLatestLedger` over HTTP). It needs only an RPC URL, with no `stellar` binary, contract ID or source key, and it supports `--json` / `--human-readable` / `--quiet` / `--dry-run`.
 
 #### Global Output Flags
@@ -746,12 +765,13 @@ trellis status --agreement-id <hex-id> --quiet
 trellis status --agreement-id <hex-id> --human-readable   # or -H
 ```
 
-Read-only queries (`status`, `milestone-status`) decode the raw XDR `ScVal`
-returned by `simulateTransaction` natively in the CLI — no `stellar` binary is
-required for these commands. The decoded result is rendered through the same
+Read-only queries (`status`, `milestone-status`) run through
+`stellar contract invoke` like every other contract command, so they need the
+`stellar` binary on `PATH`. Their output is rendered through the same
 `render_json`/`render_human` paths as every other command, so `--json`,
-`--human-readable`, and `--quiet` all behave identically whether or not the
-Stellar CLI is installed.
+`--human-readable`, and `--quiet` behave identically. Decoding the
+`simulateTransaction` result natively, without the `stellar` binary, is planned
+as part of the [native RPC client](#-open-for-contribution) work.
 
 Native account sequence-number lookup is implemented in
 `cli/trellis_cli/src/rpc.rs`: the account's ledger key is encoded and fetched
@@ -785,8 +805,10 @@ installed — useful for previewing command construction in CI or on a fresh
 checkout.
 
 Milestone arguments passed to `init` (e.g. `--milestones "1000,2000"`) are
-encoded to Soroban `ScVal` natively by the CLI, matching the contract's
-`Vec<Milestone>` layout — no `stellar` CLI conversion step is involved.
+converted by the CLI to the JSON form of the contract's `Vec<Milestone>`
+layout, and the `stellar` CLI encodes that JSON to Soroban `ScVal`. Encoding
+the milestones natively is planned as part of the
+[native RPC client](#-open-for-contribution) work.
 
 `--json` takes priority over `--human-readable` when both are passed.
 
@@ -843,12 +865,13 @@ stored, never keys. Set `TRELLIS_HISTORY_FILE` to use a different file, or
 the CLI prints a warning but the command itself still succeeds.
 #### Network Passphrase Verification
 
-Before any command runs, the CLI calls the configured RPC endpoint's `getNetwork`
-method and compares the returned `passphrase` against `--network-passphrase`
-(or `STELLAR_NETWORK_PASSPHRASE`). If they differ, the command fails early with
-an error naming both values, so a mismatched `--rpc-url` (e.g. mainnet RPC with a
-testnet passphrase) is caught immediately instead of surfacing as a confusing
-downstream failure. This check is skipped under `--dry-run`.
+*Planned — not yet run by any command.* The CLI does not call the RPC
+endpoint's `getNetwork` method before running a command, so a mismatched
+`--rpc-url` and `--network-passphrase` (e.g. mainnet RPC with a testnet
+passphrase) surfaces as a failure from the `stellar` CLI. The comparison itself
+is implemented in `cli/trellis_cli/src/config.rs`
+(`verify_network_passphrase`), but it is not called during command execution
+yet.
 
 #### Loading Configuration From a Specific File
 
@@ -908,7 +931,6 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 - Full state machine — happy path, dispute resolution, and cancellation paths
 - Contract test suite - 83 tests in the Soroban sandbox (see the [contract test badge](.github/badges/contract-tests.json))
 - Full CLI — all 9 escrow commands wired end-to-end with JSON, dry-run, and human-readable output modes
-- Native ScVal encoding — scalar arguments and the `Vec<Milestone>` argument to `init` are built directly in Rust
 - Deployed live on Stellar testnet — `init` and `status` verified against the live contract
 - Frontend dashboard — 5 pages, 28 components, 10 custom hooks, animated particle network background
 - Wallet connect — Freighter wallet integration with connection states

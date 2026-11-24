@@ -1,0 +1,62 @@
+[
+  {
+    "name": "initialize",
+    "cpu_instructions": 125000,
+    "memory_bytes": 4096
+  },
+  {
+    "name": "deposit",
+    "cpu_instructions": 185000,
+    "memory_bytes": 8192
+  },
+  {
+    "name": "withdraw",
+    "cpu_instructions": 210000,
+    "memory_bytes": 8192
+  },
+  {
+    "name": "transfer",
+    "cpu_instructions": 165000,
+    "memory_bytes": 6144
+  },
+  {
+    "name": "balance",
+    "cpu_instructions": 45000,
+    "memory_bytes": 2048
+  },
+  {
+    "name": "get_config",
+    "cpu_instructions": 38000,
+    "memory_bytes": 2048
+  },
+  {
+    "name": "update_config",
+    "cpu_instructions": 95000,
+    "memory_bytes": 4096
+  },
+  {
+    "name": "pause",
+    "cpu_instructions": 72000,
+    "memory_bytes": 3072
+  },
+  {
+    "name": "unpause",
+    "cpu_instructions": 72000,
+    "memory_bytes": 3072
+  },
+  {
+    "name": "batch_transfer",
+    "cpu_instructions": 420000,
+    "memory_bytes": 16384
+  },
+  {
+    "name": "batch_withdraw",
+    "cpu_instructions": 510000,
+    "memory_bytes": 18432
+  },
+  {
+    "name": "query_stats",
+    "cpu_instructions": 56000,
+    "memory_bytes": 2560
+  }
+]

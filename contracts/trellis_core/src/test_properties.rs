@@ -506,6 +506,13 @@ enum FuzzOp {
     ResolveRefund,
     ResolveRelease,
     Cancel,
+    /// Release part of a milestone's remaining escrow to the payee.
+    ReleasePartial(i128),
+    /// Resolve a dispute by splitting the remaining escrow between payer and
+    /// payee.
+    ResolveSplit,
+    /// Advance the ledger past the milestone's deadline and expire it.
+    Expire,
 }
 
 fn fuzz_op_strategy() -> impl Strategy<Value = FuzzOp> {
@@ -517,6 +524,9 @@ fn fuzz_op_strategy() -> impl Strategy<Value = FuzzOp> {
         Just(FuzzOp::ResolveRefund),
         Just(FuzzOp::ResolveRelease),
         Just(FuzzOp::Cancel),
+        (1i128..=10_000i128).prop_map(FuzzOp::ReleasePartial),
+        Just(FuzzOp::ResolveSplit),
+        Just(FuzzOp::Expire),
     ]
 }
 
@@ -544,18 +554,22 @@ proptest! {
         let milestones = milestones_from_amounts(&env, &amounts);
         client.init(&id, &payer, &payee, &token_address, &milestones, &dispute_resolver);
 
-        // Local shadow model of each milestone's status, mirroring the
-        // contract's authorized state machine — not read back from the
-        // contract, so a divergence between this model and on-chain state
-        // shows up as a wrong `expected_balance` rather than being masked.
-        // `amounts` is generated with 2..=4 entries; a fixed-size array
-        // avoids needing an allocator in this `#![no_std]` crate.
+        // Local shadow model of each milestone's status and of how much of
+        // its escrow is still locked, mirroring the contract's authorized
+        // state machine — not read back from the contract, so a divergence
+        // between this model and on-chain state shows up as a wrong
+        // `expected_balance` rather than being masked. `amounts` is generated
+        // with 2..=4 entries; fixed-size arrays avoid needing an allocator in
+        // this `#![no_std]` crate.
         let mut status = [
             EscrowStatus::Pending,
             EscrowStatus::Pending,
             EscrowStatus::Pending,
             EscrowStatus::Pending,
         ];
+        // Amount still held in escrow for each milestone. Only counted toward
+        // `expected_balance` while the milestone is in a fund-holding state.
+        let mut remaining = [0i128; 4];
         let mut expected_balance: i128 = 0;
 
         for (raw_index, op) in ops {
@@ -568,10 +582,15 @@ proptest! {
                     | (EscrowStatus::Pending, FuzzOp::Cancel)
                     | (EscrowStatus::Funded, FuzzOp::Submit)
                     | (EscrowStatus::Funded, FuzzOp::Dispute)
+                    | (EscrowStatus::Funded, FuzzOp::ReleasePartial(_))
+                    | (EscrowStatus::Funded, FuzzOp::Expire)
                     | (EscrowStatus::WorkSubmitted, FuzzOp::Approve)
                     | (EscrowStatus::WorkSubmitted, FuzzOp::Dispute)
+                    | (EscrowStatus::WorkSubmitted, FuzzOp::ReleasePartial(_))
+                    | (EscrowStatus::WorkSubmitted, FuzzOp::Expire)
                     | (EscrowStatus::Disputed, FuzzOp::ResolveRefund)
                     | (EscrowStatus::Disputed, FuzzOp::ResolveRelease)
+                    | (EscrowStatus::Disputed, FuzzOp::ResolveSplit)
             );
 
             if !applies {
@@ -582,6 +601,7 @@ proptest! {
                 FuzzOp::Lock => {
                     client.lock_funds(&id, &mid);
                     status[i] = EscrowStatus::Funded;
+                    remaining[i] = amounts[i];
                     expected_balance += amounts[i];
                 }
                 FuzzOp::Submit => {
@@ -591,7 +611,8 @@ proptest! {
                 FuzzOp::Approve => {
                     client.approve_and_release(&id, &mid);
                     status[i] = EscrowStatus::Completed;
-                    expected_balance -= amounts[i];
+                    expected_balance -= remaining[i];
+                    remaining[i] = 0;
                 }
                 FuzzOp::Dispute => {
                     client.raise_dispute(&payer, &id, &mid, &None);
@@ -600,16 +621,48 @@ proptest! {
                 FuzzOp::ResolveRefund => {
                     client.resolve_dispute(&id, &mid, &true);
                     status[i] = EscrowStatus::Refunded;
-                    expected_balance -= amounts[i];
+                    expected_balance -= remaining[i];
+                    remaining[i] = 0;
                 }
                 FuzzOp::ResolveRelease => {
                     client.resolve_dispute(&id, &mid, &false);
                     status[i] = EscrowStatus::Completed;
-                    expected_balance -= amounts[i];
+                    expected_balance -= remaining[i];
+                    remaining[i] = 0;
                 }
                 FuzzOp::Cancel => {
                     client.cancel_unfunded_milestone(&id, &mid);
                     status[i] = EscrowStatus::Cancelled;
+                }
+                FuzzOp::ReleasePartial(requested) => {
+                    // Clamp the requested amount to what is actually still
+                    // locked; the contract rejects over-releases, so only
+                    // release a legal amount.
+                    let released = requested.min(remaining[i]);
+                    if released <= 0 {
+                        continue;
+                    }
+                    client.release_partial(&id, &mid, &released);
+                    remaining[i] -= released;
+                    expected_balance -= released;
+                    // The remainder (if any) stays locked; the milestone
+                    // remains in a fund-holding state.
+                }
+                FuzzOp::ResolveSplit => {
+                    client.resolve_dispute_split(&id, &mid);
+                    status[i] = EscrowStatus::Completed;
+                    expected_balance -= remaining[i];
+                    remaining[i] = 0;
+                }
+                FuzzOp::Expire => {
+                    // Set a deadline, advance the ledger past it, then expire.
+                    let deadline = env.ledger().timestamp() + 1;
+                    client.set_milestone_deadline(&id, &mid, &deadline);
+                    env.ledger().set_timestamp(deadline + 1);
+                    client.expire_milestone(&id, &mid);
+                    status[i] = EscrowStatus::Refunded;
+                    expected_balance -= remaining[i];
+                    remaining[i] = 0;
                 }
             }
 

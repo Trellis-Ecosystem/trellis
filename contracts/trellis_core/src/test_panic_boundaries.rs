@@ -314,9 +314,19 @@ proptest! {
         n_milestones in 1u32..=4,
         milestone_id in any::<u32>(),
         seed in any::<u8>(),
+        amount in any::<i128>(),
+        payer_amount in any::<i128>(),
+        payee_amount in any::<i128>(),
+        deadline in any::<u64>(),
+        raw_ids in prop::collection::vec(any::<u32>(), 0..=4),
     ) {
         let (env, payer, payee, resolver, token, client) = setup_mocked();
         let id = init_agreement(&client, &env, seed, &payer, &payee, &token, &resolver, n_milestones);
+
+        let mut ids: Vec<u32> = Vec::new(&env);
+        for i in raw_ids {
+            ids.push_back(i);
+        }
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
         assert_no_trap!(client.try_submit_work(&id, &milestone_id, &None), "submit_work");
@@ -325,6 +335,21 @@ proptest! {
         assert_no_trap!(client.try_resolve_dispute(&id, &milestone_id, &true), "resolve_dispute");
         assert_no_trap!(client.try_cancel_unfunded_milestone(&id, &milestone_id), "cancel");
         assert_no_trap!(client.try_get_milestone(&id, &milestone_id), "get_milestone");
+        assert_no_trap!(client.try_release_partial(&id, &milestone_id, &amount), "release_partial");
+        assert_no_trap!(
+            client.try_resolve_dispute_split(&id, &milestone_id, &payer_amount, &payee_amount),
+            "resolve_dispute_split"
+        );
+        assert_no_trap!(client.try_batch_lock_funds(&id, &ids), "batch_lock_funds");
+        assert_no_trap!(
+            client.try_set_milestone_deadline(&id, &milestone_id, &deadline),
+            "set_milestone_deadline"
+        );
+        assert_no_trap!(client.try_expire_milestone(&id, &milestone_id), "expire_milestone");
+        assert_no_trap!(
+            client.try_get_milestone_deadline(&id, &milestone_id),
+            "get_milestone_deadline"
+        );
     }
 
     /// Calling entrypoints against a randomly seeded (and almost certainly
@@ -333,9 +358,19 @@ proptest! {
     fn fuzz_arbitrary_agreement_id_never_traps(
         seed in any::<u8>(),
         milestone_id in any::<u32>(),
+        amount in any::<i128>(),
+        payer_amount in any::<i128>(),
+        payee_amount in any::<i128>(),
+        deadline in any::<u64>(),
+        raw_ids in prop::collection::vec(any::<u32>(), 0..=4),
     ) {
         let (env, payer, payee, _resolver, _token, client) = setup_mocked();
         let id = agreement_id(&env, seed);
+
+        let mut ids: Vec<u32> = Vec::new(&env);
+        for i in raw_ids {
+            ids.push_back(i);
+        }
 
         assert_no_trap!(client.try_lock_funds(&id, &milestone_id), "lock_funds");
         assert_no_trap!(client.try_submit_work(&id, &milestone_id, &None), "submit_work");
@@ -346,16 +381,47 @@ proptest! {
         assert_no_trap!(client.try_get_agreement(&id), "get_agreement");
         assert_no_trap!(client.try_get_milestone(&id, &milestone_id), "get_milestone");
         assert_no_trap!(client.try_extend_agreement_ttl(&id, &payer), "extend_agreement_ttl");
+        assert_no_trap!(client.try_release_partial(&id, &milestone_id, &amount), "release_partial");
+        assert_no_trap!(
+            client.try_resolve_dispute_split(&id, &milestone_id, &payer_amount, &payee_amount),
+            "resolve_dispute_split"
+        );
+        assert_no_trap!(client.try_batch_lock_funds(&id, &ids), "batch_lock_funds");
+        assert_no_trap!(
+            client.try_set_milestone_deadline(&id, &milestone_id, &deadline),
+            "set_milestone_deadline"
+        );
+        assert_no_trap!(client.try_expire_milestone(&id, &milestone_id), "expire_milestone");
+        assert_no_trap!(
+            client.try_get_milestone_deadline(&id, &milestone_id),
+            "get_milestone_deadline"
+        );
     }
 
     /// A random proof URI of arbitrary length / content must not trap
-    /// `submit_work` — it fails earlier on state, but the string handling
-    /// itself must be panic-free.
+    /// `submit_work`. The milestone is funded first so the state check passes
+    /// and the input actually reaches the proof-URI length check; the strategy
+    /// spans 0..=1024 bytes so lengths above `MAX_PROOF_URI_LEN` (512) are
+    /// generated. The result must be either success or `ProofUriTooLong`.
     #[test]
-    fn fuzz_arbitrary_proof_uri_never_traps(proof in ".*") {
+    fn fuzz_arbitrary_proof_uri_never_traps(proof in ".{0,1024}") {
         let (env, payer, payee, resolver, token, client) = setup_mocked();
         let id = init_agreement(&client, &env, 77, &payer, &payee, &token, &resolver, 1);
+        // Fund the milestone so `submit_work` gets past the status check and
+        // reaches the URI filter/length logic.
+        client.lock_funds(&id, &0);
         let uri = Some(soroban_sdk::String::from_str(&env, &proof));
-        assert_no_trap!(client.try_submit_work(&id, &0, &uri), "submit_work");
+        let result = client.try_submit_work(&id, &0, &uri);
+        assert_no_trap!(result, "submit_work");
+        prop_assert!(
+            matches!(result, Ok(Ok(())) | Err(Ok(TrellisError::ProofUriTooLong))),
+            "submit_work returned an unexpected result for a {}-byte URI: {:?}",
+            proof.len(),
+            result
+        );
+        // Inputs beyond the limit must be rejected with the typed error.
+        if proof.len() > 512 {
+            prop_assert_eq!(result, Err(Ok(TrellisError::ProofUriTooLong)));
+        }
     }
 }

@@ -83,7 +83,7 @@ impl Network {
 ///
 /// Values are loaded from environment variables with Soroban Testnet defaults
 /// so the tool works out-of-the-box for local development.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Soroban RPC endpoint.
     /// Env: `STELLAR_RPC_URL`
@@ -108,6 +108,25 @@ pub struct Config {
     /// `TRELLIS_SOURCE_KEY_FILE`, `TRELLIS_SOURCE_KEY`, or `unset`. Only
     /// used for diagnostics (`trellis config`, #485).
     pub source_key_origin: &'static str,
+}
+
+/// Written by hand so a `{:?}` of a `Config` never prints a raw secret seed
+/// (#641). Named `stellar keys` identities are not secret and are shown.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source_key = if is_secret_seed(&self.source_key) {
+            "<redacted>"
+        } else {
+            self.source_key.as_str()
+        };
+        f.debug_struct("Config")
+            .field("rpc_url", &self.rpc_url)
+            .field("network_passphrase", &self.network_passphrase)
+            .field("contract_id", &self.contract_id)
+            .field("source_key", &source_key)
+            .field("source_key_origin", &self.source_key_origin)
+            .finish()
+    }
 }
 
 /// Number of characters in a Stellar strkey address (`C…` / `G…` / `S…`),
@@ -155,30 +174,78 @@ pub fn validate_contract_id(id: &str) -> Result<(), String> {
 /// `ws`, …) and any URL with an empty host is rejected here with a clear
 /// message.
 ///
-/// This checks the URL's *shape* only. The cleartext-`http://`-to-a-remote-host
-/// policy lives solely in [`check_rpc_transport`], which knows about the
-/// `--unsafe-rpc` flag (#156, #636). Keeping the policy out of here means
-/// `Config::validate` never rejects a URL that `--unsafe-rpc` would allow.
-///
-/// Returns the normalized URL on success.
-pub fn validate_rpc_url(raw: &str) -> Result<String, String> {
+/// Cleartext `http://` to a non-loopback host is refused by default to
+/// prevent a compromised `.env` from silently redirecting traffic to an
+/// unauthenticated endpoint. Pass `unsafe_rpc = true` to downgrade the hard
+/// error to a printed warning (useful for development devnets). This mirrors
+/// the `--unsafe-rpc` CLI flag (#156).
+pub fn validate_rpc_url(raw: &str, unsafe_rpc: bool) -> Result<Option<String>, String> {
+    let shown = redact_url(raw);
     let parsed =
-        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {shown:?} is not a valid URL: {e}"))?;
 
     match parsed.scheme() {
         "http" | "https" => {}
         other => {
             return Err(format!(
-                "RPC URL scheme must be http or https, got {other:?} (in {raw:?})"
+                "RPC URL scheme must be http or https, got {other:?} (in {shown:?})"
             ));
         }
     }
 
     if parsed.host_str().map_or(true, str::is_empty) {
-        return Err(format!("RPC URL {raw:?} is missing a host"));
+        return Err(format!("RPC URL {shown:?} is missing a host"));
     }
 
-    Ok(parsed.to_string())
+    // Guard against cleartext HTTP to non-loopback hosts (#156).
+    if parsed.scheme() == "http" {
+        let host = parsed.host_str().unwrap_or("");
+        let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+        if !is_loopback {
+            let msg = format!(
+                "Warning: RPC URL {shown:?} uses cleartext HTTP to a non-loopback host. \
+                 Traffic may be intercepted. Use https:// or pass --unsafe-rpc to suppress this error."
+            );
+            if unsafe_rpc {
+                return Ok(Some(msg));
+            } else {
+                return Err(msg);
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// A copy of the URL `raw` that is safe to print (#642).
+///
+/// Hosted Soroban RPC providers often put an API key in the URL, so the
+/// userinfo (`user:password@`) is removed and every query-string value is
+/// replaced with `***` (a bare `?token` is replaced as a whole). A key
+/// embedded in a path segment (e.g. `https://rpc.example/v1/<key>`) can't be
+/// told apart from an ordinary path and is left as-is. A URL with neither
+/// userinfo nor a query, or one that doesn't parse, is returned unchanged.
+pub fn redact_url(raw: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if parsed.username().is_empty() && parsed.password().is_none() && parsed.query().is_none() {
+        return raw.to_string();
+    }
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    if let Some(query) = parsed.query() {
+        let masked = query
+            .split('&')
+            .map(|pair| match pair.split_once('=') {
+                Some((key, _)) => format!("{key}=***"),
+                None => "***".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        parsed.set_query(Some(&masked));
+    }
+    parsed.to_string()
 }
 
 /// Refuse cleartext `http://` to a non-loopback RPC host (#156).
@@ -191,8 +258,9 @@ pub fn validate_rpc_url(raw: &str) -> Result<String, String> {
 /// Returns `Ok(None)` when no warning is needed, `Ok(Some(warning))` when
 /// cleartext was allowed by the flag, and `Err(message)` when it was not.
 pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<String>, String> {
+    let shown = redact_url(raw);
     let parsed =
-        url::Url::parse(raw).map_err(|e| format!("RPC URL {raw:?} is not a valid URL: {e}"))?;
+        url::Url::parse(raw).map_err(|e| format!("RPC URL {shown:?} is not a valid URL: {e}"))?;
     if parsed.scheme() != "http" {
         return Ok(None);
     }
@@ -208,17 +276,92 @@ pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<Str
         Ok(None)
     } else if allow_insecure {
         Ok(Some(format!(
-            "warning: using cleartext HTTP RPC endpoint {raw} (--unsafe-rpc). \
+            "warning: using cleartext HTTP RPC endpoint {shown} (--unsafe-rpc). \
              Responses from this endpoint are not authenticated and can be \
              tampered with — never use this against mainnet."
         )))
     } else {
         Err(format!(
-            "Error: refusing to use insecure RPC URL {raw:?}. Non-localhost \
+            "Error: refusing to use insecure RPC URL {shown:?}. Non-localhost \
              endpoints must use https://. Pass --unsafe-rpc to allow http:// \
              for local development."
         ))
     }
+}
+
+/// Warnings for an explicitly chosen `--network` preset that env vars
+/// override (#654).
+///
+/// `Config::resolve` lets `STELLAR_RPC_URL` / `STELLAR_NETWORK_PASSPHRASE` win
+/// over the preset, so a `.env` holding testnet values silently turns
+/// `--network mainnet` into a testnet run. When the network was typed (it is
+/// `None` for the default, which stays silent) this names each env var that
+/// replaces a preset value, and warns when only one of the URL / passphrase
+/// pair is overridden, since the other still comes from the preset.
+pub fn network_override_warnings(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    network_override_warnings_from(
+        explicit_network,
+        cli_rpc_url,
+        cli_network_passphrase,
+        std::env::var("STELLAR_RPC_URL").ok().as_deref(),
+        std::env::var("STELLAR_NETWORK_PASSPHRASE").ok().as_deref(),
+    )
+}
+
+/// [`network_override_warnings`] with the env var values passed in, so it can
+/// be tested without touching the process environment.
+fn network_override_warnings_from(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+    env_rpc_url: Option<&str>,
+    env_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(network) = explicit_network else {
+        return warnings;
+    };
+    let Some(preset) = network.preset() else {
+        return warnings;
+    };
+    let name = format!("{network:?}").to_lowercase();
+
+    let env_rpc_url = env_rpc_url.filter(|v| *v != preset.rpc_url);
+    let env_network_passphrase =
+        env_network_passphrase.filter(|v| *v != preset.network_passphrase);
+
+    if let (None, Some(url)) = (cli_rpc_url, env_rpc_url) {
+        warnings.push(format!(
+            "Warning: --network {name} preset RPC URL is overridden by STELLAR_RPC_URL={url}"
+        ));
+    }
+    if let (None, Some(passphrase)) = (cli_network_passphrase, env_network_passphrase) {
+        warnings.push(format!(
+            "Warning: --network {name} preset passphrase is overridden by \
+             STELLAR_NETWORK_PASSPHRASE={passphrase:?}"
+        ));
+    }
+
+    let url_overridden = cli_rpc_url.is_some() || env_rpc_url.is_some();
+    let passphrase_overridden =
+        cli_network_passphrase.is_some() || env_network_passphrase.is_some();
+    if url_overridden != passphrase_overridden {
+        let (overridden, kept) = if url_overridden {
+            ("RPC URL", "passphrase")
+        } else {
+            ("passphrase", "RPC URL")
+        };
+        warnings.push(format!(
+            "Warning: only the {overridden} is overridden; it is paired with the \
+             --network {name} preset {kept}"
+        ));
+    }
+
+    warnings
 }
 
 impl Config {
@@ -287,8 +430,7 @@ impl Config {
                     .to_string()
             })?;
 
-        let contract_id = std::env::var("TRELLIS_CONTRACT_ID")
-            .unwrap_or_else(|_| "UNSET_CONTRACT_ID".to_string());
+        let contract_id = contract_id_value(std::env::var("TRELLIS_CONTRACT_ID").ok());
 
         let (source_key, source_key_origin) = match role {
             None => resolve_source_key_value(
@@ -393,6 +535,15 @@ impl Config {
     }
 }
 
+/// The contract ID from a raw `TRELLIS_CONTRACT_ID` value, trimmed. A missing,
+/// blank or whitespace-only value becomes the `UNSET_CONTRACT_ID` sentinel
+/// that `validate()` reports by name.
+fn contract_id_value(raw: Option<String>) -> String {
+    raw.map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "UNSET_CONTRACT_ID".to_string())
+}
+
 /// An env var name paired with its value, if set.
 struct KeyVar {
     name: &'static str,
@@ -443,7 +594,13 @@ fn resolve_source_key_value(
             }
             read_source_key_file(&path, origin).map(|k| Some((k, origin)))
         }
-        None => Ok(env_key.value.map(|k| (k, env_key.name))),
+        // A blank or whitespace-only value is treated as unset, so `validate()`
+        // names the missing variable instead of `--source ""` reaching `stellar`.
+        None => Ok(env_key
+            .value
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .map(|k| (k, env_key.name))),
     }
 /// Response body from a Soroban RPC `getNetwork` call.
 ///
@@ -700,6 +857,68 @@ mod tests {
     fn source_key_none_when_nothing_configured() {
         let key = resolve_source_key_value(None, file_var(None), key_var(None)).unwrap();
         assert_eq!(key, None);
+    }
+
+    #[test]
+    fn debug_output_redacts_secret_seed() {
+        let seed = format!("S{}", "A".repeat(STRKEY_LEN - 1));
+        let printed = format!("{:?}", config_with(&valid_contract_id(), &seed));
+        assert!(!printed.contains(&seed), "{printed}");
+        assert!(printed.contains("source_key: \"<redacted>\""), "{printed}");
+
+        let printed = format!("{:?}", config_with(&valid_contract_id(), "alice"));
+        assert!(printed.contains("source_key: \"alice\""), "{printed}");
+    }
+
+    #[test]
+    fn redact_url_strips_userinfo_and_masks_query_values() {
+        assert_eq!(
+            redact_url("https://user:pw@rpc.example/?apikey=abc"),
+            "https://rpc.example/?apikey=***"
+        );
+        assert_eq!(
+            redact_url("https://rpc.example/rpc?key=abc&token"),
+            "https://rpc.example/rpc?key=***&***"
+        );
+    }
+
+    #[test]
+    fn redact_url_leaves_plain_and_unparseable_urls_unchanged() {
+        for raw in ["https://soroban-testnet.stellar.org", "not a url"] {
+            assert_eq!(redact_url(raw), raw);
+        }
+    }
+
+    #[test]
+    fn blank_source_key_env_var_is_treated_as_unset() {
+        for blank in ["", "   "] {
+            let key =
+                resolve_source_key_value(None, file_var(None), key_var(Some(blank))).unwrap();
+            assert_eq!(key, None, "{blank:?}");
+        }
+        // `resolve` maps `None` to the sentinel, which `validate` names.
+        let err = config_with(&valid_contract_id(), "UNSET_SOURCE_KEY")
+            .validate()
+            .unwrap_err();
+        assert!(err.contains(&"TRELLIS_SOURCE_KEY".to_string()));
+    }
+
+    #[test]
+    fn source_key_env_var_is_trimmed() {
+        let key =
+            resolve_source_key_value(None, file_var(None), key_var(Some("  alice "))).unwrap();
+        assert_eq!(key, Some(("alice".to_string(), "TRELLIS_SOURCE_KEY")));
+    }
+
+    #[test]
+    fn contract_id_is_trimmed_and_blank_is_unset() {
+        let id = valid_contract_id();
+        let trimmed = contract_id_value(Some(format!("  {id} \n")));
+        assert_eq!(trimmed, id);
+        assert!(config_with(&trimmed, "alice").validate().is_ok());
+        for blank in [None, Some(String::new()), Some("   ".to_string())] {
+            assert_eq!(contract_id_value(blank), "UNSET_CONTRACT_ID");
+        }
     }
 
     #[test]
@@ -999,6 +1218,281 @@ mod tests {
         cfg.network_passphrase = "Standalone Network ; February 2017".to_string();
         assert!(
             verify_network_passphrase(&cfg, "Standalone Network ; February 2017").is_ok()
+        );
+    }
+
+    // --- Config::resolve, read_source_key_file, is_secret_seed (#653) ---
+
+    /// Serialises every test that mutates process env vars, since the test
+    /// harness runs tests on parallel threads that share one environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Every env var `Config::resolve` reads.
+    const RESOLVE_VARS: [&str; 5] = [
+        "STELLAR_RPC_URL",
+        "STELLAR_NETWORK_PASSPHRASE",
+        "TRELLIS_CONTRACT_ID",
+        "TRELLIS_SOURCE_KEY",
+        "TRELLIS_SOURCE_KEY_FILE",
+    ];
+
+    /// Unset every resolve input. Call only while holding `ENV_LOCK`.
+    fn clear_resolve_vars() {
+        for var in RESOLVE_VARS {
+            std::env::remove_var(var);
+        }
+    }
+
+    /// Take the env lock and start from a clean slate for every resolve input.
+    fn clean_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_resolve_vars();
+        guard
+    }
+
+    #[test]
+    fn resolve_uses_preset_for_each_named_network() {
+        let _env = clean_env();
+        for (network, url, passphrase) in [
+            (
+                Network::Testnet,
+                "https://soroban-testnet.stellar.org",
+                "Test SDF Network ; September 2015",
+            ),
+            (
+                Network::Mainnet,
+                "https://mainnet.sorobanrpc.com",
+                "Public Global Stellar Network ; September 2015",
+            ),
+            (
+                Network::Futurenet,
+                "https://rpc-futurenet.stellar.org",
+                "Test SDF Future Network ; October 2022",
+            ),
+        ] {
+            let cfg = Config::resolve(network, None, None, None, None).unwrap();
+            assert_eq!(cfg.rpc_url, url, "{network:?}");
+            assert_eq!(cfg.network_passphrase, passphrase, "{network:?}");
+        }
+        assert!(Network::Custom.preset().is_none());
+    }
+
+    #[test]
+    fn resolve_env_vars_override_preset() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.rpc_url, "https://env.example.com");
+        assert_eq!(cfg.network_passphrase, "Env Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_cli_flags_override_env_vars() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(
+            Network::Testnet,
+            Some("https://cli.example.com".to_string()),
+            Some("Cli Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.rpc_url, "https://cli.example.com");
+        assert_eq!(cfg.network_passphrase, "Cli Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_custom_without_rpc_url_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            None,
+            Some("Custom Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --rpc-url (or STELLAR_RPC_URL)"
+        );
+    }
+
+    #[test]
+    fn resolve_custom_without_passphrase_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            Some("https://custom.example.com".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --network-passphrase (or STELLAR_NETWORK_PASSPHRASE)"
+        );
+    }
+
+    #[test]
+    fn resolve_source_key_cli_file_beats_env_file_and_env_key() {
+        let _env = clean_env();
+        let cli = temp_key_file("resolve-cli", "from-cli-file", 0o600);
+        let env = temp_key_file("resolve-env", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, Some(cli.clone()), None).unwrap();
+        assert_eq!(cfg.source_key, "from-cli-file");
+        assert_eq!(cfg.source_key_origin, "--source-key-file");
+        clear_resolve_vars();
+        std::fs::remove_file(cli).ok();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_env_file_beats_env_key() {
+        let _env = clean_env();
+        let env = temp_key_file("resolve-env-only", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-file");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY_FILE");
+        clear_resolve_vars();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_falls_back_to_env_key_then_unset() {
+        let _env = clean_env();
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-key");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY");
+
+        std::env::remove_var("TRELLIS_SOURCE_KEY");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "UNSET_SOURCE_KEY");
+        assert_eq!(cfg.source_key_origin, "unset");
+    }
+
+    #[test]
+    fn read_source_key_file_trims_whitespace() {
+        let path = temp_key_file("read-trim", "\n  SKEY  \r\n", 0o600);
+        assert_eq!(read_source_key_file(&path, "--source-key-file").unwrap(), "SKEY");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn read_source_key_file_reports_missing_and_empty_files() {
+        let missing = read_source_key_file("/nonexistent/trellis/key", "--source-key-file")
+            .unwrap_err();
+        assert!(
+            missing.starts_with("Error: cannot read --source-key-file"),
+            "got: {missing}"
+        );
+
+        let path = temp_key_file("read-empty", " \n\t\n", 0o600);
+        let empty = read_source_key_file(&path, "TRELLIS_SOURCE_KEY_FILE").unwrap_err();
+        assert_eq!(empty, format!("Error: TRELLIS_SOURCE_KEY_FILE {path:?} is empty"));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn is_secret_seed_edge_cases() {
+        let seed = format!("S{}", "A".repeat(STRKEY_LEN - 1));
+        assert!(is_secret_seed(&seed));
+        // Wrong prefix, wrong length, lowercase and non-alphanumeric all fail.
+        assert!(!is_secret_seed(&format!("G{}", "A".repeat(STRKEY_LEN - 1))));
+        assert!(!is_secret_seed(&seed[..STRKEY_LEN - 1]));
+        assert!(!is_secret_seed(&format!("{seed}A")));
+        assert!(!is_secret_seed(&seed.to_lowercase()));
+        assert!(!is_secret_seed(&format!("S{}-", "A".repeat(STRKEY_LEN - 2))));
+        assert!(!is_secret_seed("alice"));
+        assert!(!is_secret_seed(""));
+    }
+
+    // --- explicit --network overridden by env vars (#654) ---
+
+    const TESTNET_URL: &str = "https://soroban-testnet.stellar.org";
+    const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+
+    #[test]
+    fn explicit_mainnet_with_env_rpc_url_warns() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            None,
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("--network mainnet")
+                && w.contains("STELLAR_RPC_URL")
+                && w.contains(TESTNET_URL)),
+            "got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("only the RPC URL is overridden")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_mainnet_with_both_env_vars_names_each() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings[0].contains("STELLAR_RPC_URL"));
+        assert!(warnings[1].contains("STELLAR_NETWORK_PASSPHRASE"));
+    }
+
+    #[test]
+    fn default_network_stays_silent() {
+        let warnings =
+            network_override_warnings_from(None, None, None, Some(TESTNET_URL), None);
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn env_values_matching_the_preset_are_silent() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Testnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn explicit_cli_flag_overriding_only_url_warns_about_the_pairing() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            Some("https://rpc.example.com"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                "Warning: only the RPC URL is overridden; it is paired with the \
+                 --network mainnet preset passphrase"
+                    .to_string()
+            ]
         );
     }
 }

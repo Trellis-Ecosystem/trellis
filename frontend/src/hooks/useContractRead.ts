@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Account, Contract, TransactionBuilder, rpc, xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL } from '../lib/config'
 
@@ -9,6 +9,8 @@ const READ_ONLY_SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAW
 
 export type ReadStatus = 'idle' | 'loading' | 'success' | 'error'
 
+type ReadErrorKind = 'contract' | 'rpc' | 'configuration'
+
 interface UseContractReadResult<T> {
   data: T | null
   /** Granular status for consumers that need it. */
@@ -16,6 +18,7 @@ interface UseContractReadResult<T> {
   /** Convenience boolean derived from status — true while the RPC call is in-flight. */
   loading: boolean
   error: string | null
+  errorKind: ReadErrorKind | null
   refetch: () => void
 }
 
@@ -33,35 +36,54 @@ export function useContractRead<T = unknown>(
   args: xdr.ScVal[],
   enabled = true,
 ): UseContractReadResult<T> {
+  const serializedArgs = JSON.stringify(args.map((arg) => arg.toXDR('base64')))
+  const requestKey = JSON.stringify([method, serializedArgs])
+  const [previousRequestKey, setPreviousRequestKey] = useState(requestKey)
   const [data, setData] = useState<T | null>(null)
   const [status, setStatus] = useState<ReadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [refetchTrigger, setRefetchTrigger] = useState(0)
+  const request = useMemo(() => ({ method, args, enabled, refetchTrigger }), [method, args, enabled, refetchTrigger])
+  const [response, setResponse] = useState<{
+    request: typeof request
+    data: T | null
+    error: string | null
+    errorKind: ReadErrorKind | null
+  } | null>(null)
+
+  if (requestKey !== previousRequestKey) {
+    setPreviousRequestKey(requestKey)
+    setData(null)
+    setStatus(enabled ? 'loading' : 'idle')
+    setError(null)
+  }
 
   const refetch = useCallback(() => {
     setRefetchTrigger((prev) => prev + 1)
   }, [])
 
   useEffect(() => {
-    if (!enabled) return
+    if (!request.enabled) return
+    const { method, args } = request
 
     // AbortController for this specific request — aborted on cleanup/unmount.
     const controller = new AbortController()
     const { signal } = controller
 
     void (async () => {
+      let errorKind: ReadErrorKind = 'configuration'
       try {
-        setStatus('loading')
-        setError(null)
-
         const server = new rpc.Server(RPC_URL, { allowHttp: RPC_URL.startsWith('http://') })
         const contract = new Contract(CONTRACT_ID)
 
+        const requestArgs = (JSON.parse(serializedArgs) as string[]).map(
+          (arg) => xdr.ScVal.fromXDR(arg, 'base64'),
+        )
         const tx = new TransactionBuilder(new Account(READ_ONLY_SOURCE, '0'), {
           fee: '100',
           networkPassphrase: NETWORK_PASSPHRASE,
         })
-          .addOperation(contract.call(method, ...args))
+          .addOperation(contract.call(method, ...requestArgs))
           .setTimeout(30)
           .build()
 
@@ -69,11 +91,13 @@ export function useContractRead<T = unknown>(
         // guard every state update with signal.aborted checks below so that if
         // the component unmounts while the call is in-flight, no stale state
         // updates reach a dead component.
+        errorKind = 'rpc'
         const simulated = await server.simulateTransaction(tx)
 
         if (signal.aborted) return
 
         if (rpc.Api.isSimulationError(simulated)) {
+          errorKind = 'contract'
           throw new Error(simulated.error)
         }
 
@@ -81,10 +105,7 @@ export function useContractRead<T = unknown>(
           throw new Error('No result from simulation')
         }
 
-        const resultValue = simulated.result.retval
-
-        setData(resultValue as T)
-        setStatus('success')
+        setResponse({ request, data: simulated.result.retval as T, error: null, errorKind: null })
       } catch (err) {
         // Silently ignore abort errors — these are expected on unmount/navigate-away.
         if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
@@ -93,14 +114,13 @@ export function useContractRead<T = unknown>(
 
         const message = err instanceof Error ? err.message : 'Failed to read contract'
         console.error(`[useContractRead] ${method} failed:`, err)
-        setError(message)
-        setStatus('error')
+        setResponse({ request, data: null, error: message, errorKind })
       }
     })()
 
     // Abort the in-flight request when the component unmounts or deps change.
     return () => controller.abort()
-  }, [method, args, enabled, refetchTrigger])
+  }, [method, serializedArgs, enabled, refetchTrigger])
 
   return { data, status, loading: status === 'loading', error, refetch }
 }

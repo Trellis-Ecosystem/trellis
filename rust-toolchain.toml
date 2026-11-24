@@ -3,7 +3,7 @@
 # Every developer machine and CI runner resolves the exact same compiler
 # version.  To upgrade, change `channel` to the desired stable release
 # (e.g. "1.87.0") and open a PR — Dependabot will keep this up to date
-# via the `cargo` ecosystem entry in .github/dependabot.yml.
+# via the `rust-toolchain` ecosystem entry in .github/dependabot.yml.
 #
 # Refs:
 #   https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file

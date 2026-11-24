@@ -1,25 +1,37 @@
 import { http, HttpResponse } from 'msw'
-import { RPC_URL } from '../../lib/config'
+import { CONTRACT_ID, RPC_URL } from '../../lib/config'
 
-/**
- * Mock handlers for Soroban RPC endpoints used in tests.
- * Provides deterministic responses for getEvents and getHealth queries.
- */
+const RPC_URL = 'https://soroban-testnet.stellar.org'
 
-/** Shape of the JSON-RPC request bodies the Soroban RPC endpoint receives. */
-interface RpcRequestBody {
-  jsonrpc: string
-  id: number | string
-  method: string
-  params?: unknown
+function scvSymbol(symbol: string): string {
+  return nativeToScVal(symbol, { type: 'symbol' }).toXDR('base64')
+}
+
+const CREATED_TOPIC = scvSymbol(AGREEMENT_CREATED_SYMBOL)
+const LOCKED_TOPIC = scvSymbol(MILESTONE_LOCKED_SYMBOL)
+
+function makeEvent(topic0: string, id: string) {
+  return {
+    type: 'contract',
+    ledger: 100,
+    ledgerClosedAt: '2024-01-01T00:00:00Z',
+    contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+    id,
+    pagingToken: id,
+    inSuccessfulContractCall: true,
+    topic: [topic0],
+    value: nativeToScVal(1, { type: 'u32' }).toXDR('base64'),
+  }
 }
 
 export const handlers = [
-  // Mock getEvents RPC endpoint
   http.post(RPC_URL, async ({ request }) => {
-    const body = (await request.json()) as RpcRequestBody
+    const body = (await request.json()) as {
+      method?: string
+      params?: { filters?: Array<{ topics?: string[][] }> }
+    }
 
-    if (body.method === 'getEvents') {
+    if (body.method === 'getLatestLedger') {
       return HttpResponse.json({
         jsonrpc: '2.0',
         id: body.id,
@@ -29,7 +41,7 @@ export const handlers = [
               type: 'contract',
               ledger: 1000,
               ledgerClosedAt: '2024-01-01T00:00:00Z',
-              contractId: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+              contractId: CONTRACT_ID,
               id: '0001',
               pagingToken: '0001',
               topic: ['AAAADwAAAAdjcmVhdGVk'],
@@ -43,7 +55,7 @@ export const handlers = [
               type: 'contract',
               ledger: 1001,
               ledgerClosedAt: '2024-01-01T00:01:00Z',
-              contractId: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+              contractId: CONTRACT_ID,
               id: '0002',
               pagingToken: '0002',
               topic: ['AAAADwAAAAZsb2NrZWQ='],
@@ -59,27 +71,28 @@ export const handlers = [
       })
     }
 
-    if (body.method === 'getHealth') {
+    if (body.method === 'getEvents') {
+      const topics = body.params?.filters?.[0]?.topics?.[0] ?? []
+      const topic0 = topics[0]
+
+      let events: ReturnType<typeof makeEvent>[] = []
+      if (topic0 === CREATED_TOPIC) {
+        events = [makeEvent(CREATED_TOPIC, 'created-1')]
+      } else if (topic0 === LOCKED_TOPIC) {
+        events = [makeEvent(LOCKED_TOPIC, 'locked-1')]
+      }
+
       return HttpResponse.json({
         jsonrpc: '2.0',
-        id: body.id,
-        result: {
-          status: 'healthy',
-          latestLedger: 1001,
-          oldestLedger: 1,
-          ledgerRetentionWindow: 17280,
-        },
+        id: 1,
+        result: { events, latestLedger: 1000 },
       })
     }
 
-    // Default fallback for unknown methods
     return HttpResponse.json({
       jsonrpc: '2.0',
-      id: body.id,
-      error: {
-        code: -32601,
-        message: 'Method not found',
-      },
+      id: 1,
+      result: {},
     })
   }),
 ]

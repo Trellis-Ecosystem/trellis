@@ -27,7 +27,7 @@ export const IPFS_GATEWAY = 'https://ipfs.io/ipfs/'
 const IPFS_RE = /^ipfs:\/\/([A-Za-z0-9]{46,100})(\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$/i
 
 // eslint-disable-next-line no-control-regex
-const UNSAFE_CHARS = /[\u0000- \u007f-\u009f  ]/
+const UNSAFE_CHARS = /[\u0000- \u007f-\u009f\u2028\u2029]/
 
 /**
  * Return a safe `href` for `uri`, or `null` if it must not be linked.
