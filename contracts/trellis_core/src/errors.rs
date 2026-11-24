@@ -162,41 +162,18 @@ pub enum TrellisError {
     /// and let later payouts drain other agreements' funds.
     ///
     /// Appended as discriminant `19` per the stability rule above.
-    TransferShortfall = 19,
+    TransferAmountMismatch = 19,
 
-    /// `lock_funds` or `batch_lock_funds` was called on a milestone whose
-    /// deadline (set via `set_milestone_deadline`) has already passed
-    /// (`env.ledger().timestamp() > deadline`).
+    /// `submit_work` was called after the milestone's deadline had already
+    /// passed.
     ///
-    /// Funding it would flip the milestone to `Funded` while it is already
-    /// expirable, so any account could immediately call `expire_milestone`
-    /// and pull the escrow back to the payer — possibly after the payee has
-    /// seen `Funded` and started work. Funding at or before the deadline is
-    /// still accepted.
+    /// A late submission would move the milestone out of `Funded` and into
+    /// `WorkSubmitted`, putting it beyond the reach of `expire_milestone`
+    /// (which only acts on `Pending`/`Funded`). That would let the payee
+    /// unilaterally block the payer's deadline-based refund path. Rejecting
+    /// late submissions keeps the deadline meaningful and the refund path
+    /// reachable.
     ///
     /// Appended as discriminant `20` per the stability rule above.
     DeadlinePassed = 20,
-
-    /// An admin-gated entrypoint (`upgrade`) was called by an address that is
-    /// not the contract admin recorded at deployment.
-    ///
-    /// Kept distinct from [`TrellisError::Unauthorized`] so an integrator can
-    /// tell "you are not a party to this agreement" from "you are not the
-    /// contract admin" — the latter is a protocol-level privilege, not an
-    /// agreement-level one.
-    ///
-    /// Appended as discriminant `21` per the stability rule above.
-    NotAdmin = 21,
-
-    /// A milestone's per-milestone token override is not a valid token
-    /// contract, or the agreement has no token to fall back to.
-    ///
-    /// Every milestone settles in exactly one token: its own override when
-    /// one is set, otherwise the agreement-level default. An override that
-    /// fails the liveness probe (or an agreement with no default and no
-    /// override) would leave the milestone unfundable and unpayable, so it is
-    /// rejected up front rather than at lock time.
-    ///
-    /// Appended as discriminant `22` per the stability rule above.
-    InvalidMilestoneToken = 22,
 }
