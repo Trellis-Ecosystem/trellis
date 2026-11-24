@@ -18,6 +18,8 @@ const config = {
   pollIntervalMs: Number(env('POLL_INTERVAL_MS', '5000')),
   corsOrigin: env('CORS_ORIGIN', '*'),
   maxClients: Number(env('MAX_SSE_CLIENTS', '1000')),
+  maxClientsPerIp: Number(env('MAX_SSE_CLIENTS_PER_IP', '10')),
+  maxBufferBytes: Number(env('MAX_SSE_BUFFER_BYTES', '1048576')),
   startLedger: process.env.START_LEDGER,
 }
 
@@ -51,6 +53,8 @@ const server = createIndexerServer({
   ingester,
   corsOrigin: config.corsOrigin,
   maxClients: config.maxClients,
+  maxClientsPerIp: config.maxClientsPerIp,
+  maxBufferBytes: config.maxBufferBytes,
 })
 
 server.listen(config.port, () => {

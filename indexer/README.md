@@ -35,7 +35,9 @@ reached, the frontend polls RPC directly as it did before.
 | `PORT` | `8787` | HTTP port |
 | `POLL_INTERVAL_MS` | `5000` | Delay between `getEvents` polls |
 | `CORS_ORIGIN` | `*` | `Access-Control-Allow-Origin` value |
-| `MAX_SSE_CLIENTS` | `1000` | Cap on concurrent stream subscribers |
+| `MAX_SSE_CLIENTS` | `1000` | Cap on concurrent stream subscribers (global) |
+| `MAX_SSE_CLIENTS_PER_IP` | `10` | Cap on concurrent stream subscribers per IP; excess connections get `429` |
+| `MAX_SSE_BUFFER_BYTES` | `1048576` | Max buffered bytes per SSE client; slow clients exceeding this are disconnected |
 | `START_LEDGER` | node's `oldestLedger` | First ledger to ingest on an empty database |
 
 ## API
@@ -47,6 +49,10 @@ reached, the frontend polls RPC directly as it did before.
 | `GET /stats` | `{ agreements, milestonesLocked, latestIndexedLedger }` |
 | `GET /stream/events?agreementId=<64 hex>` | SSE: one `snapshot` event (full history), then an `events` event for each new batch |
 | `GET /stream/stats` | SSE: a `stats` event on connect and whenever newly indexed events arrive |
+
+The `/stream/*` endpoints return `429` when the requesting IP already has
+`MAX_SSE_CLIENTS_PER_IP` open streams, and `503` when the global
+`MAX_SSE_CLIENTS` cap is reached.
 
 See [DEPLOYMENT.md](../DEPLOYMENT.md#event-indexer--real-time-relay) for
 production deployment and the data-retention model.
