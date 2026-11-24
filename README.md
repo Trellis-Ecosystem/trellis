@@ -976,3 +976,6 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 
 <!-- handsoff-issue-754 -->
 - #754: `resolve_dispute` / `resolve_dispute_split` re-read the header from storage needlessly
+
+<!-- handsoff-issue-768 -->
+- #768: Indexer `/events` paging with `beforeLedger` drops events in the boundary ledger
