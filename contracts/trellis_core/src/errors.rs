@@ -164,16 +164,14 @@ pub enum TrellisError {
     /// Appended as discriminant `19` per the stability rule above.
     TransferAmountMismatch = 19,
 
-    /// `submit_work` was called after the milestone's deadline had already
-    /// passed.
+    /// `rotate_resolver` was called with a `new_resolver` equal to the
+    /// agreement's current `dispute_resolver`.
     ///
-    /// A late submission would move the milestone out of `Funded` and into
-    /// `WorkSubmitted`, putting it beyond the reach of `expire_milestone`
-    /// (which only acts on `Pending`/`Funded`). That would let the payee
-    /// unilaterally block the payer's deadline-based refund path. Rejecting
-    /// late submissions keeps the deadline meaningful and the refund path
-    /// reachable.
+    /// Such a call would write the header and emit a `trls_rrot` event with
+    /// `old == new`, which is a no-op rotation that misleads off-chain
+    /// indexers into believing the resolver changed. Rejecting it up front
+    /// keeps the rotation event meaningful.
     ///
     /// Appended as discriminant `20` per the stability rule above.
-    DeadlinePassed = 20,
+    ResolverUnchanged = 20,
 }
