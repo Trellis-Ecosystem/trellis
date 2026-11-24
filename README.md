@@ -971,3 +971,8 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 </svg>
 
 </div>
+
+## Handsoff notes
+
+<!-- handsoff-issue-762 -->
+- #762: Restore three deleted event-amount tests
