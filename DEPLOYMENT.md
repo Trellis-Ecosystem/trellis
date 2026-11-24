@@ -384,8 +384,9 @@ trellis --as resolver resolve-dispute \
 ```
 
 > Must be signed by the dispute resolver identity (`--as resolver`).
-> `--refund-to-payer true` returns funds to payer.
-> `--refund-to-payer false` releases funds to payee.
+> `--refund-to-payer` takes an optional `true`/`false` value:
+> `--refund-to-payer true` (or the bare `--refund-to-payer`) returns funds to
+> payer; `--refund-to-payer false` releases funds to payee.
 
 ### Cancel an unfunded milestone
 

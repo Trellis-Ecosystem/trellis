@@ -68,10 +68,11 @@ use std::process;
     propagate_version = true,
 )]
 struct Cli {
-    /// Network preset to connect to. `custom` requires `--rpc-url` and
-    /// `--network-passphrase`.
-    #[arg(long, global = true, value_enum, default_value_t = Network::Testnet)]
-    network: Network,
+    /// Network preset to connect to (default: testnet). `custom` requires
+    /// `--rpc-url` and `--network-passphrase`. Kept optional so an explicit
+    /// choice can be told apart from the default (#654).
+    #[arg(long, global = true, value_enum)]
+    network: Option<Network>,
 
     /// Custom Soroban RPC endpoint. Required when `--network=custom`;
     /// overrides the preset / env var for any other network.
@@ -292,13 +293,14 @@ fn output_opts(cli: &Cli) -> OutputOpts {
 
 fn main() {
     let cli = Cli::parse();
+    let opts = output_opts(&cli);
 
     // ── #66/#487: Load the env file before reading any config env vars ────
     // No clap arg reads from the environment, so parsing first is safe and
     // lets `--env-file` pick the file. Without it, `.env` is discovered from
     // the CWD as before. Priority: CLI args > env vars > env file values.
     if let Err(msg) = load_env_file(explicit_env_file(cli.env_file.clone()).as_deref()) {
-        eprintln!("{msg}");
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
@@ -317,8 +319,8 @@ fn main() {
     // the stellar binary nor a valid contract/key configuration. ─────────
     if let Commands::History { limit, clear } = cli.command {
         let path = history::default_path();
-        if let Err(msg) = commands::run_history(path.as_deref(), limit, clear, &output_opts(&cli)) {
-            eprintln!("{msg}");
+        if let Err(msg) = commands::run_history(path.as_deref(), limit, clear, &opts) {
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
         return;
@@ -336,14 +338,26 @@ fn main() {
 
     if !cli.dry_run && !native_only {
         if let Err(msg) = validate_environment() {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     }
 
     // ── #80: Resolve config from --network preset + CLI / env overrides ───
-    let config = match config::Config::resolve(
+    let network = cli.network.unwrap_or(Network::Testnet);
+
+    // ── #654: An explicit --network silently losing to STELLAR_RPC_URL /
+    // STELLAR_NETWORK_PASSPHRASE would point it at the wrong chain, so say so.
+    for warning in config::network_override_warnings(
         cli.network,
+        cli.rpc_url.as_deref(),
+        cli.network_passphrase.as_deref(),
+    ) {
+        eprintln!("{warning}");
+    }
+
+    let config = match config::Config::resolve(
+        network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
         cli.source_key_file.clone(),
@@ -351,7 +365,7 @@ fn main() {
     ) {
         Ok(c) => c,
         Err(msg) => {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     };
@@ -360,9 +374,8 @@ fn main() {
     // a missing `stellar` binary or invalid values, instead of exiting on
     // them like the checks below do. ──────────────────────────────────────
     if let Commands::Config = cli.command {
-        let opts = output_opts(&cli);
         let stellar_found = validate_environment().is_ok();
-        if commands::run_config(cli.network, &config, stellar_found, &opts).is_err() {
+        if commands::run_config(network, &config, stellar_found, &opts).is_err() {
             process::exit(1);
         }
         return;
@@ -370,26 +383,29 @@ fn main() {
 
     // ── #68: Validate stellar binary at startup ────────────────────────────
     if let Err(msg) = validate_environment() {
-        eprintln!("{msg}");
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
     // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
     // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
     let validation = if native_only {
-        config::validate_rpc_url(&config.rpc_url).map_err(|e| vec![e])
+        config::validate_rpc_url(&config.rpc_url, cli.unsafe_rpc)
+            .map(|_| ())
+            .map_err(|e| vec![e])
     } else {
         config.validate()
     };
     if let Err(errors) = validation {
-        eprintln!("Error: invalid configuration:");
+        let mut msg = "invalid configuration:".to_string();
         for e in &errors {
-            eprintln!("  - {e}");
+            msg.push_str(&format!("\n  - {e}"));
         }
-        eprintln!(
-            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
-             TRELLIS_SOURCE_KEY or TRELLIS_SOURCE_KEY_FILE) or pass the matching CLI flags."
+        msg.push_str(
+            "\n\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY or TRELLIS_SOURCE_KEY_FILE) or pass the matching CLI flags.",
         );
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
@@ -401,19 +417,17 @@ fn main() {
         Ok(Some(warning)) => eprintln!("{warning}"),
         Ok(None) => {}
         Err(msg) => {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     }
-
-    let opts = output_opts(&cli);
 
     // ── #67: Propagate errors from dispatch; exit(1) only in main ─────────
     // All cleanup (destructors, buffer flushes) runs before the exit call
     // because process::exit is only called here, never inside library code.
     if let Err(msg) = commands::dispatch(cli.command, &config, &opts) {
         if !msg.is_empty() {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
         }
         process::exit(1);
     }

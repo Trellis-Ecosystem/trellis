@@ -1,13 +1,4 @@
-/**
- * Lazy environment configuration.
- *
- * Values are validated on first access rather than at module evaluation time,
- * so a missing env var no longer crashes the app before React mounts — the
- * error can be caught by an error boundary and shown as a friendly UI message.
- *
- * Dev-mode fallbacks (console.warn) let the app load in a non-configured
- * environment without a hard crash.
- */
+import { StrKey } from '@stellar/stellar-sdk'
 
 const DEV_FALLBACKS: Record<string, string> = {
   VITE_CONTRACT_ID: 'CAUAO7CYKULE2K4EJMQ6LLRUHP7Y7JYOH6G2VBXKYG7PTETE3UZ3DU7Q',
@@ -15,10 +6,33 @@ const DEV_FALLBACKS: Record<string, string> = {
   VITE_NETWORK_PASSPHRASE: 'Test SDF Network ; September 2015',
 }
 
+function configError(name: string, reason: string): Error {
+  const error = new Error(`Environment variable ${name} ${reason}. Copy .env.example to .env, update the value, and rebuild the frontend.`)
+  error.name = 'ConfigurationError'
+  return error
+}
+
+function validateContractId(name: string, value: string): string {
+  if (!StrKey.isValidContract(value)) {
+    throw configError(name, 'must be a valid Stellar contract address (C...)')
+  }
+  return value
+}
+
 function getEnv(name: keyof typeof DEV_FALLBACKS): string {
   const value = import.meta.env[name]
 
   if (typeof value === 'string' && value) {
+    if (name === 'VITE_CONTRACT_ID') return validateContractId(name, value)
+    if (name === 'VITE_RPC_URL') {
+      const protocol = URL.canParse(value) ? new URL(value).protocol : null
+      if (protocol !== 'http:' && protocol !== 'https:') {
+        throw configError(name, 'must be an HTTP or HTTPS URL')
+      }
+    }
+    if (name === 'VITE_NETWORK_PASSPHRASE' && !value.trim()) {
+      throw configError(name, 'must be non-empty')
+    }
     return value
   }
 
@@ -32,9 +46,7 @@ function getEnv(name: keyof typeof DEV_FALLBACKS): string {
     return fallback
   }
 
-  throw new Error(
-    `Environment variable ${name} is not set. Copy .env.example to .env and fill in values.`,
-  )
+  throw configError(name, 'is not set')
 }
 
 export type NetworkId = 'testnet' | 'mainnet' | 'futurenet' | 'custom'
@@ -105,8 +117,9 @@ export function getContractId(): string {
   // A non-default preset may have its own deployment: VITE_CONTRACT_ID_MAINNET etc.
   const selected = getSelectedNetwork()
   if (selected && selected !== 'custom') {
-    const perNetwork = import.meta.env[`VITE_CONTRACT_ID_${selected.toUpperCase()}`]
-    if (typeof perNetwork === 'string' && perNetwork) return perNetwork
+    const name = `VITE_CONTRACT_ID_${selected.toUpperCase()}`
+    const perNetwork = import.meta.env[name]
+    if (typeof perNetwork === 'string' && perNetwork) return validateContractId(name, perNetwork)
   }
   return getEnv('VITE_CONTRACT_ID')
 }
@@ -129,15 +142,12 @@ export function getIndexerUrl(): string | null {
   return typeof value === 'string' && value ? value.replace(/\/+$/, '') : null
 }
 
-/**
- * Named re-exports kept for backwards compatibility with existing consumers.
- * The module-level constants are now derived via the lazy getters, so they
- * are still evaluated lazily on the first import rather than unconditionally
- * at bundle evaluation time.
- *
- * @deprecated Prefer the explicit getter functions (getContractId, getRpcUrl,
- *   getNetworkPassphrase) at new call sites.
- */
+/** Optional token to prefill on the create agreement form. */
+export function getDefaultTokenId(): string {
+  return import.meta.env.VITE_DEFAULT_TOKEN_ID?.trim() ?? ''
+}
+
+// The entry point catches configuration errors while loading the app module.
 export const CONTRACT_ID = getContractId()
 export const RPC_URL = getRpcUrl()
 export const NETWORK_PASSPHRASE = getNetworkPassphrase()

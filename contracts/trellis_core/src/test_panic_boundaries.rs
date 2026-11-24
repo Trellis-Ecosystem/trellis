@@ -399,13 +399,29 @@ proptest! {
     }
 
     /// A random proof URI of arbitrary length / content must not trap
-    /// `submit_work` — it fails earlier on state, but the string handling
-    /// itself must be panic-free.
+    /// `submit_work`. The milestone is funded first so the state check passes
+    /// and the input actually reaches the proof-URI length check; the strategy
+    /// spans 0..=1024 bytes so lengths above `MAX_PROOF_URI_LEN` (512) are
+    /// generated. The result must be either success or `ProofUriTooLong`.
     #[test]
-    fn fuzz_arbitrary_proof_uri_never_traps(proof in ".*") {
+    fn fuzz_arbitrary_proof_uri_never_traps(proof in ".{0,1024}") {
         let (env, payer, payee, resolver, token, client) = setup_mocked();
         let id = init_agreement(&client, &env, 77, &payer, &payee, &token, &resolver, 1);
+        // Fund the milestone so `submit_work` gets past the status check and
+        // reaches the URI filter/length logic.
+        client.lock_funds(&id, &0);
         let uri = Some(soroban_sdk::String::from_str(&env, &proof));
-        assert_no_trap!(client.try_submit_work(&id, &0, &uri), "submit_work");
+        let result = client.try_submit_work(&id, &0, &uri);
+        assert_no_trap!(result, "submit_work");
+        prop_assert!(
+            matches!(result, Ok(Ok(())) | Err(Ok(TrellisError::ProofUriTooLong))),
+            "submit_work returned an unexpected result for a {}-byte URI: {:?}",
+            proof.len(),
+            result
+        );
+        // Inputs beyond the limit must be rejected with the typed error.
+        if proof.len() > 512 {
+            prop_assert_eq!(result, Err(Ok(TrellisError::ProofUriTooLong)));
+        }
     }
 }

@@ -118,13 +118,32 @@ case "$FUNC_NAME" in
 ### Error Paths
 - `test_missing_stellar_binary_error`
 - `test_invalid_hex_agreement_id`
+- `test_json_validation_error_prints_error_envelope`
 - `test_missing_required_env_vars`
 
 ### Command-Specific
 - `test_init_with_multiple_milestones`
 - `test_submit_work_with_proof_uri`
 - `test_raise_dispute_requires_caller`
+- `test_resolve_dispute_refund_flag`
 - `test_batch_lock_with_multiple_ids`
+- `test_completion_command_generates_shell_completions`
+- `test_resolve_split_dry_run`
+- `test_resolve_split_rejects_mixed_and_negative_flags`
+- `test_release_partial_dry_run`
+- `test_release_partial_rejects_bad_amounts`
+- `test_decline_unfunded_milestone_dry_run`
+- `test_decline_unfunded_milestone_json_output`
+
+### Dry Run (#406)
+- `test_dry_run_works_without_stellar_binary`
+- `test_non_dry_run_still_requires_stellar_binary`
+
+### Native RPC
+- `test_health_reports_native_rpc_results`
+- `test_health_fails_on_unhealthy_endpoint`
+- `test_account_sequence_lookup_found`
+- `test_account_sequence_lookup_not_found`
 
 ## Troubleshooting
 
