@@ -196,7 +196,7 @@ test_dispute_lifecycle() {
   assert_eq "milestone-status: disputed" "Disputed" "$(echo "$out" | jq -r .result.status)"
 
   out=$(TRELLIS_SOURCE_KEY=resolver "$CLI_BIN" --json resolve-dispute --agreement-id "$id" --milestone-id 0 --refund-to-payer --yes 2>&1)
-  assert_eq "resolve-dispute: status success" "success" "$(echo "$out" | jq -r .status)"
+  assert_eq "resolve-dispute: status success (bare --refund-to-payer)" "success" "$(echo "$out" | jq -r .status)"
 
   out=$(TRELLIS_SOURCE_KEY=payer "$CLI_BIN" --json milestone-status --agreement-id "$id" --milestone-id 0 2>&1)
   assert_eq "milestone-status: refunded" "Refunded" "$(echo "$out" | jq -r .result.status)"

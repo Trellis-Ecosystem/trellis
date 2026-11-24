@@ -984,6 +984,32 @@ impl TrellisContract {
         storage::read_header(&env, &agreement_id).map(|header| header.total_amount)
     }
 
+    /// Return the amount still held in escrow for a single milestone.
+    ///
+    /// This is the milestone's configured `amount` minus whatever
+    /// [`Self::release_partial`] has already paid out for it — the same value
+    /// the contract itself uses when settling the milestone. It lets callers
+    /// learn the escrowed remainder without fetching the whole [`Agreement`]
+    /// via [`Self::get_agreement`], which reads every milestone entry and
+    /// returns the full `released_amounts` map.
+    ///
+    /// This is a view call — no auth is required and no agreement data is
+    /// modified. It is O(1) in ledger reads: the agreement header plus the one
+    /// milestone requested, never the whole milestone vector.
+    ///
+    /// # Errors
+    /// - [`TrellisError::AgreementNotFound`] – unknown agreement ID.
+    /// - [`TrellisError::InvalidMilestone`] – `milestone_id` out of range.
+    pub fn get_remaining_amount(
+        env: Env,
+        agreement_id: BytesN<32>,
+        milestone_id: u32,
+    ) -> Result<i128, TrellisError> {
+        let header = storage::read_header(&env, &agreement_id)?;
+        let milestone = storage::read_milestone(&env, &agreement_id, milestone_id)?;
+        Ok(remaining_amount(&header, milestone_id, &milestone))
+    }
+
     /// Fund multiple milestones in a single transaction.
     ///
     /// Iterates `milestone_ids` in order, applying the same logic as

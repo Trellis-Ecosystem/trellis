@@ -289,6 +289,81 @@ pub fn check_rpc_transport(raw: &str, allow_insecure: bool) -> Result<Option<Str
     }
 }
 
+/// Warnings for an explicitly chosen `--network` preset that env vars
+/// override (#654).
+///
+/// `Config::resolve` lets `STELLAR_RPC_URL` / `STELLAR_NETWORK_PASSPHRASE` win
+/// over the preset, so a `.env` holding testnet values silently turns
+/// `--network mainnet` into a testnet run. When the network was typed (it is
+/// `None` for the default, which stays silent) this names each env var that
+/// replaces a preset value, and warns when only one of the URL / passphrase
+/// pair is overridden, since the other still comes from the preset.
+pub fn network_override_warnings(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    network_override_warnings_from(
+        explicit_network,
+        cli_rpc_url,
+        cli_network_passphrase,
+        std::env::var("STELLAR_RPC_URL").ok().as_deref(),
+        std::env::var("STELLAR_NETWORK_PASSPHRASE").ok().as_deref(),
+    )
+}
+
+/// [`network_override_warnings`] with the env var values passed in, so it can
+/// be tested without touching the process environment.
+fn network_override_warnings_from(
+    explicit_network: Option<Network>,
+    cli_rpc_url: Option<&str>,
+    cli_network_passphrase: Option<&str>,
+    env_rpc_url: Option<&str>,
+    env_network_passphrase: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(network) = explicit_network else {
+        return warnings;
+    };
+    let Some(preset) = network.preset() else {
+        return warnings;
+    };
+    let name = format!("{network:?}").to_lowercase();
+
+    let env_rpc_url = env_rpc_url.filter(|v| *v != preset.rpc_url);
+    let env_network_passphrase =
+        env_network_passphrase.filter(|v| *v != preset.network_passphrase);
+
+    if let (None, Some(url)) = (cli_rpc_url, env_rpc_url) {
+        warnings.push(format!(
+            "Warning: --network {name} preset RPC URL is overridden by STELLAR_RPC_URL={url}"
+        ));
+    }
+    if let (None, Some(passphrase)) = (cli_network_passphrase, env_network_passphrase) {
+        warnings.push(format!(
+            "Warning: --network {name} preset passphrase is overridden by \
+             STELLAR_NETWORK_PASSPHRASE={passphrase:?}"
+        ));
+    }
+
+    let url_overridden = cli_rpc_url.is_some() || env_rpc_url.is_some();
+    let passphrase_overridden =
+        cli_network_passphrase.is_some() || env_network_passphrase.is_some();
+    if url_overridden != passphrase_overridden {
+        let (overridden, kept) = if url_overridden {
+            ("RPC URL", "passphrase")
+        } else {
+            ("passphrase", "RPC URL")
+        };
+        warnings.push(format!(
+            "Warning: only the {overridden} is overridden; it is paired with the \
+             --network {name} preset {kept}"
+        ));
+    }
+
+    warnings
+}
+
 impl Config {
     /// Load configuration from environment variables with network detection.
     ///
@@ -418,7 +493,7 @@ impl Config {
             errors.push("TRELLIS_SOURCE_KEY".to_string());
         }
 
-        if let Err(e) = validate_rpc_url(&self.rpc_url, false) {
+        if let Err(e) = validate_rpc_url(&self.rpc_url) {
             errors.push(e);
         }
 
@@ -1042,14 +1117,21 @@ mod tests {
 
     #[test]
     fn rpc_url_accepts_https_and_http_localhost() {
-        assert!(validate_rpc_url("https://soroban-testnet.stellar.org", false).is_ok());
-        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc", false).is_ok());
-        assert!(validate_rpc_url("http://127.0.0.1:8000", false).is_ok());
+        assert!(validate_rpc_url("https://soroban-testnet.stellar.org").is_ok());
+        assert!(validate_rpc_url("http://localhost:8000/soroban/rpc").is_ok());
+        assert!(validate_rpc_url("http://127.0.0.1:8000").is_ok());
+        assert!(validate_rpc_url("http://[::1]:8000").is_ok());
+    }
+
+    #[test]
+    fn rpc_url_accepts_remote_http_shape_only() {
+        // Cleartext policy lives in `check_rpc_transport`, not here (#636).
+        assert!(validate_rpc_url("http://rpc.example.com").is_ok());
     }
 
     #[test]
     fn rpc_url_rejects_scheme_typo() {
-        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org", false).unwrap_err();
+        let err = validate_rpc_url("httsp://soroban-testnet.stellar.org").unwrap_err();
         assert!(
             err.contains("scheme") || err.contains("valid URL"),
             "got: {err}"
@@ -1058,20 +1140,35 @@ mod tests {
 
     #[test]
     fn rpc_url_rejects_missing_scheme() {
-        assert!(validate_rpc_url("soroban-testnet.stellar.org", false).is_err());
+        assert!(validate_rpc_url("soroban-testnet.stellar.org").is_err());
     }
 
     #[test]
     fn rpc_url_rejects_non_http_scheme() {
-        assert!(validate_rpc_url("ftp://example.com", false).is_err());
-        assert!(validate_rpc_url("ws://example.com", false).is_err());
-        assert!(validate_rpc_url("file:///etc/passwd", false).is_err());
+        assert!(validate_rpc_url("ftp://example.com").is_err());
+        assert!(validate_rpc_url("ws://example.com").is_err());
+        assert!(validate_rpc_url("file:///etc/passwd").is_err());
     }
 
     #[test]
     fn rpc_url_rejects_empty_host() {
-        assert!(validate_rpc_url("https://", false).is_err());
-        assert!(validate_rpc_url("http://", false).is_err());
+        assert!(validate_rpc_url("https://").is_err());
+        assert!(validate_rpc_url("http://").is_err());
+    }
+
+    #[test]
+    fn validate_accepts_ipv6_loopback_rpc_url() {
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.rpc_url = "http://[::1]:8000".to_string();
+        assert!(cfg.validate().is_ok(), "got: {:?}", cfg.validate().unwrap_err());
+    }
+
+    #[test]
+    fn validate_accepts_remote_http_rpc_url() {
+        // `--unsafe-rpc` must be able to reach `check_rpc_transport` (#636).
+        let mut cfg = config_with(&valid_contract_id(), "SABC123");
+        cfg.rpc_url = "http://rpc.example.com".to_string();
+        assert!(cfg.validate().is_ok(), "got: {:?}", cfg.validate().unwrap_err());
     }
 
     #[test]
@@ -1121,6 +1218,281 @@ mod tests {
         cfg.network_passphrase = "Standalone Network ; February 2017".to_string();
         assert!(
             verify_network_passphrase(&cfg, "Standalone Network ; February 2017").is_ok()
+        );
+    }
+
+    // --- Config::resolve, read_source_key_file, is_secret_seed (#653) ---
+
+    /// Serialises every test that mutates process env vars, since the test
+    /// harness runs tests on parallel threads that share one environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Every env var `Config::resolve` reads.
+    const RESOLVE_VARS: [&str; 5] = [
+        "STELLAR_RPC_URL",
+        "STELLAR_NETWORK_PASSPHRASE",
+        "TRELLIS_CONTRACT_ID",
+        "TRELLIS_SOURCE_KEY",
+        "TRELLIS_SOURCE_KEY_FILE",
+    ];
+
+    /// Unset every resolve input. Call only while holding `ENV_LOCK`.
+    fn clear_resolve_vars() {
+        for var in RESOLVE_VARS {
+            std::env::remove_var(var);
+        }
+    }
+
+    /// Take the env lock and start from a clean slate for every resolve input.
+    fn clean_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_resolve_vars();
+        guard
+    }
+
+    #[test]
+    fn resolve_uses_preset_for_each_named_network() {
+        let _env = clean_env();
+        for (network, url, passphrase) in [
+            (
+                Network::Testnet,
+                "https://soroban-testnet.stellar.org",
+                "Test SDF Network ; September 2015",
+            ),
+            (
+                Network::Mainnet,
+                "https://mainnet.sorobanrpc.com",
+                "Public Global Stellar Network ; September 2015",
+            ),
+            (
+                Network::Futurenet,
+                "https://rpc-futurenet.stellar.org",
+                "Test SDF Future Network ; October 2022",
+            ),
+        ] {
+            let cfg = Config::resolve(network, None, None, None, None).unwrap();
+            assert_eq!(cfg.rpc_url, url, "{network:?}");
+            assert_eq!(cfg.network_passphrase, passphrase, "{network:?}");
+        }
+        assert!(Network::Custom.preset().is_none());
+    }
+
+    #[test]
+    fn resolve_env_vars_override_preset() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.rpc_url, "https://env.example.com");
+        assert_eq!(cfg.network_passphrase, "Env Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_cli_flags_override_env_vars() {
+        let _env = clean_env();
+        std::env::set_var("STELLAR_RPC_URL", "https://env.example.com");
+        std::env::set_var("STELLAR_NETWORK_PASSPHRASE", "Env Passphrase");
+        let cfg = Config::resolve(
+            Network::Testnet,
+            Some("https://cli.example.com".to_string()),
+            Some("Cli Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.rpc_url, "https://cli.example.com");
+        assert_eq!(cfg.network_passphrase, "Cli Passphrase");
+        clear_resolve_vars();
+    }
+
+    #[test]
+    fn resolve_custom_without_rpc_url_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            None,
+            Some("Custom Passphrase".to_string()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --rpc-url (or STELLAR_RPC_URL)"
+        );
+    }
+
+    #[test]
+    fn resolve_custom_without_passphrase_is_error() {
+        let _env = clean_env();
+        let err = Config::resolve(
+            Network::Custom,
+            Some("https://custom.example.com".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --network=custom requires --network-passphrase (or STELLAR_NETWORK_PASSPHRASE)"
+        );
+    }
+
+    #[test]
+    fn resolve_source_key_cli_file_beats_env_file_and_env_key() {
+        let _env = clean_env();
+        let cli = temp_key_file("resolve-cli", "from-cli-file", 0o600);
+        let env = temp_key_file("resolve-env", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, Some(cli.clone()), None).unwrap();
+        assert_eq!(cfg.source_key, "from-cli-file");
+        assert_eq!(cfg.source_key_origin, "--source-key-file");
+        clear_resolve_vars();
+        std::fs::remove_file(cli).ok();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_env_file_beats_env_key() {
+        let _env = clean_env();
+        let env = temp_key_file("resolve-env-only", "from-env-file", 0o600);
+        std::env::set_var("TRELLIS_SOURCE_KEY_FILE", &env);
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-file");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY_FILE");
+        clear_resolve_vars();
+        std::fs::remove_file(env).ok();
+    }
+
+    #[test]
+    fn resolve_source_key_falls_back_to_env_key_then_unset() {
+        let _env = clean_env();
+        std::env::set_var("TRELLIS_SOURCE_KEY", "from-env-key");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "from-env-key");
+        assert_eq!(cfg.source_key_origin, "TRELLIS_SOURCE_KEY");
+
+        std::env::remove_var("TRELLIS_SOURCE_KEY");
+        let cfg = Config::resolve(Network::Testnet, None, None, None, None).unwrap();
+        assert_eq!(cfg.source_key, "UNSET_SOURCE_KEY");
+        assert_eq!(cfg.source_key_origin, "unset");
+    }
+
+    #[test]
+    fn read_source_key_file_trims_whitespace() {
+        let path = temp_key_file("read-trim", "\n  SKEY  \r\n", 0o600);
+        assert_eq!(read_source_key_file(&path, "--source-key-file").unwrap(), "SKEY");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn read_source_key_file_reports_missing_and_empty_files() {
+        let missing = read_source_key_file("/nonexistent/trellis/key", "--source-key-file")
+            .unwrap_err();
+        assert!(
+            missing.starts_with("Error: cannot read --source-key-file"),
+            "got: {missing}"
+        );
+
+        let path = temp_key_file("read-empty", " \n\t\n", 0o600);
+        let empty = read_source_key_file(&path, "TRELLIS_SOURCE_KEY_FILE").unwrap_err();
+        assert_eq!(empty, format!("Error: TRELLIS_SOURCE_KEY_FILE {path:?} is empty"));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn is_secret_seed_edge_cases() {
+        let seed = format!("S{}", "A".repeat(STRKEY_LEN - 1));
+        assert!(is_secret_seed(&seed));
+        // Wrong prefix, wrong length, lowercase and non-alphanumeric all fail.
+        assert!(!is_secret_seed(&format!("G{}", "A".repeat(STRKEY_LEN - 1))));
+        assert!(!is_secret_seed(&seed[..STRKEY_LEN - 1]));
+        assert!(!is_secret_seed(&format!("{seed}A")));
+        assert!(!is_secret_seed(&seed.to_lowercase()));
+        assert!(!is_secret_seed(&format!("S{}-", "A".repeat(STRKEY_LEN - 2))));
+        assert!(!is_secret_seed("alice"));
+        assert!(!is_secret_seed(""));
+    }
+
+    // --- explicit --network overridden by env vars (#654) ---
+
+    const TESTNET_URL: &str = "https://soroban-testnet.stellar.org";
+    const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+
+    #[test]
+    fn explicit_mainnet_with_env_rpc_url_warns() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            None,
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("--network mainnet")
+                && w.contains("STELLAR_RPC_URL")
+                && w.contains(TESTNET_URL)),
+            "got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("only the RPC URL is overridden")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_mainnet_with_both_env_vars_names_each() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings[0].contains("STELLAR_RPC_URL"));
+        assert!(warnings[1].contains("STELLAR_NETWORK_PASSPHRASE"));
+    }
+
+    #[test]
+    fn default_network_stays_silent() {
+        let warnings =
+            network_override_warnings_from(None, None, None, Some(TESTNET_URL), None);
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn env_values_matching_the_preset_are_silent() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Testnet),
+            None,
+            None,
+            Some(TESTNET_URL),
+            Some(TESTNET_PASSPHRASE),
+        );
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
+    #[test]
+    fn explicit_cli_flag_overriding_only_url_warns_about_the_pairing() {
+        let warnings = network_override_warnings_from(
+            Some(Network::Mainnet),
+            Some("https://rpc.example.com"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            warnings,
+            vec![
+                "Warning: only the RPC URL is overridden; it is paired with the \
+                 --network mainnet preset passphrase"
+                    .to_string()
+            ]
         );
     }
 }
