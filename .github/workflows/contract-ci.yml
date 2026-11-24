@@ -67,6 +67,17 @@ jobs:
       - name: Check README entrypoint table
         run: ./scripts/check-readme-entrypoints.sh
 
+  orphaned-snapshots:
+    name: No orphaned contract test snapshots
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Check for orphaned test snapshots
+        run: ./scripts/check-orphaned-snapshots.sh
+
   supply-chain:
     name: Dependency vulnerability scan (cargo audit + cargo deny)
     runs-on: ubuntu-latest

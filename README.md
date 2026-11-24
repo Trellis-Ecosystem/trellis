@@ -996,5 +996,5 @@ MIT — see [LICENSE](./LICENSE) for the full text.
 
 ## Handsoff notes
 
-<!-- handsoff-issue-624 -->
-- #624: 'Wrong Role' Authorization Tests Deny Every Signature Instead of Signing as the Wrong Party
+<!-- handsoff-issue-762 -->
+- #762: Restore three deleted event-amount tests

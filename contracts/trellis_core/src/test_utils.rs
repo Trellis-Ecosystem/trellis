@@ -193,27 +193,68 @@ pub fn setup_mocked() -> (
     deploy(env, FUZZ_MINT)
 }
 
-/// Fixture used by the role-gate tests in `test.rs` (#623).
-///
-/// Funds the payer ([`FUZZ_MINT`]) and installs `deny_all_auth` *before*
-/// [`deploy`], so the SAC `mint` is rejected too. Callers that need a funded
-/// agreement must therefore build it with [`setup_mocked`] and only switch to
-/// `deny_all_auth` immediately before the entrypoint under test; this helper
-/// exists for the cases where the gate is the very first thing exercised.
-pub fn setup_denied() -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    TrellisContractClient<'static>,
-) {
-    let env = Env::new_with_config(EnvTestConfig {
-        capture_snapshot_at_drop: false,
-    });
-    env.mock_all_auths();
-    let (env, payer, payee, dispute_resolver, token_address, client) =
-        deploy(env, FUZZ_MINT);
-    env.set_auths(&[]);
-    (env, payer, payee, dispute_resolver, token_address, client)
+// ---------------------------------------------------------------------------
+// `approve_and_release` regression tests (#763)
+// ---------------------------------------------------------------------------
+//
+// These two tests were deleted while their snapshots under
+// `test_snapshots/test/` were left behind. They are re-added here so the
+// orphaned snapshots are exercised again. They live in this module because it
+// is the shared fixture home for the contract's suites and already exposes
+// [`deploy`]'s wiring via [`setup_mocked`].
+
+#[cfg(test)]
+mod approve_and_release_regressions {
+    use super::*;
+    use crate::types::EscrowStatus;
+
+    /// Approving a milestone that has already been completed must fail rather
+    /// than pay out a second time.
+    #[test]
+    fn test_approve_on_completed_milestone_fails() {
+        let (env, payer, payee, _resolver, token_address, client) = setup_mocked();
+        let id = agreement_id(&env, 1);
+        let milestones = one_milestone(&env, 1_000);
+
+        client.create_agreement(&id, &payer, &payee, &token_address, &milestones);
+
+        // First approval completes the milestone and releases its funds.
+        client.approve_and_release(&id, &payer, &0);
+
+        // A second approval on the now-completed milestone must be rejected.
+        let result = client.try_approve_and_release(&id, &payer, &0);
+        assert!(result.is_err(), "approving a completed milestone must fail");
+
+        // The milestone stays completed and the payee is paid exactly once.
+        let stored = client.get_milestone(&id, &0);
+        assert_eq!(stored.status, EscrowStatus::Completed);
+
+        let token_client = token::Client::new(&env, &token_address);
+        assert_eq!(token_client.balance(&payee), 1_000);
+    }
+
+    /// After a partial release, a subsequent approval must pay only the
+    /// remaining amount rather than the full milestone amount again.
+    #[test]
+    fn test_approve_after_partial_release_pays_only_remainder() {
+        let (env, payer, payee, _resolver, token_address, client) = setup_mocked();
+        let id = agreement_id(&env, 2);
+        let milestones = one_milestone(&env, 1_000);
+
+        client.create_agreement(&id, &payer, &payee, &token_address, &milestones);
+
+        // Release part of the milestone first.
+        client.release_partial(&id, &payer, &0, &400);
+
+        let token_client = token::Client::new(&env, &token_address);
+        assert_eq!(token_client.balance(&payee), 400);
+
+        // Approving now must pay only the 600 remainder.
+        client.approve_and_release(&id, &payer, &0);
+
+        assert_eq!(token_client.balance(&payee), 1_000);
+
+        let stored = client.get_milestone(&id, &0);
+        assert_eq!(stored.status, EscrowStatus::Completed);
+    }
 }
