@@ -377,7 +377,9 @@ fn main() {
     // ── #236/#237: Reject a malformed contract ID or RPC URL up front with
     // a clear message instead of a cryptic failure deep in the Stellar CLI. ─
     let validation = if native_only {
-        config::validate_rpc_url(&config.rpc_url).map_err(|e| vec![e])
+        config::validate_rpc_url(&config.rpc_url, cli.unsafe_rpc)
+            .map(|_| ())
+            .map_err(|e| vec![e])
     } else {
         config.validate()
     };

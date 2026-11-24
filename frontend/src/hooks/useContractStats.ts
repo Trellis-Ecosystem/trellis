@@ -200,8 +200,8 @@ export function useContractStats(): UseContractStatsResult {
     try {
       const startLedger = await fetchOldestLedger(signal)
       const [agreements, milestonesLocked] = await Promise.all([
-        fetchEventCount('created', startLedger, signal),
-        fetchEventCount('locked', startLedger, signal),
+        fetchEventCount(CREATED_EVENT_SYMBOL, startLedger, signal),
+        fetchEventCount(LOCKED_EVENT_SYMBOL, startLedger, signal),
       ])
 
       if (signal.aborted || requestId !== requestIdRef.current) return
@@ -282,10 +282,16 @@ export function useContractStats(): UseContractStatsResult {
             statsRef.current = next
             setStats(next)
             setStatus('ok')
+            setError(null)
             setLastUpdated(new Date().toISOString())
           },
         },
-        startPolling,
+        {
+          onError: () => {
+            if (controller.signal.aborted) return
+            startPolling()
+          },
+        },
       )
     } else {
       startPolling()
@@ -293,9 +299,9 @@ export function useContractStats(): UseContractStatsResult {
 
     return () => {
       controller.abort()
-      closeStream?.()
       stopInterval()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      closeStream?.()
     }
   }, [fetchStats])
 

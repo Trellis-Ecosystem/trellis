@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { nativeToScVal, StrKey, xdr } from '@stellar/stellar-sdk'
 import { useContractInvoke } from '../hooks/useContractInvoke'
@@ -95,6 +95,16 @@ function CreateAgreementPage() {
   const toast = useToastActions()
   const { invoke, status } = useContractInvoke()
 
+  const fieldId = useId()
+  const payerId = `${fieldId}-payer`
+  const payeeId = `${fieldId}-payee`
+  const resolverId = `${fieldId}-resolver`
+  const tokenId = `${fieldId}-token`
+  const payerErrorId = `${payerId}-error`
+  const payeeErrorId = `${payeeId}-error`
+  const resolverErrorId = `${resolverId}-error`
+  const tokenErrorId = `${tokenId}-error`
+
   const [agreementId, setAgreementId] = useState<string>('')
   const [formData, setFormData] = useState<FormData>({
     payer: '',
@@ -110,6 +120,10 @@ function CreateAgreementPage() {
   // The payer is always the connected wallet: `init` requires payer auth, so any
   // other value would fail on-chain after signing.
   const payer = wallet.publicKey ?? ''
+
+  // Only treat the hook as busy while a transaction is actually in flight.
+  // Terminal states ('error'/'success') must not keep the button disabled.
+  const isInFlight = status === 'building' || status === 'signing' || status === 'submitting'
 
   const validateAddress = (address: string, field: string): string | undefined => {
     const trimmed = address.trim()
@@ -232,17 +246,10 @@ function CreateAgreementPage() {
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
           >
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
-          <span>
-            Agreement ID generated. Share it with your counterparty so they can track the agreement.
-          </span>
+          <span>Agreement ID: <code className="font-mono text-cyan-400">{agreementId}</code></span>
         </div>
       )}
 
@@ -318,38 +325,22 @@ function CreateAgreementPage() {
         </div>
 
         {/* Milestones */}
-        <div className="rounded-xl border border-navy-700 dark:border-navy-700 light:border-gray-200 bg-navy-800/60 dark:bg-navy-800/60 light:bg-gray-50 p-6">
+        <div>
           <MilestoneBuilder milestones={milestones} onChange={setMilestones} />
           {errors.milestones && (
-            <p className="mt-2 text-sm text-red-400">{errors.milestones}</p>
+            <p role="alert" className="mt-2 text-sm text-red-400">
+              {errors.milestones}
+            </p>
           )}
         </div>
 
-        {/* Submit Button */}
-        <div className="flex gap-4">
-          <button
-            type="submit"
-            disabled={isSubmitting || !wallet.connected || status !== 'idle'}
-            className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-navy-900 font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSubmitting ? 'Creating Agreement...' : 'Create Agreement'}
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            disabled={isSubmitting}
-            className="px-6 py-3 border border-navy-700 dark:border-navy-700 light:border-gray-200 text-gray-400 dark:text-gray-400 light:text-gray-600 hover:text-white dark:hover:text-white light:hover:text-gray-900 rounded-lg transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        </div>
-
-        {!wallet.connected && (
-          <p className="text-sm text-yellow-400 text-center">
-            Please connect your wallet to create an agreement
-          </p>
-        )}
+        <button
+          type="submit"
+          disabled={isSubmitting || status === 'pending'}
+          className="w-full px-6 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-navy-900 font-semibold rounded-lg transition-colors"
+        >
+          {isSubmitting || status === 'pending' ? 'Creating Agreement...' : 'Create Agreement'}
+        </button>
       </form>
     </main>
   )

@@ -4208,6 +4208,75 @@ fn test_release_partial_happy_path() {
     );
 }
 
+/// #634: `get_remaining_amount` is the cheap single-milestone view of the
+/// escrowed remainder, so clients do not have to fetch the whole agreement.
+///
+/// Before any release it must report the full milestone amount; after a
+/// `release_partial` it must report `amount - released`, matching what
+/// `release_partial` itself returns and what `approve_and_release` later pays
+/// out. The two documented failure modes — an unknown agreement and an
+/// out-of-range milestone — are asserted with their exact error variants.
+#[test]
+fn test_get_remaining_amount() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 149);
+    let amount: i128 = 1_000;
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, amount),
+        &dispute_resolver,
+    );
+
+    // ── Before any release: the full amount is still escrowed ─────────────
+    assert_eq!(
+        client.get_remaining_amount(&id, &0u32),
+        amount,
+        "before any release the whole milestone amount must be escrowed"
+    );
+
+    // ── After a partial release: only the remainder is escrowed ───────────
+    client.lock_funds(&id, &0u32);
+    assert_eq!(
+        client.get_remaining_amount(&id, &0u32),
+        amount,
+        "locking funds must not change the escrowed remainder"
+    );
+    assert_eq!(
+        client.release_partial(&id, &0u32, &300i128),
+        700,
+        "a partial release must leave the remainder escrowed"
+    );
+    assert_eq!(
+        client.get_remaining_amount(&id, &0u32),
+        700,
+        "after releasing 300 of 1000 the view must report 700"
+    );
+
+    // ── Unknown agreement: AgreementNotFound ──────────────────────────────
+    let missing = agreement_id(&env, 98);
+    assert_eq!(
+        client.try_get_remaining_amount(&missing, &0u32),
+        Err(Ok(TrellisError::AgreementNotFound)),
+        "an agreement that was never initialised must return AgreementNotFound"
+    );
+
+    // ── Out-of-range milestone: InvalidMilestone ──────────────────────────
+    assert_eq!(
+        client.try_get_remaining_amount(&id, &1u32),
+        Err(Ok(TrellisError::InvalidMilestone)),
+        "an out-of-range milestone_id must return InvalidMilestone"
+    );
+    assert_eq!(
+        client.try_get_remaining_amount(&id, &u32::MAX),
+        Err(Ok(TrellisError::InvalidMilestone)),
+        "u32::MAX must return InvalidMilestone, not a panic"
+    );
+}
+
 /// #614: after a partial release, `approve_and_release` must pay out only the
 /// remainder, not the full milestone amount.
 ///

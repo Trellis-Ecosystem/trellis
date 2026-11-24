@@ -307,9 +307,18 @@ pub enum Commands {
         #[arg(long)]
         milestone_id: u32,
 
-        /// Pass true to refund locked funds to the payer (payer wins).
-        /// Pass false to release funds to the payee (payee wins).
-        #[arg(long, default_value = "false")]
+        /// Refund locked funds to the payer (payer wins) when true, or release
+        /// them to the payee (payee wins) when false.
+        ///
+        /// The value is optional: `--refund-to-payer` alone means `true`, and
+        /// `--refund-to-payer true` / `--refund-to-payer false` are both
+        /// accepted. Omit the flag entirely to default to `false`.
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "true",
+            default_value_t = false
+        )]
         refund_to_payer: bool,
 
         /// Split ruling: amount to refund to the payer (non-negative i128).
@@ -4116,6 +4125,60 @@ mod tests {
         assert!(validate_agreement_id(&"z".repeat(64)).is_err());
         // Sanity: the handler itself is reachable with a valid ID.
         assert!(run_decline_unfunded_milestone(&config, "c".repeat(64), 0, true, &opts).is_ok());
+    }
+
+    // --- --refund-to-payer optional value (#637) ---
+
+    #[test]
+    fn resolve_dispute_refund_to_payer_accepts_bare_true_and_false() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            command: Commands,
+        }
+
+        let id = "1".repeat(64);
+        let parse = |extra: &[&str]| {
+            let mut argv = vec![
+                "trellis",
+                "resolve-dispute",
+                "--agreement-id",
+                &id,
+                "--milestone-id",
+                "0",
+            ];
+            argv.extend_from_slice(extra);
+            TestCli::try_parse_from(argv)
+        };
+
+        // Bare flag -> true.
+        match parse(&["--refund-to-payer"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Explicit `true` -> true.
+        match parse(&["--refund-to-payer", "true"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Explicit `false` -> false.
+        match parse(&["--refund-to-payer", "false"]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(!refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // Omitted -> false (default).
+        match parse(&[]).unwrap().command {
+            Commands::ResolveDispute { refund_to_payer, .. } => assert!(!refund_to_payer),
+            other => panic!("parsed into the wrong command: {other:?}"),
+        }
+
+        // A non-boolean value is still rejected.
+        assert!(parse(&["--refund-to-payer", "maybe"]).is_err());
     }
 
     #[test]

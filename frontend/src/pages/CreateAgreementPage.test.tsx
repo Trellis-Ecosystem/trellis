@@ -7,6 +7,17 @@ import { ThemeProvider } from '../context/ThemeContext'
 import ToastProvider from '../components/toast/ToastProvider'
 import { WalletProvider } from '../context/WalletContext'
 
+const mockInvoke = vi.fn()
+
+vi.mock('../hooks/useContractInvoke', () => ({
+  useContractInvoke: () => ({
+    invoke: mockInvoke,
+    status: 'idle',
+    error: null,
+    reset: vi.fn(),
+  }),
+}))
+
 const renderCreateAgreementPage = () => {
   return render(
     <BrowserRouter>
@@ -61,5 +72,22 @@ describe('<CreateAgreementPage />', () => {
     renderCreateAgreementPage()
 
     expect(screen.getByRole('button', { name: /create agreement/i })).toBeDisabled()
+  })
+
+  it('re-enables the Create Agreement button after invoke rejects', async () => {
+    mockInvoke.mockRejectedValue(new Error('User rejected the request'))
+
+    renderCreateAgreementPage()
+
+    const submitButton = screen.getByRole('button', { name: /create agreement/i })
+    fireEvent.click(submitButton)
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalled()
+    })
+
+    await waitFor(() => {
+      expect(submitButton).toBeEnabled()
+    })
   })
 })

@@ -24,6 +24,27 @@ export interface AgreementEvent {
   cancelledBy?: string
 }
 
+/**
+ * Maps the contract's `trls_*` event topic symbols (see
+ * contracts/trellis_core/src/events.rs) to the event type names consumed by
+ * the UI.  Every symbol the contract can emit must be present here, otherwise
+ * `parseEventType` falls back to 'unknown'.
+ */
+export const EVENT_TYPE_MAP: Record<string, string> = {
+  trls_crte: 'created',
+  trls_lckd: 'locked',
+  trls_sbmt: 'work_submitted',
+  trls_rlsd: 'released',
+  trls_dspt: 'disputed',
+  trls_rslv: 'resolved',
+  trls_cncl: 'cancelled',
+  trls_prtl: 'partial_release',
+  trls_cmpl: 'completed',
+  trls_ttle: 'ttl_extended',
+  trls_ddln: 'deadline_set',
+  trls_expd: 'expired',
+}
+
 const BASE_POLL_INTERVAL_MS = 10_000 // Base poll interval: 10 seconds
 const MAX_POLL_INTERVAL_MS = 60_000  // Cap backoff at 60 seconds
 const FETCH_TIMEOUT_MS = 30_000     // Per-request timeout: 30 seconds
@@ -76,9 +97,10 @@ export function useAgreementEvents(agreementId: string | null) {
       const mergedSignal = AbortSignal.any([signal, timeoutController.signal])
 
       try {
-        // Encode agreement_id topic filter
-        const idBytes = Buffer.from(agreementId, 'hex')
-        const idScVal = xdr.ScVal.scvBytes(idBytes)
+        // Encode agreement_id topic filter. Events are published with topics
+        // (symbol, agreement_id), so the first segment is a wildcard and the
+        // agreement id is matched against topic 1.
+        const idScVal = xdr.ScVal.scvBytes(hexToBytes(agreementId))
         const idTopic = idScVal.toXDR('base64')
 
         const startLedger = await getRecentStartLedger(mergedSignal)
@@ -93,7 +115,7 @@ export function useAgreementEvents(agreementId: string | null) {
               {
                 type: 'contract',
                 contractIds: [CONTRACT_ID],
-                topics: [[idTopic]],
+                topics: [['*', idTopic]],
               },
             ],
             pagination: { limit: 100 },
@@ -231,7 +253,6 @@ export function useAgreementEvents(agreementId: string | null) {
       closeStream?.()
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current)
-        timerRef.current = null
       }
     }
   }, [fetchEvents, agreementId])
@@ -265,16 +286,22 @@ function toAgreementEvents(rawEvents: unknown[], agreementId: string): Agreement
 }
 
 function eventsOf(data: unknown): unknown[] {
-  const events = (data as { events?: unknown } | null)?.events
-  return Array.isArray(events) ? events : []
+  if (Array.isArray(data)) return data
+  if (data && typeof data === 'object' && Array.isArray((data as { events?: unknown[] }).events)) {
+    return (data as { events: unknown[] }).events
+  }
+  return []
 }
 
-/** Adds relay deltas to the list, skipping any event already present. */
 function mergeEvents(prev: AgreementEvent[], fresh: AgreementEvent[]): AgreementEvent[] {
   const seen = new Set(prev.map((e) => e.id).filter(Boolean))
-  const added = fresh.filter((e) => !e.id || !seen.has(e.id))
-  if (added.length === 0) return prev
-  return [...added, ...prev].sort((a, b) => b.ledger - a.ledger)
+  const merged = [...prev]
+  for (const event of fresh) {
+    if (event.id && seen.has(event.id)) continue
+    if (event.id) seen.add(event.id)
+    merged.push(event)
+  }
+  return merged
 }
 
 function parseEventType(event: RawEventResponse): string {
@@ -290,5 +317,5 @@ function parseEventType(event: RawEventResponse): string {
   } catch {
     // Fallback to unknown
   }
-  return 'unknown'
+  return parsed
 }
