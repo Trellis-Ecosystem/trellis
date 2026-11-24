@@ -354,6 +354,93 @@ fn bench_batch_lock_funds_50() {
     );
 }
 
+/// #632 — `release_partial` writes two ledger entries (lib.rs:401-404), so it
+/// needs its own cost baseline distinct from `approve_and_release`.
+fn bench_release_partial() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 11);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 1_000),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.submit_work(&id, &0u32, &None);
+
+    env.cost_estimate().budget().reset_default();
+
+    client.release_partial(&id, &0u32, &400i128);
+
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    println!(
+        r#"{{"benchmark":"release_partial","cpu_instructions":{},"memory_bytes":{}}}"#,
+        cpu, mem
+    );
+}
+
+/// #632 — `resolve_dispute_split` performs two token transfers, so its cost
+/// differs from the all-or-nothing `resolve_dispute`.
+fn bench_resolve_dispute_split() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 12);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 1_000),
+        &dispute_resolver,
+    );
+    client.lock_funds(&id, &0u32);
+    client.raise_dispute(&payer, &id, &0u32, &None);
+
+    env.cost_estimate().budget().reset_default();
+
+    client.resolve_dispute_split(&id, &0u32, &600i128);
+
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    println!(
+        r#"{{"benchmark":"resolve_dispute_split","cpu_instructions":{},"memory_bytes":{}}}"#,
+        cpu, mem
+    );
+}
+
+/// #632 — `cancel_unfunded_milestone` on a Pending milestone.
+fn bench_cancel_unfunded_milestone() {
+    let (env, payer, payee, dispute_resolver, token_address, client) = setup();
+    let id = agreement_id(&env, 13);
+
+    client.init(
+        &id,
+        &payer,
+        &payee,
+        &token_address,
+        &one_milestone(&env, 1_000),
+        &dispute_resolver,
+    );
+
+    env.cost_estimate().budget().reset_default();
+
+    client.cancel_unfunded_milestone(&id, &0u32);
+
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    println!(
+        r#"{{"benchmark":"cancel_unfunded_milestone","cpu_instructions":{},"memory_bytes":{}}}"#,
+        cpu, mem
+    );
+}
+
 fn bench_get_agreement() {
     let (env, payer, payee, dispute_resolver, token_address, client) = setup();
     let id = agreement_id(&env, 9);
@@ -433,6 +520,12 @@ fn main() {
     bench_batch_lock_funds();
     println!(",");
     bench_batch_lock_funds_50();
+    println!(",");
+    bench_release_partial();
+    println!(",");
+    bench_resolve_dispute_split();
+    println!(",");
+    bench_cancel_unfunded_milestone();
     println!(",");
     bench_get_agreement();
     println!(",");

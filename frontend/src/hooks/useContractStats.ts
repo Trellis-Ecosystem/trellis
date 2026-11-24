@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { xdr } from '@stellar/stellar-sdk'
 import { CONTRACT_ID, RPC_URL, getIndexerUrl } from '../lib/config'
 import { openIndexerStream } from '../lib/indexer'
-import { CONTRACT_ID, RPC_URL } from '../lib/config'
-import { getRecentStartLedger, isRetentionWindowError, RETENTION_WINDOW_MESSAGE } from '../lib/eventWindow'
+import { isRetentionWindowError, RETENTION_WINDOW_MESSAGE } from '../lib/eventWindow'
 
 export interface ContractStats {
   agreements: number
@@ -201,8 +200,8 @@ export function useContractStats(): UseContractStatsResult {
     try {
       const startLedger = await fetchOldestLedger(signal)
       const [agreements, milestonesLocked] = await Promise.all([
-        fetchEventCount('created', startLedger, signal),
-        fetchEventCount('locked', startLedger, signal),
+        fetchEventCount(CREATED_EVENT_SYMBOL, startLedger, signal),
+        fetchEventCount(LOCKED_EVENT_SYMBOL, startLedger, signal),
       ])
 
       if (signal.aborted || requestId !== requestIdRef.current) return
@@ -283,10 +282,16 @@ export function useContractStats(): UseContractStatsResult {
             statsRef.current = next
             setStats(next)
             setStatus('ok')
+            setError(null)
             setLastUpdated(new Date().toISOString())
           },
         },
-        startPolling,
+        {
+          onError: () => {
+            if (controller.signal.aborted) return
+            startPolling()
+          },
+        },
       )
     } else {
       startPolling()
@@ -294,9 +299,9 @@ export function useContractStats(): UseContractStatsResult {
 
     return () => {
       controller.abort()
-      closeStream?.()
       stopInterval()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      closeStream?.()
     }
   }, [fetchStats])
 

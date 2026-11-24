@@ -57,9 +57,12 @@ Please include as much of the following as you can:
 The `trellis` CLI needs a signing key (`TRELLIS_SOURCE_KEY`). It accepts
 either form:
 
-- **A named `stellar keys` identity** (e.g. `alice`) — **recommended**. The
-  secret never leaves the Stellar keystore; only the identity name is passed
-  to the `stellar` binary.
+- **A named identity stored in the OS keychain** (e.g. `alice`, added with
+  `trellis keys add`) — **recommended**. The CLI resolves the name against
+  the keychain and hands the stored secret to the child `stellar` process
+  through the `STELLAR_SECRET_KEY` environment variable, so the name does
+  not need to be a `stellar keys` identity and the secret never appears on
+  a command line.
 - **A raw `S…` secret seed** — supported, but handled defensively:
   - The seed is **never placed on a command line**. Passing it as
     `stellar contract invoke --source S…` would expose it to every local
@@ -70,7 +73,8 @@ either form:
     exported `TRELLIS_SOURCE_KEY`, so the seed lives only in a file you
     control (ideally mode `0600`) and never in your shell history or the
     parent process's environment.
-  - The CLI prints a warning when it detects a raw seed.
+  - The CLI prints a warning only when the configured value is itself a raw
+    `S…` seed; identity names resolved from the keychain do not trigger it.
 
 ## Environment Files and Secrets
 

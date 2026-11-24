@@ -37,25 +37,20 @@ use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
 // and documented here so indexers can rely on them as stable identifiers.
 //
 // Event schema (topics → data):
-//   1. "created"   → (payer: Address, payee: Address, token: Address, total_amount: i128)
-//   2. "locked"    → (milestone_id: u32, amount: i128)
-//   3. "submitted" → (milestone_id: u32, proof_uri: Option<String>)
-//   4. "released"  → (milestone_id: u32, amount: i128)
-//   5. "disputed"  → (milestone_id: u32, caller: Address)
-//   6. "resolved"  → (milestone_id: u32, payer_amount: i128, payee_amount: i128)
-//   7. "cancelled" → (milestone_id: u32, payer: Address, cancelled_by: Address)
-//   8. "ttl_extended" → (caller: Address)
-//   9. "partially_released" → (milestone_id: u32, amount: i128, remaining: i128)
-//  10. "agreement_completed" → (completed_count: u32, refunded_count: u32)
-//  11. "deadline_set" → (milestone_id: u32, deadline: u64)
-//  12. "expired"   → (milestone_id: u32, refunded_amount: i128, caller: Address)
-//  13. "resolver_rotated" → (old_resolver: Address, new_resolver: Address)
-//  14. "declined"  → (milestone_id: u32, payer: Address, payee: Address, declined_by: Address, amount: i128)
-//
-// Schema changes: the `amount` field on "disputed", "resolved" and
-// "cancelled" was appended as the last tuple element, so an indexer that
-// decodes those payloads positionally keeps reading the earlier fields at
-// the same indices. Every fund-movement event now carries an amount.
+//   1. "trls_crte" → (payer: Address, payee: Address, token: Address, total_amount: i128)
+//   2. "trls_lckd" → (milestone_id: u32, amount: i128)
+//   3. "trls_sbmt" → (milestone_id: u32, proof_uri: Option<String>)
+//   4. "trls_rlsd" → (milestone_id: u32, amount: i128)
+//   5. "trls_dspt" → (milestone_id: u32, caller: Address, amount: i128, reason_uri: Option<String>)
+//   6. "trls_rslv" → (milestone_id: u32, payer_amount: i128, payee_amount: i128)
+//   7. "trls_cncl" → (milestone_id: u32, payer: Address, cancelled_by: Address, amount: i128)
+//   8. "trls_dcln" → (milestone_id: u32, payer: Address, payee: Address, declined_by: Address, amount: i128)
+//   9. "trls_prtl" → (milestone_id: u32, amount: i128, remaining: i128)
+//  10. "trls_cmpl" → (completed_count: u32, refunded_count: u32)
+//  11. "trls_ttle" → (caller: Address)
+//  12. "trls_ddln" → (milestone_id: u32, deadline: u64)
+//  13. "trls_expd" → (milestone_id: u32, refunded_amount: i128, caller: Address)
+//  14. "trls_rrot" → (old_resolver: Address, new_resolver: Address)
 //
 // `amount` semantics: on "released", "disputed" and "resolved" it is the
 // amount still held in escrow for the milestone at the time of the call —

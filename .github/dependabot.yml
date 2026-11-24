@@ -20,8 +20,8 @@ updates:
           - "patch"
         applies-to: "security-updates"
 
-  # Covers Cargo.toml dependencies and the `channel` pin in
-  # rust-toolchain.toml — Dependabot bumps both automatically.
+  # Covers Cargo.toml dependencies only. The `channel` pin in
+  # rust-toolchain.toml is handled by the `rust-toolchain` entry below.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -40,6 +40,16 @@ updates:
         update-types:
           - "patch"
         applies-to: "security-updates"
+
+  # Bumps the `channel` pin in rust-toolchain.toml.
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "infrastructure"
 
   - package-ecosystem: "github-actions"
     directory: "/"

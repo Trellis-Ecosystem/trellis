@@ -68,6 +68,9 @@ Use this JSON output in CI to detect gas regressions (>10% increase).
 - `resolve_dispute`
 - `batch_lock_funds` (5 milestones)
 - `get_agreement`
+- `release_partial` (writes two ledger entries)
+- `resolve_dispute_split` (two token transfers)
+- `cancel_unfunded_milestone`
 
 ### 4. Mutation Testing (`mutants.toml`)
 
@@ -103,13 +106,21 @@ cargo mutants --timeout 120
 
 ### 5. Snapshot Files (`test_snapshots/`)
 
-The hand-written suites (`test.rs`, `test_storage.rs`) record ledger state for
-each test into `test_snapshots/`. Regenerate them after a contract change with
-`make test-snapshots-update` and commit the result; CI fails on stale snapshots.
+The Soroban SDK test environment writes a JSON snapshot under
+`test_snapshots/` for every test that uses the default `Env`. In this crate
+that means the hand-written suites (`test.rs`, `test_storage.rs`). Snapshots
+are regenerated automatically on each `cargo test` run — there is no separate
+update command or tool to install.
 
 Property and panic-boundary tests do **not** write snapshots: their shared
 fixture `setup_mocked` uses `EnvTestConfig { capture_snapshot_at_drop: false }`,
 because one file per generated case added thousands of tracked files.
+
+**Reviewing snapshot diffs:** after `cargo test`, inspect any changed JSON in
+`test_snapshots/` and confirm it reflects the intended ledger-state change
+(e.g. new storage keys, changed balances, or altered event data). Commit the
+updated snapshots alongside the code change that caused them. CI fails on
+stale snapshots, so a forgotten update will surface as a failing check.
 
 ## CI Integration
 
@@ -147,6 +158,30 @@ test:
         python scripts/compare_gas_costs.py baseline.json gas_costs.json
 ```
 
+### Gas Regression Check in CI
+
+On every pull request the `gas-benchmarks` job runs
+`cargo bench --bench contract_bench` and then invokes
+`scripts/compare_gas_costs.py` with a 10% threshold, comparing the freshly
+produced `contracts/trellis_core/gas_costs.json` against the committed
+baseline at `contracts/trellis_core/baseline_gas_costs.json`. A pull request
+that raises any benchmarked entrypoint's CPU cost by more than 10% fails the
+job.
+
+### Regenerating the Baseline
+
+After an intentional performance change (or when adding a benchmark), refresh
+the committed baseline from a clean run on the target commit:
+
+```bash
+cd contracts/trellis_core
+cargo bench --bench contract_bench > baseline_gas_costs.json
+git add baseline_gas_costs.json
+git commit -m "chore: refresh gas baseline"
+```
+
+Review the diff before committing — only the expected benchmarks should move.
+
 ## Test Development Guidelines
 
 ### When to Add Example-Based Tests
@@ -172,13 +207,21 @@ test:
 
 ## Performance Targets
 
-| Operation | CPU (max) | Memory (max) |
-|-----------|-----------|--------------|
-| init (1 milestone) | TBD | TBD |
-| lock_funds | TBD | TBD |
-| approve_and_release | TBD | TBD |
+The committed baseline (`contracts/trellis_core/baseline_gas_costs.json`) is
+the source of truth for per-operation costs. CI flags any pull request that
+exceeds a benchmarked entrypoint's baseline CPU cost by more than 10%.
 
-Run benchmarks to establish baseline, then flag PRs that exceed thresholds.
+| Operation | CPU (baseline) | Memory (baseline) |
+|-----------|----------------|-------------------|
+| init (1 milestone) | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+| lock_funds | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+| approve_and_release | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+| release_partial | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+| resolve_dispute_split | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+| cancel_unfunded_milestone | see `baseline_gas_costs.json` | see `baseline_gas_costs.json` |
+
+Regenerate the baseline with `cargo bench --bench contract_bench` as described
+above whenever costs change intentionally.
 
 ## Debugging Failed Tests
 

@@ -68,10 +68,11 @@ use std::process;
     propagate_version = true,
 )]
 struct Cli {
-    /// Network preset to connect to. `custom` requires `--rpc-url` and
-    /// `--network-passphrase`.
-    #[arg(long, global = true, value_enum, default_value_t = Network::Testnet)]
-    network: Network,
+    /// Network preset to connect to (default: testnet). `custom` requires
+    /// `--rpc-url` and `--network-passphrase`. Kept optional so an explicit
+    /// choice can be told apart from the default (#654).
+    #[arg(long, global = true, value_enum)]
+    network: Option<Network>,
 
     /// Custom Soroban RPC endpoint. Required when `--network=custom`;
     /// overrides the preset / env var for any other network.
@@ -267,6 +268,38 @@ fn validate_environment() -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve `config.source_key` against the keychain (#639).
+///
+/// * A raw `S…` seed is left as-is and yields the raw-seed warning promised
+///   by SECURITY.md.
+/// * An empty value is left as-is with no warning.
+/// * Any other value (a named identity) is looked up in `ks`; on a hit the
+///   stored seed replaces it, on a miss it is left unchanged so `stellar`
+///   can resolve it as a `stellar keys` identity.
+///
+/// Returns an optional warning to print to stderr.
+fn resolve_source_key_from_keychain<K: keystore::KeyLookup>(
+    config: &mut config::Config,
+    ks: &K,
+) -> Option<String> {
+    let source_key = config.source_key.clone();
+    if source_key.is_empty() {
+        return None;
+    }
+    if config::is_secret_seed(&source_key) {
+        return Some(
+            "Warning: TRELLIS_SOURCE_KEY contains a raw secret seed. Prefer \
+             TRELLIS_SOURCE_KEY_FILE or a named identity from `trellis keys add` \
+             so the seed never appears in `ps` or the environment."
+                .to_string(),
+        );
+    }
+    if let Some(seed) = ks.get_from_keychain(&source_key) {
+        config.source_key = seed;
+    }
+    None
+}
+
 /// Build the output options from the global flags.
 ///
 /// #77/#74: `--json` takes priority over `--human-readable`; `--quiet`
@@ -292,13 +325,14 @@ fn output_opts(cli: &Cli) -> OutputOpts {
 
 fn main() {
     let cli = Cli::parse();
+    let opts = output_opts(&cli);
 
     // ── #66/#487: Load the env file before reading any config env vars ────
     // No clap arg reads from the environment, so parsing first is safe and
     // lets `--env-file` pick the file. Without it, `.env` is discovered from
     // the CWD as before. Priority: CLI args > env vars > env file values.
     if let Err(msg) = load_env_file(explicit_env_file(cli.env_file.clone()).as_deref()) {
-        eprintln!("{msg}");
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
@@ -317,8 +351,8 @@ fn main() {
     // the stellar binary nor a valid contract/key configuration. ─────────
     if let Commands::History { limit, clear } = cli.command {
         let path = history::default_path();
-        if let Err(msg) = commands::run_history(path.as_deref(), limit, clear, &output_opts(&cli)) {
-            eprintln!("{msg}");
+        if let Err(msg) = commands::run_history(path.as_deref(), limit, clear, &opts) {
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
         return;
@@ -336,14 +370,22 @@ fn main() {
 
     if !cli.dry_run && !native_only {
         if let Err(msg) = validate_environment() {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     }
 
     // ── #80: Resolve config from --network preset + CLI / env overrides ───
-    let config = match config::Config::resolve(
+    let mut config = match config::Config::resolve(
         cli.network,
+        cli.rpc_url.as_deref(),
+        cli.network_passphrase.as_deref(),
+    ) {
+        eprintln!("{warning}");
+    }
+
+    let config = match config::Config::resolve(
+        network,
         cli.rpc_url.clone(),
         cli.network_passphrase.clone(),
         cli.source_key_file.clone(),
@@ -351,18 +393,29 @@ fn main() {
     ) {
         Ok(c) => c,
         Err(msg) => {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     };
+
+    // ── #639: Substitute a keychain-stored seed for a named identity ──────
+    // `trellis keys add` writes entries that were previously never read.
+    // When `source_key` is neither empty nor a raw `S…` seed, look it up in
+    // the keychain; on a hit the stored seed replaces the identity name so
+    // `rpc.rs` delivers it to the child via `STELLAR_SECRET_KEY`. On a miss
+    // the value is left untouched so `stellar` can still resolve it as a
+    // `stellar keys` identity.
+    if let Some(warning) = resolve_source_key_from_keychain(&mut config, &keystore::Keystore::new())
+    {
+        eprintln!("{warning}");
+    }
 
     // ── #485: `trellis config` reports the resolved configuration, including
     // a missing `stellar` binary or invalid values, instead of exiting on
     // them like the checks below do. ──────────────────────────────────────
     if let Commands::Config = cli.command {
-        let opts = output_opts(&cli);
         let stellar_found = validate_environment().is_ok();
-        if commands::run_config(cli.network, &config, stellar_found, &opts).is_err() {
+        if commands::run_config(network, &config, stellar_found, &opts).is_err() {
             process::exit(1);
         }
         return;
@@ -370,7 +423,7 @@ fn main() {
 
     // ── #68: Validate stellar binary at startup ────────────────────────────
     if let Err(msg) = validate_environment() {
-        eprintln!("{msg}");
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
@@ -384,14 +437,15 @@ fn main() {
         config.validate()
     };
     if let Err(errors) = validation {
-        eprintln!("Error: invalid configuration:");
+        let mut msg = "invalid configuration:".to_string();
         for e in &errors {
-            eprintln!("  - {e}");
+            msg.push_str(&format!("\n  - {e}"));
         }
-        eprintln!(
-            "\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
-             TRELLIS_SOURCE_KEY or TRELLIS_SOURCE_KEY_FILE) or pass the matching CLI flags."
+        msg.push_str(
+            "\n\nSet the required environment variables (TRELLIS_CONTRACT_ID, \
+             TRELLIS_SOURCE_KEY or TRELLIS_SOURCE_KEY_FILE) or pass the matching CLI flags.",
         );
+        commands::print_error(&msg, &opts);
         process::exit(1);
     }
 
@@ -403,19 +457,17 @@ fn main() {
         Ok(Some(warning)) => eprintln!("{warning}"),
         Ok(None) => {}
         Err(msg) => {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
             process::exit(1);
         }
     }
-
-    let opts = output_opts(&cli);
 
     // ── #67: Propagate errors from dispatch; exit(1) only in main ─────────
     // All cleanup (destructors, buffer flushes) runs before the exit call
     // because process::exit is only called here, never inside library code.
     if let Err(msg) = commands::dispatch(cli.command, &config, &opts) {
         if !msg.is_empty() {
-            eprintln!("{msg}");
+            commands::print_error(&msg, &opts);
         }
         process::exit(1);
     }
@@ -577,5 +629,90 @@ mod tests {
         std::env::set_var("TRELLIS_ENV_FILE", "");
         assert_eq!(explicit_env_file(None), None);
         std::env::remove_var("TRELLIS_ENV_FILE");
+    }
+
+    // ── #639: keychain-backed source key resolution ───────────────────────
+
+    /// Test-only keystore: a fixed map of identity name -> stored seed.
+    struct FakeKeystore {
+        entries: Vec<(String, String)>,
+    }
+
+    impl keystore::KeyLookup for FakeKeystore {
+        fn get_from_keychain(&self, name: &str) -> Option<String> {
+            self.entries
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    const TEST_SEED: &str = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    fn test_config(source_key: &str) -> config::Config {
+        let mut config = config::Config::resolve(
+            Network::Testnet,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("testnet preset resolves");
+        config.source_key = source_key.to_string();
+        config
+    }
+
+    #[test]
+    fn keychain_hit_substitutes_stored_seed() {
+        let ks = FakeKeystore {
+            entries: vec![("alice".to_string(), TEST_SEED.to_string())],
+        };
+        let mut config = test_config("alice");
+
+        let warning = resolve_source_key_from_keychain(&mut config, &ks);
+
+        assert!(warning.is_none(), "no warning for an identity name");
+        assert_eq!(config.source_key, TEST_SEED);
+    }
+
+    #[test]
+    fn keychain_miss_leaves_identity_unchanged() {
+        let ks = FakeKeystore { entries: vec![] };
+        let mut config = test_config("alice");
+
+        let warning = resolve_source_key_from_keychain(&mut config, &ks);
+
+        assert!(warning.is_none());
+        assert_eq!(config.source_key, "alice");
+    }
+
+    #[test]
+    fn raw_seed_warns_and_is_not_looked_up() {
+        // Even if the keychain happens to hold an entry under the seed
+        // string, a raw seed must be left untouched and warned about.
+        let ks = FakeKeystore {
+            entries: vec![(TEST_SEED.to_string(), "other".to_string())],
+        };
+        let mut config = test_config(TEST_SEED);
+
+        let warning = resolve_source_key_from_keychain(&mut config, &ks);
+
+        let warning = warning.expect("raw seed must warn");
+        assert!(warning.contains("raw secret seed"), "{warning}");
+        assert!(!warning.contains("set-default"), "{warning}");
+        assert_eq!(config.source_key, TEST_SEED);
+    }
+
+    #[test]
+    fn empty_source_key_is_left_alone() {
+        let ks = FakeKeystore {
+            entries: vec![("".to_string(), TEST_SEED.to_string())],
+        };
+        let mut config = test_config("");
+
+        let warning = resolve_source_key_from_keychain(&mut config, &ks);
+
+        assert!(warning.is_none());
+        assert_eq!(config.source_key, "");
     }
 }

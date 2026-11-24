@@ -10,14 +10,27 @@ function env(name, fallback) {
   process.exit(1)
 }
 
+function parsePositiveInt(name, fallback) {
+  const raw = env(name, String(fallback))
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value <= 0) {
+    console.error(`[indexer] ${name} must be a positive integer, got "${raw}"`)
+    process.exit(1)
+  }
+  return value
+}
+
 const config = {
   rpcUrl: env('RPC_URL'),
   contractId: env('CONTRACT_ID'),
   dbPath: env('DB_PATH', './data/trellis-events.db'),
-  port: Number(env('PORT', '8787')),
-  pollIntervalMs: Number(env('POLL_INTERVAL_MS', '5000')),
+  port: parsePositiveInt('PORT', 8787),
+  pollIntervalMs: parsePositiveInt('POLL_INTERVAL_MS', 5000),
   corsOrigin: env('CORS_ORIGIN', '*'),
-  maxClients: Number(env('MAX_SSE_CLIENTS', '1000')),
+  maxClients: parsePositiveInt('MAX_SSE_CLIENTS', 1000),
+  maxClientsPerIp: parsePositiveInt('MAX_SSE_CLIENTS_PER_IP', 10),
+  maxBufferBytes: parsePositiveInt('MAX_SSE_BUFFER_BYTES', 1048576),
+  maxLagLedgers: parsePositiveInt('MAX_LAG_LEDGERS', 100),
   startLedger: process.env.START_LEDGER,
 }
 
@@ -51,6 +64,9 @@ const server = createIndexerServer({
   ingester,
   corsOrigin: config.corsOrigin,
   maxClients: config.maxClients,
+  maxClientsPerIp: config.maxClientsPerIp,
+  maxBufferBytes: config.maxBufferBytes,
+  maxLagLedgers: config.maxLagLedgers,
 })
 
 server.listen(config.port, () => {

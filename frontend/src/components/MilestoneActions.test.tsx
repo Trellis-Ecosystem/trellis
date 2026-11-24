@@ -1,68 +1,68 @@
-import { render, screen, fireEvent } from '@testing-library/react'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
+import { describe, expect, it, vi } from 'vitest'
 import MilestoneActions from './MilestoneActions'
-import { ThemeProvider } from '../context/ThemeContext'
-import { WalletProvider } from '../context/WalletContext'
+import { DEFAULT_INCLUSION_FEE, type InvokeStatus } from '../hooks/useContractInvoke'
 import type { Agreement, Milestone } from '../lib/soroban'
 
-const mockMilestone: Milestone = {
-  id: 1,
-  amount: '1000',
-  status: 'pending',
-}
+const payer = 'GAQAA5Z4K7FF5H66GEQXCWUBSBDZXY52B3Z5U42EB46BEOV6PC6YWRYE'
+const submit = vi.fn()
 
-const mockAgreement: Agreement = {
-  agreement_id: 'a'.repeat(64),
-  payer: 'GAQAA5Z4K7FF5H66GEQXCWUBSBDZXY52B3Z5U42EB46BEOV6PC6YWRYE',
-  payee: 'GCYBXL5CD5FWUEURISB5PLAUQV2DNGHSACCNAK3FYJSTF2QJD5CUYNGF',
-  resolver: 'GAN2FJTJ7A4Z2VYKOO3YZWMHZKD7WWEXZB5LBPD2MPWZP3UQFQQ4S5K',
-  payment_token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
-  milestones: [mockMilestone],
-  created: '2024-01-01',
-}
+vi.mock('../context/WalletContext', () => ({
+  useWallet: () => ({ connected: true, publicKey: payer }),
+}))
 
-const renderMilestoneActions = () => {
-  return render(
-    <ThemeProvider>
-      <WalletProvider>
-        <MilestoneActions milestone={mockMilestone} agreement={mockAgreement} />
-      </WalletProvider>
-    </ThemeProvider>
-  )
-}
+vi.mock('../hooks/useToast', () => ({
+  useToastActions: () => ({ error: vi.fn(), success: vi.fn() }),
+}))
+
+vi.mock('../hooks/useMilestoneDeadline', () => ({
+  useMilestoneDeadline: () => ({ deadline: null }),
+}))
+
+vi.mock('../hooks/useContractInvoke', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../hooks/useContractInvoke')>()
+  return {
+    ...original,
+    useContractInvoke: () => {
+      const [status, setStatus] = useState<InvokeStatus>('idle')
+      return {
+        invoke: (method: string, args: unknown[], publicKey: string, fee = original.DEFAULT_INCLUSION_FEE) => {
+          submit(method, args, publicKey, fee)
+          setStatus('error')
+          return Promise.reject(new Error('Network busy'))
+        },
+        status,
+        txHash: null,
+        error: 'Network busy',
+        reset: () => setStatus('idle'),
+      }
+    },
+  }
+})
 
 describe('<MilestoneActions />', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  it('retries the failed action with a higher, bounded inclusion fee', async () => {
+    const milestone: Milestone = { id: 1, amount: '1000', status: 'Pending', proof_uri: null }
+    const agreement: Agreement = {
+      agreement_id: 'a'.repeat(64),
+      payer,
+      payee: '',
+      token: '',
+      dispute_resolver: '',
+      milestones: [milestone],
+    }
+    render(<MilestoneActions milestone={milestone} agreement={agreement} />)
 
-  it('renders milestone actions component', () => {
-    renderMilestoneActions()
+    fireEvent.click(screen.getByRole('button', { name: 'Lock Funds' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry with adjusted gas' }))
 
-    expect(screen.getByText(/actions/i)).toBeInTheDocument()
-  })
-
-  it('renders action buttons for the milestone', () => {
-    renderMilestoneActions()
-
-    // Should render various action buttons
-    const buttons = screen.getAllByRole('button')
-    expect(buttons.length).toBeGreaterThan(0)
-  })
-
-  it('disables actions when wallet is not connected', () => {
-    renderMilestoneActions()
-
-    // Actions should be present but may be disabled without proper wallet connection
-    const buttons = screen.getAllByRole('button')
-    expect(buttons.length).toBeGreaterThan(0)
-  })
-
-  it('shows transaction status when action is triggered', () => {
-    renderMilestoneActions()
-
-    const transactionElement = screen.queryByText(/transaction/i)
-    // Transaction status may or may not be visible depending on action state
-    expect(screen.getByRole('button')).toBeInTheDocument()
+    const [initial, retry] = submit.mock.calls
+    expect(initial[0]).toBe('lock_funds')
+    expect(initial[3]).toBe(DEFAULT_INCLUSION_FEE)
+    expect(retry.slice(0, 3)).toEqual(initial.slice(0, 3))
+    expect(Number(retry[3])).toBeGreaterThan(Number(initial[3]))
+    expect(Number(retry[3])).toBeLessThanOrEqual(2 * Number(initial[3]))
   })
 })

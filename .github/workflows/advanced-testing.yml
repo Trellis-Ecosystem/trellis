@@ -80,16 +80,20 @@ jobs:
           name: gas-costs
           path: contracts/trellis_core/gas_costs.json
       
-      - name: Compare with baseline (if exists)
+      - name: Compare with baseline
         if: github.event_name == 'pull_request'
+        working-directory: contracts/trellis_core
         run: |
-          if [ -f baseline_gas_costs.json ]; then
-            echo "Comparing gas costs with baseline..."
-            # TODO: Implement comparison script
-            # python scripts/compare_gas_costs.py baseline_gas_costs.json gas_costs.json
-          else
-            echo "No baseline found, skipping comparison"
+          if [ ! -f baseline_gas_costs.json ]; then
+            echo "❌ baseline_gas_costs.json not found in contracts/trellis_core"
+            exit 1
           fi
+          if [ ! -f gas_costs.json ]; then
+            echo "❌ gas_costs.json not found in contracts/trellis_core"
+            exit 1
+          fi
+          echo "Comparing gas costs with baseline (10% threshold)..."
+          python ../../scripts/compare_gas_costs.py baseline_gas_costs.json gas_costs.json 10
 
   mutation-tests:
     name: Mutation Testing

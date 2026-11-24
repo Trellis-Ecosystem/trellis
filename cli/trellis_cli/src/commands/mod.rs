@@ -532,15 +532,42 @@ pub enum DeadlineSubcommand {
     },
 }
 
+/// A secret key given on the command line. Its `Debug` output is
+/// `"<redacted>"`, so a `{:?}` of the parsed command never prints the key
+/// (#641).
+#[derive(Clone)]
+pub struct SecretArg(pub String);
+
+impl std::fmt::Debug for SecretArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\"<redacted>\"")
+    }
+}
+
+impl std::str::FromStr for SecretArg {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(SecretArg(s.to_string()))
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum KeysSubcommand {
     /// Store a Stellar secret key in the OS keychain for a named identity.
+    ///
+    /// The secret seed is never taken as a command-line argument: it is read
+    /// from stdin (or from the file given by `--key-file`) so it never lands
+    /// in shell history or the process argv (`ps`).
+    ///
+    /// Example: `echo S... | trellis keys add alice`
     Add {
         /// Identity name (e.g., "alice", "bob").
         identity: String,
 
-        /// Stellar secret key (S...).
-        key: String,
+        /// Read the Stellar secret key (S...) from this file instead of stdin.
+        #[arg(long, value_name = "PATH")]
+        key_file: Option<std::path::PathBuf>,
     },
 
     /// Remove a Stellar secret key from the OS keychain.
@@ -569,9 +596,11 @@ fn confirm_action(summary: &str, yes: bool, opts: &OutputOpts) -> Result<(), Str
 
     use std::io::Write;
 
-    println!("{summary}");
-    print!("Continue? [y/N] ");
-    std::io::stdout()
+    // Prompt on stderr so stdout stays reserved for results — a `--json` run
+    // must not prepend prompt text to the envelope (#646).
+    eprintln!("{summary}");
+    eprint!("Continue? [y/N] ");
+    std::io::stderr()
         .flush()
         .map_err(|e| format!("Failed to write prompt: {e}"))?;
 
@@ -733,15 +762,59 @@ pub fn dispatch(cmd: Commands, config: &Config, opts: &OutputOpts) -> Result<(),
     }
 }
 
+/// Read a Stellar secret seed from `key_file` when given, otherwise from stdin.
+///
+/// Surrounding whitespace (including the trailing newline `echo` adds) is
+/// trimmed. The value is never echoed back, so it cannot leak into logs.
+fn read_secret_key(key_file: Option<&std::path::Path>) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let raw = match key_file {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read key file {}: {e}", path.display()))?,
+        None => {
+            if std::io::stdin().is_terminal() {
+                eprint!("Enter Stellar secret key (S...): ");
+            }
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| format!("Failed to read secret key from stdin: {e}"))?;
+            buf
+        }
+    };
+
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err(
+            "No secret key provided: pipe it on stdin (echo S... | trellis keys add <identity>) \
+             or pass --key-file <path>."
+                .to_string(),
+        );
+    }
+    Ok(key.to_string())
+}
+
 fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
     use crate::keystore::Keystore;
 
     let keystore = Keystore::new();
 
     match subcmd {
-        KeysSubcommand::Add { identity, key } => {
+        KeysSubcommand::Add {
+            identity,
+            key_file,
+        } => {
+            let key = read_secret_key(key_file.as_deref())?;
+            if !crate::config::is_secret_seed(&key) {
+                return Err(
+                    "Invalid secret key: expected a Stellar secret seed (56 characters, \
+                     starting with 'S'). Nothing was stored."
+                        .to_string(),
+                );
+            }
             keystore
-                .store_in_keychain(&identity, &key)
+                .store_in_keychain(&identity, &key.0)
                 .map_err(|e| format!("Failed to store key: {}", e))?;
             println!("✓ Key stored for identity '{}'", identity);
             Ok(())
@@ -756,7 +829,10 @@ fn run_keys(subcmd: KeysSubcommand) -> Result<(), String> {
         KeysSubcommand::List => {
             let identities = keystore.list_keychain_identities();
             if identities.is_empty() {
-                println!("No keys stored. Use 'trellis keys add <identity> <key>' to store one.");
+                println!(
+                    "No keys stored. Use 'echo S... | trellis keys add <identity>' \
+                     (or 'trellis keys add <identity> --key-file <path>') to store one."
+                );
             } else {
                 println!("Stored identities:");
                 for identity in identities {
@@ -809,8 +885,9 @@ fn validate_agreement_id(id: &str) -> Result<(), String> {
 /// Validate a proof URI: printable, non-empty, within a reasonable length cap.
 ///
 /// Control characters (including newlines) are rejected so they cannot be
-/// used to confuse argument parsing downstream. Unicode is normalized to NFC.
-fn validate_proof_uri(uri: &str) -> Result<(), String> {
+/// used to confuse argument parsing downstream. Unicode is normalized to NFC,
+/// and the normalized value is returned so callers send that form.
+fn validate_proof_uri(uri: &str) -> Result<String, String> {
     if uri.is_empty() {
         return Err("proof_uri must not be empty".to_string());
     }
@@ -823,8 +900,7 @@ fn validate_proof_uri(uri: &str) -> Result<(), String> {
             uri.len()
         ));
     }
-    crate::sanitizer::sanitize_proof_uri(uri)?;
-    Ok(())
+    crate::sanitizer::sanitize_proof_uri(uri)
 }
 
 /// Validate a user-supplied Stellar address field (`payer`, `payee`, `token`,
@@ -863,13 +939,44 @@ fn validate_address(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Print a validation error and terminate the process.
+/// Mirror the contract's `init` rejections that depend only on the addresses,
+/// so they fail here instead of in a doomed simulation/transaction: the payer
+/// and payee must differ, the resolver must be neither party, and the token
+/// must be a contract (`C…`) address.
+fn check_init_parties(payer: &str, payee: &str, token: &str, resolver: &str) -> Result<(), String> {
+    if payer == payee {
+        return Err("payer and payee must be different addresses".to_string());
+    }
+    if resolver == payer || resolver == payee {
+        return Err("resolver must be a neutral third party, not the payer or payee".to_string());
+    }
+    if !token.starts_with('C') {
+        return Err("token must be a token contract address starting with 'C'".to_string());
+    }
+    Ok(())
+}
+
+/// Print an error that ends the command (#645).
 ///
-/// Returns `!` so it can be used both as a statement and as the fallback in
-/// `Result::unwrap_or_else` without a type mismatch.
-fn fail_validation(msg: &str) -> ! {
-    eprintln!("error: {msg}");
-    std::process::exit(1);
+/// Under `--json` / `--quiet` this is the standard error envelope on stdout,
+/// so scripts always get exactly one JSON object; otherwise it is a single
+/// `Error:`-prefixed message on stderr. Messages that already carry the
+/// prefix are not prefixed twice.
+pub fn print_error(msg: &str, opts: &OutputOpts) {
+    let msg = msg.strip_prefix("Error: ").unwrap_or(msg);
+    match opts.format {
+        OutputFormat::Json => {
+            let out = InvokeOutput {
+                stdout: String::new(),
+                stderr: msg.to_string(),
+                success: false,
+                exit_code: None,
+                command_debug: String::new(),
+            };
+            println!("{}", serde_json::to_string(&json_envelope(&out)).unwrap_or_default());
+        }
+        _ => eprintln!("Error: {msg}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -897,17 +1004,15 @@ fn run_init(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payer", &payer).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("payee", &payee).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("token", &token).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("resolver", &resolver).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("payer", &payer)?;
+    validate_address("payee", &payee)?;
+    validate_address("token", &token)?;
+    validate_address("resolver", &resolver)?;
+    check_init_parties(&payer, &payee, &token, &resolver)?;
     let agreement_id_for_history = agreement_id.clone();
 
-    let milestones_json = build_milestones_json(&milestones_csv).unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    });
+    let milestones_json = build_milestones_json(&milestones_csv)?;
 
     confirm_action(
         &format!(
@@ -952,7 +1057,7 @@ fn run_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will lock funds for milestone {milestone_id} of agreement {agreement_id}."),
@@ -987,10 +1092,9 @@ fn run_batch_lock_funds(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
-    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)
-        .unwrap_or_else(|e| fail_validation(&e));
+    let args = build_batch_lock_funds_args(agreement_id.clone(), &milestone_ids_csv)?;
 
     confirm_action(
         &format!(
@@ -1037,14 +1141,36 @@ fn run_submit_work(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    let proof_uri = match proof_uri.filter(|u| !u.is_empty()) {
+        Some(uri) => Some(validate_proof_uri(&uri)?),
+        None => None,
+    };
 
+    let proof_note = proof_uri
+        .as_deref()
+        .map(|uri| format!(" with proof {uri}"))
+        .unwrap_or_default();
     confirm_action(
-        &format!("This will submit work for milestone {milestone_id} of agreement {agreement_id}."),
+        &format!(
+            "This will submit work for milestone {milestone_id} of agreement {agreement_id}{proof_note}."
+        ),
         yes,
         opts,
     )?;
 
+    let args = build_submit_work_args(agreement_id, milestone_id, proof_uri);
+    execute(config, "submit_work", &args, opts)
+}
+
+/// Build the `submit_work` argument list from an already validated and
+/// NFC-normalized proof URI. Split out from the handler so the value that is
+/// actually sent can be unit-tested without touching the network.
+fn build_submit_work_args(
+    agreement_id: String,
+    milestone_id: u32,
+    proof_uri: Option<String>,
+) -> Vec<String> {
     let mut args = vec![
         "--agreement-id".to_string(),
         agreement_id,
@@ -1052,15 +1178,14 @@ fn run_submit_work(
         milestone_id.to_string(),
     ];
 
-    if let Some(uri) = proof_uri.filter(|u| !u.is_empty()) {
-        validate_proof_uri(&uri)?;
+    if let Some(uri) = proof_uri {
         args.push("--proof-uri".to_string());
         // `stellar contract invoke` deserializes every non-Bytes/BytesN arg as
         // JSON, so a bare string value fails to parse — it must be JSON-quoted.
         args.push(serde_json::to_string(&uri).unwrap_or(uri));
     }
 
-    execute(config, "submit_work", &args, opts)
+    args
 }
 
 /// `stellar contract invoke … -- approve_and_release …`
@@ -1077,7 +1202,7 @@ fn run_approve_release(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1112,12 +1237,14 @@ fn run_release_partial(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
     let amount = match amount.parse::<i128>() {
         Ok(a) if a > 0 => a,
-        _ => fail_validation(&format!(
-            "amount must be a positive integer, got '{amount}'"
-        )),
+        _ => {
+            return Err(format!(
+                "amount must be a positive integer, got '{amount}'"
+            ))
+        }
     };
 
     confirm_action(
@@ -1159,8 +1286,8 @@ fn run_raise_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1199,19 +1326,19 @@ fn run_resolve_dispute(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     // Split ruling (`resolve_dispute_split`): clap guarantees both amounts are
     // present together and never alongside --refund-to-payer.
     if let (Some(payer), Some(payee)) = (payer_amount, payee_amount) {
         let parse = |name: &str, v: &str| match v.parse::<i128>() {
-            Ok(a) if a >= 0 => a,
-            _ => fail_validation(&format!(
+            Ok(a) if a >= 0 => Ok(a),
+            _ => Err(format!(
                 "{name} must be a non-negative integer, got '{v}'"
             )),
         };
-        let payer = parse("payer-amount", &payer);
-        let payee = parse("payee-amount", &payee);
+        let payer = parse("payer-amount", &payer)?;
+        let payee = parse("payee-amount", &payee)?;
         confirm_action(
             &format!(
                 "This will resolve the dispute on milestone {milestone_id} of agreement {agreement_id} with a split: {payer} to the payer, {payee} to the payee."
@@ -1271,7 +1398,7 @@ fn run_cancel_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!("This will cancel milestone {milestone_id} of agreement {agreement_id}."),
@@ -1308,7 +1435,7 @@ fn run_decline_unfunded_milestone(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     confirm_action(
         &format!(
@@ -1353,8 +1480,8 @@ fn run_extend_ttl(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!("This will extend the ledger TTL of agreement {agreement_id} (rent paid by the source account)."),
@@ -1538,8 +1665,8 @@ fn run_deadline_set(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    check_deadline_in_future(deadline, unix_now()).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    check_deadline_in_future(deadline, unix_now())?;
 
     confirm_action(
         &format!(
@@ -1579,7 +1706,7 @@ fn run_deadline_get(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec![
         "--agreement-id".to_string(),
@@ -1606,8 +1733,8 @@ fn run_expire(
     yes: bool,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
-    validate_address("caller", &caller).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
+    validate_address("caller", &caller)?;
 
     confirm_action(
         &format!(
@@ -1648,7 +1775,7 @@ fn build_expire_args(agreement_id: String, milestone_id: u32, caller: String) ->
 /// The stellar CLI calls the contract's `get_agreement` view function and
 /// returns the full Agreement struct as JSON, which is printed to stdout.
 fn run_status(config: &Config, agreement_id: String, opts: &OutputOpts) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id.clone()];
 
@@ -1673,7 +1800,7 @@ fn run_total_amount(
     agreement_id: String,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = vec!["--agreement-id".to_string(), agreement_id];
 
@@ -1701,7 +1828,7 @@ fn run_milestone_status(
     milestone_id: u32,
     opts: &OutputOpts,
 ) -> Result<(), String> {
-    validate_agreement_id(&agreement_id).unwrap_or_else(|e| fail_validation(&e));
+    validate_agreement_id(&agreement_id)?;
 
     let args = milestone_status_args(&agreement_id, milestone_id);
 
@@ -1829,7 +1956,7 @@ pub fn config_report(
 
     serde_json::json!({
         "network": network_name,
-        "rpc_url": config.rpc_url,
+        "rpc_url": crate::config::redact_url(&config.rpc_url),
         "network_passphrase": config.network_passphrase,
         "contract_id": contract_id,
         "source_key": config.masked_source_key(),
@@ -1952,7 +2079,8 @@ fn run_health(config: &Config, opts: &OutputOpts) -> Result<(), String> {
             stdout: serde_json::json!({ "health": health }).to_string(),
             stderr: format!(
                 "RPC endpoint {} reports status {:?}",
-                config.rpc_url, health.status
+                crate::config::redact_url(&config.rpc_url),
+                health.status
             ),
             success: false,
             exit_code: None,
@@ -2028,6 +2156,16 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
         );
     }
 
+    let count = csv.split(',').count();
+    if count > crate::input::MAX_MILESTONES {
+        return Err(format!(
+            "too many milestones: at most {} are allowed, got {count}",
+            crate::input::MAX_MILESTONES
+        ));
+    }
+
+    // The contract sums every amount as i128 and rejects an overflowing total.
+    let mut total: i128 = 0;
     let entries: Vec<String> = csv
         .split(',')
         .enumerate()
@@ -2051,6 +2189,10 @@ fn build_milestones_json(csv: &str) -> Result<String, String> {
                     idx
                 ));
             }
+            total = total.checked_add(amount).ok_or_else(|| {
+                "milestone amounts overflow: their total exceeds the maximum i128 value"
+                    .to_string()
+            })?;
             Ok(format!(
                 r#"{{"id":{idx},"amount":"{amount}","status":{{"Pending":null}},"proof_uri":null}}"#,
             ))
@@ -2463,6 +2605,21 @@ fn extract_events(stderr: &str) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    // --- #641: `keys add` key is redacted in Debug output ---
+
+    #[test]
+    fn keys_add_debug_output_redacts_key() {
+        let seed = format!("S{}", "A".repeat(55));
+        let subcmd = KeysSubcommand::Add {
+            identity: "alice".to_string(),
+            key: seed.parse().unwrap(),
+        };
+        let printed = format!("{subcmd:?}");
+        assert!(!printed.contains(&seed), "{printed}");
+        assert!(printed.contains("alice"), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
+    }
+
     // --- build_milestones_json ---
 
     #[test]
@@ -2599,6 +2756,61 @@ mod tests {
         assert!(
             err.contains("empty milestone amount at index 2"),
             "got: {err}"
+        );
+    }
+
+    // --- init pre-checks mirroring contract rejections (#648) ---
+
+    const PAYER: &str = "GBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+    const PAYEE: &str = "GZYXWVUTSRQPONMLKJIHGFEDCBA234567ZYXWVUTSRQPONMLKJIHGF";
+    const RESOLVER: &str = "GRESOLVABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNO";
+    const TOKEN: &str = "CBCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+
+    #[test]
+    fn init_rejects_payer_equal_to_payee() {
+        let err = check_init_parties(PAYER, PAYER, TOKEN, RESOLVER).unwrap_err();
+        assert_eq!(err, "payer and payee must be different addresses");
+    }
+
+    #[test]
+    fn init_rejects_resolver_that_is_a_party() {
+        for resolver in [PAYER, PAYEE] {
+            let err = check_init_parties(PAYER, PAYEE, TOKEN, resolver).unwrap_err();
+            assert_eq!(
+                err,
+                "resolver must be a neutral third party, not the payer or payee"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_account_address_as_token() {
+        let account_token = TOKEN.replacen('C', "G", 1);
+        let err = check_init_parties(PAYER, PAYEE, &account_token, RESOLVER).unwrap_err();
+        assert_eq!(err, "token must be a token contract address starting with 'C'");
+    }
+
+    #[test]
+    fn init_accepts_distinct_parties_and_contract_token() {
+        assert!(check_init_parties(PAYER, PAYEE, TOKEN, RESOLVER).is_ok());
+    }
+
+    #[test]
+    fn init_rejects_more_than_max_milestones() {
+        let ok = vec!["1"; crate::input::MAX_MILESTONES].join(",");
+        assert!(build_milestones_json(&ok).is_ok());
+        let too_many = vec!["1"; crate::input::MAX_MILESTONES + 1].join(",");
+        let err = build_milestones_json(&too_many).unwrap_err();
+        assert_eq!(err, "too many milestones: at most 50 are allowed, got 51");
+    }
+
+    #[test]
+    fn init_rejects_milestone_sum_overflow() {
+        let csv = format!("{},1", i128::MAX);
+        let err = build_milestones_json(&csv).unwrap_err();
+        assert_eq!(
+            err,
+            "milestone amounts overflow: their total exceeds the maximum i128 value"
         );
     }
 
@@ -3097,14 +3309,40 @@ mod tests {
 
     #[test]
     fn proof_uri_rejects_oversized() {
-        let uri = "a".repeat(2049);
+        let uri = "a".repeat(513);
         assert!(validate_proof_uri(&uri).is_err());
     }
 
     #[test]
     fn proof_uri_accepts_max_length() {
-        let uri = "a".repeat(2048);
+        let uri = "a".repeat(512);
         assert!(validate_proof_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn submit_work_sends_nfc_normalized_proof_uri() {
+        // "e" + combining acute accent (decomposed) must be sent as "é" (NFC).
+        let uri = validate_proof_uri("ipfs://cafe\u{0301}").unwrap();
+        let args = build_submit_work_args("a".repeat(64), 0, Some(uri));
+        assert_eq!(args[4], "--proof-uri");
+        assert_eq!(args[5], "\"ipfs://caf\u{00e9}\"");
+    }
+
+    #[test]
+    fn submit_work_rejects_invalid_proof_uri_before_prompt() {
+        // Under --quiet without --yes the prompt itself would fail with a
+        // "--yes" error, so getting the proof_uri error proves validation ran first.
+        let cfg = test_config(&good_contract_id(), &format!("S{}", "Q".repeat(55)));
+        let err = run_submit_work(
+            &cfg,
+            "a".repeat(64),
+            0,
+            Some("https://example.com/\nbad".to_string()),
+            false,
+            &quiet_opts(),
+        )
+        .unwrap_err();
+        assert!(err.contains("proof_uri"), "got: {err}");
     }
 
     // --- extract_tx_hash / extract_events ---
@@ -3523,6 +3761,30 @@ mod tests {
         for f in [OutputFormat::Raw, OutputFormat::Json, OutputFormat::Human] {
             assert!(render_output(&ok_output("{}"), &opts(f)).is_ok(), "{f:?}");
         }
+    }
+
+    // --- keys list (#640) ---
+
+    #[test]
+    fn keys_list_reports_stored_identities() {
+        // After `keys add alice` and `keys add bob`, `keys list` must print
+        // both names; after `keys remove alice` only bob remains.
+        let mut store = crate::keystore::Keystore::in_memory();
+        store.add("alice", "SALICE").unwrap();
+        store.add("bob", "SBOB").unwrap();
+        let listed = store.list_keychain_identities().unwrap();
+        assert_eq!(listed, vec!["alice".to_string(), "bob".to_string()]);
+        store.remove("alice").unwrap();
+        let listed = store.list_keychain_identities().unwrap();
+        assert_eq!(listed, vec!["bob".to_string()]);
+    }
+
+    #[test]
+    fn keys_list_unsupported_index_is_honest() {
+        // When the index entry cannot be read, the handler must say listing is
+        // unsupported rather than claiming no keys are stored.
+        let store = crate::keystore::Keystore::in_memory_without_index();
+        assert!(store.list_keychain_identities().is_err());
     }
 
     // --- trellis config (#485) ---
